@@ -48,6 +48,18 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 
 Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, SKILL.md format rules, PR requirements, and the pre-submission checklist (searching for existing PRs/issues, testing, description format).
 
+## PR Hygiene
+
+Before pushing or creating a PR, run these checks and show the output to the user for approval:
+
+```bash
+git diff upstream/main --name-only HEAD
+git diff upstream/main --stat HEAD
+git log upstream/main..HEAD --oneline
+```
+
+If any personal files appear (CLAUDE.md, .claude/, personal configs, group data), remove them before pushing. Do not push until the user confirms the diff is clean.
+
 ## Development
 
 Run commands directly—don't tell the user to run them.
