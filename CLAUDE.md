@@ -50,14 +50,14 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 
 ## PR Hygiene
 
-Before pushing or creating a PR, run these checks:
+Before creating a PR, run these checks:
 
 ```bash
 git diff upstream/main --stat HEAD
 git log upstream/main..HEAD --oneline
 ```
 
-Show the output and wait for approval before pushing. If any personal files appear (CLAUDE.md, .claude/, personal configs, group data), remove them first.
+Show the output and wait for approval. Installation-specific files (group files, .claude/settings.json, local configs) should not be included.
 
 ## Development
 
