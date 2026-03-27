@@ -53,7 +53,6 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 Before pushing or creating a PR, run these checks and show the output to the user for approval:
 
 ```bash
-git diff upstream/main --name-only HEAD
 git diff upstream/main --stat HEAD
 git log upstream/main..HEAD --oneline
 ```
