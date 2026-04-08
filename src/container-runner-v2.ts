@@ -263,7 +263,10 @@ async function buildContainerArgs(
   // Override entrypoint: compile agent-runner source, run v2 entry point (no stdin)
   args.push('--entrypoint', 'bash');
   args.push(CONTAINER_IMAGE);
-  args.push('-c', 'cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2 && ln -sf /app/node_modules /tmp/dist/node_modules && node /tmp/dist/index-v2.js');
+  args.push(
+    '-c',
+    'cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2 && ln -sf /app/node_modules /tmp/dist/node_modules && node /tmp/dist/index-v2.js',
+  );
 
   return args;
 }

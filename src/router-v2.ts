@@ -48,13 +48,20 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       created_at: new Date().toISOString(),
     };
     createMessagingGroup(mg);
-    log.info('Auto-created messaging group', { id: mgId, channelType: event.channelType, platformId: event.platformId });
+    log.info('Auto-created messaging group', {
+      id: mgId,
+      channelType: event.channelType,
+      platformId: event.platformId,
+    });
   }
 
   // 2. Resolve agent group via messaging_group_agents
   const agents = getMessagingGroupAgents(mg.id);
   if (agents.length === 0) {
-    log.warn('No agent groups configured for messaging group', { messagingGroupId: mg.id, platformId: event.platformId });
+    log.warn('No agent groups configured for messaging group', {
+      messagingGroupId: mg.id,
+      platformId: event.platformId,
+    });
     return;
   }
 
@@ -79,7 +86,12 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     content: event.message.content,
   });
 
-  log.info('Message routed', { sessionId: session.id, agentGroup: match.agent_group_id, kind: event.message.kind, created });
+  log.info('Message routed', {
+    sessionId: session.id,
+    agentGroup: match.agent_group_id,
+    kind: event.message.kind,
+    created,
+  });
 
   // 5. Wake container
   const freshSession = getSession(session.id);

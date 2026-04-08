@@ -15,7 +15,13 @@ const ACTIVE_POLL_MS = 1000;
 const SWEEP_POLL_MS = 60_000;
 
 export interface ChannelDeliveryAdapter {
-  deliver(channelType: string, platformId: string, threadId: string | null, kind: string, content: string): Promise<void>;
+  deliver(
+    channelType: string,
+    platformId: string,
+    threadId: string | null,
+    kind: string,
+    content: string,
+  ): Promise<void>;
   setTyping?(channelType: string, platformId: string, threadId: string | null): Promise<void>;
 }
 
@@ -116,7 +122,14 @@ async function deliverSessionMessages(session: Session): Promise<void> {
 }
 
 async function deliverMessage(
-  msg: { id: string; kind: string; platform_id: string | null; channel_type: string | null; thread_id: string | null; content: string },
+  msg: {
+    id: string;
+    kind: string;
+    platform_id: string | null;
+    channel_type: string | null;
+    thread_id: string | null;
+    content: string;
+  },
   session: Session,
 ): Promise<void> {
   if (!deliveryAdapter) {

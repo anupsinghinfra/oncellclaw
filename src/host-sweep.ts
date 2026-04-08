@@ -89,12 +89,16 @@ async function sweepSession(session: Session): Promise<void> {
 
     for (const msg of staleMessages) {
       if (msg.tries >= MAX_TRIES) {
-        db.prepare("UPDATE messages_in SET status = 'failed', status_changed = datetime('now') WHERE id = ?").run(msg.id);
+        db.prepare("UPDATE messages_in SET status = 'failed', status_changed = datetime('now') WHERE id = ?").run(
+          msg.id,
+        );
         log.warn('Message marked as failed after max retries', { messageId: msg.id, sessionId: session.id });
       } else {
         const backoffMs = BACKOFF_BASE_MS * Math.pow(2, msg.tries);
         const backoffSec = Math.floor(backoffMs / 1000);
-        db.prepare(`UPDATE messages_in SET status = 'pending', status_changed = datetime('now'), process_after = datetime('now', '+${backoffSec} seconds') WHERE id = ?`).run(msg.id);
+        db.prepare(
+          `UPDATE messages_in SET status = 'pending', status_changed = datetime('now'), process_after = datetime('now', '+${backoffSec} seconds') WHERE id = ?`,
+        ).run(msg.id);
         log.info('Reset stale message with backoff', { messageId: msg.id, tries: msg.tries, backoffMs });
       }
     }
@@ -102,7 +106,16 @@ async function sweepSession(session: Session): Promise<void> {
     // 3. Handle recurrence for completed messages
     const completedRecurring = db
       .prepare("SELECT * FROM messages_in WHERE status = 'completed' AND recurrence IS NOT NULL")
-      .all() as Array<{ id: string; kind: string; content: string; recurrence: string; process_after: string | null; platform_id: string | null; channel_type: string | null; thread_id: string | null }>;
+      .all() as Array<{
+      id: string;
+      kind: string;
+      content: string;
+      recurrence: string;
+      process_after: string | null;
+      platform_id: string | null;
+      channel_type: string | null;
+      thread_id: string | null;
+    }>;
 
     for (const msg of completedRecurring) {
       try {
@@ -118,7 +131,7 @@ async function sweepSession(session: Session): Promise<void> {
         ).run(newId, msg.kind, nextRun, msg.recurrence, msg.platform_id, msg.channel_type, msg.thread_id, msg.content);
 
         // Remove recurrence from the completed message so it doesn't spawn again
-        db.prepare("UPDATE messages_in SET recurrence = NULL WHERE id = ?").run(msg.id);
+        db.prepare('UPDATE messages_in SET recurrence = NULL WHERE id = ?').run(msg.id);
 
         log.info('Inserted next recurrence', { originalId: msg.id, newId, nextRun });
       } catch (err) {

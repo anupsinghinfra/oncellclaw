@@ -35,7 +35,12 @@ function generateId(): string {
  * Find or create a session for a messaging group + thread.
  * Returns the session and whether it was newly created.
  */
-export function resolveSession(agentGroupId: string, messagingGroupId: string, threadId: string | null, sessionMode: 'shared' | 'per-thread'): { session: Session; created: boolean } {
+export function resolveSession(
+  agentGroupId: string,
+  messagingGroupId: string,
+  threadId: string | null,
+  sessionMode: 'shared' | 'per-thread',
+): { session: Session; created: boolean } {
   // For shared mode, look for any active session with this messaging group (threadId ignored)
   // For per-thread mode, look for an active session with this specific thread
   const lookupThreadId = sessionMode === 'shared' ? null : threadId;
@@ -83,17 +88,21 @@ export function initSessionFolder(agentGroupId: string, sessionId: string): void
 }
 
 /** Write a message to a session's messages_in table. */
-export function writeSessionMessage(agentGroupId: string, sessionId: string, message: {
-  id: string;
-  kind: string;
-  timestamp: string;
-  platformId?: string | null;
-  channelType?: string | null;
-  threadId?: string | null;
-  content: string;
-  processAfter?: string | null;
-  recurrence?: string | null;
-}): void {
+export function writeSessionMessage(
+  agentGroupId: string,
+  sessionId: string,
+  message: {
+    id: string;
+    kind: string;
+    timestamp: string;
+    platformId?: string | null;
+    channelType?: string | null;
+    threadId?: string | null;
+    content: string;
+    processAfter?: string | null;
+    recurrence?: string | null;
+  },
+): void {
   const dbPath = sessionDbPath(agentGroupId, sessionId);
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');

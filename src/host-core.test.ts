@@ -8,8 +8,22 @@ import fs from 'fs';
 import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { initTestDb, closeDb, runMigrations, createAgentGroup, createMessagingGroup, createMessagingGroupAgent } from './db/index.js';
-import { resolveSession, writeSessionMessage, initSessionFolder, sessionDir, sessionDbPath, sessionsBaseDir } from './session-manager.js';
+import {
+  initTestDb,
+  closeDb,
+  runMigrations,
+  createAgentGroup,
+  createMessagingGroup,
+  createMessagingGroupAgent,
+} from './db/index.js';
+import {
+  resolveSession,
+  writeSessionMessage,
+  initSessionFolder,
+  sessionDir,
+  sessionDbPath,
+  sessionsBaseDir,
+} from './session-manager.js';
 import { getSession, findSession } from './db/sessions.js';
 import type { InboundEvent } from './router-v2.js';
 
@@ -50,8 +64,24 @@ afterEach(() => {
 
 describe('session manager', () => {
   beforeEach(() => {
-    createAgentGroup({ id: 'ag-1', name: 'Test Agent', folder: 'test-agent', is_admin: 0, agent_provider: null, container_config: null, created_at: now() });
-    createMessagingGroup({ id: 'mg-1', channel_type: 'discord', platform_id: 'chan-123', name: 'General', is_group: 1, admin_user_id: null, created_at: now() });
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Test Agent',
+      folder: 'test-agent',
+      is_admin: 0,
+      agent_provider: null,
+      container_config: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-1',
+      channel_type: 'discord',
+      platform_id: 'chan-123',
+      name: 'General',
+      is_group: 1,
+      admin_user_id: null,
+      created_at: now(),
+    });
   });
 
   it('should create session folder and DB', () => {
@@ -110,7 +140,12 @@ describe('session manager', () => {
     // Read from the session DB
     const dbPath = sessionDbPath('ag-1', session.id);
     const db = new Database(dbPath);
-    const rows = db.prepare('SELECT * FROM messages_in').all() as Array<{ id: string; kind: string; status: string; content: string }>;
+    const rows = db.prepare('SELECT * FROM messages_in').all() as Array<{
+      id: string;
+      kind: string;
+      status: string;
+      content: string;
+    }>;
     db.close();
 
     expect(rows).toHaveLength(1);
@@ -136,9 +171,34 @@ describe('session manager', () => {
 
 describe('router', () => {
   beforeEach(() => {
-    createAgentGroup({ id: 'ag-1', name: 'Test Agent', folder: 'test-agent', is_admin: 0, agent_provider: null, container_config: null, created_at: now() });
-    createMessagingGroup({ id: 'mg-1', channel_type: 'discord', platform_id: 'chan-123', name: 'General', is_group: 1, admin_user_id: null, created_at: now() });
-    createMessagingGroupAgent({ id: 'mga-1', messaging_group_id: 'mg-1', agent_group_id: 'ag-1', trigger_rules: null, response_scope: 'all', session_mode: 'shared', priority: 0, created_at: now() });
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Test Agent',
+      folder: 'test-agent',
+      is_admin: 0,
+      agent_provider: null,
+      container_config: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-1',
+      channel_type: 'discord',
+      platform_id: 'chan-123',
+      name: 'General',
+      is_group: 1,
+      admin_user_id: null,
+      created_at: now(),
+    });
+    createMessagingGroupAgent({
+      id: 'mga-1',
+      messaging_group_id: 'mg-1',
+      agent_group_id: 'ag-1',
+      trigger_rules: null,
+      response_scope: 'all',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
   });
 
   it('should route a message end-to-end', async () => {
@@ -215,7 +275,12 @@ describe('router', () => {
       channelType: 'discord',
       platformId: 'chan-123',
       threadId: null,
-      message: { id: 'msg-b', kind: 'chat', content: JSON.stringify({ sender: 'B', text: 'Second' }), timestamp: now() },
+      message: {
+        id: 'msg-b',
+        kind: 'chat',
+        content: JSON.stringify({ sender: 'B', text: 'Second' }),
+        timestamp: now(),
+      },
     });
 
     // Both should be in the same session
@@ -231,8 +296,24 @@ describe('router', () => {
 
 describe('delivery', () => {
   it('should detect undelivered messages in session DB', () => {
-    createAgentGroup({ id: 'ag-1', name: 'Agent', folder: 'agent', is_admin: 0, agent_provider: null, container_config: null, created_at: now() });
-    createMessagingGroup({ id: 'mg-test', channel_type: 'discord', platform_id: 'chan-test', name: 'Test', is_group: 0, admin_user_id: null, created_at: now() });
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Agent',
+      folder: 'agent',
+      is_admin: 0,
+      agent_provider: null,
+      container_config: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-test',
+      channel_type: 'discord',
+      platform_id: 'chan-test',
+      name: 'Test',
+      is_group: 0,
+      admin_user_id: null,
+      created_at: now(),
+    });
 
     const { session } = resolveSession('ag-1', 'mg-test', null, 'shared');
 
@@ -245,7 +326,10 @@ describe('delivery', () => {
        VALUES ('out-1', datetime('now'), 0, 'chat', 'chan-123', 'discord', ?)`,
     ).run(JSON.stringify({ text: 'Agent response' }));
 
-    const undelivered = db.prepare("SELECT * FROM messages_out WHERE delivered = 0").all() as Array<{ id: string; content: string }>;
+    const undelivered = db.prepare('SELECT * FROM messages_out WHERE delivered = 0').all() as Array<{
+      id: string;
+      content: string;
+    }>;
     db.close();
 
     expect(undelivered).toHaveLength(1);
