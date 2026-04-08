@@ -522,8 +522,43 @@ NanoClaw is customized via skills — branches that get merged into the user's i
 
 **Practical example:** Adding a new channel via skill should require:
 - One new file (the channel adapter or Chat SDK config)
-- One line in index or a self-registering import
+- One line in the barrel file (`channels/index.ts`) to import the self-registering module
 - Zero changes to routing, formatting, delivery, or container code
+
+### DB File Structure
+
+v1's DB is one 750-line file with all tables, all CRUD functions, and all migrations inline. v2 splits by entity:
+
+```
+src/db/
+  connection.ts              ← singleton, init, WAL mode
+  schema.ts                  ← CREATE TABLE statements (current state, for reference)
+  migrations/
+    index.ts                 ← runner: checks version, applies pending
+    001-initial.ts           ← v2 initial schema
+    002-pending-questions.ts ← example: adds pending_questions table
+    ...                      ← skills append new numbered files
+  agent-groups.ts            ← CRUD for agent_groups
+  messaging-groups.ts        ← CRUD for messaging_groups + messaging_group_agents
+  sessions.ts                ← CRUD for sessions + pending_questions
+  index.ts                   ← barrel: re-exports everything
+```
+
+**Principles:**
+- **Split by entity, not by layer.** Each entity file has its own CRUD functions (~50-100 lines). A skill that adds a column to messaging_groups edits `messaging-groups.ts` — doesn't touch sessions or agent groups.
+- **Schema as current state + migrations as history.** `schema.ts` documents what the DB looks like now (read this to understand the schema). Migrations are append-only numbered files that describe how we got here.
+- **No inline ALTER TABLE.** v1 accumulates `try { ALTER TABLE } catch { /* exists */ }` blocks forever. v2 uses a migration runner with a `schema_version` table. On startup, it checks the current version and applies pending migrations in order. Each migration is a function: `(db: Database) => void`.
+- **Skills add migrations.** A skill that needs a new column adds a new numbered migration file. No conflicts with other skills' migrations as long as numbers don't collide (use timestamps or high-enough numbers for skill branches).
+
+**Agent-runner session DB** uses the same pattern but lighter — no migrations needed since session DBs are created fresh by the host:
+
+```
+container/agent-runner/src/db/
+  connection.ts          ← open session.db at fixed path, WAL mode
+  messages-in.ts         ← read pending, update status
+  messages-out.ts        ← write results, outbox queries
+  index.ts               ← barrel
+```
 
 ### What the base architecture must support primitively
 
