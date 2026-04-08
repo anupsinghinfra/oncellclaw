@@ -7,7 +7,7 @@ let _db: Database.Database | null = null;
 export function getSessionDb(): Database.Database {
   if (!_db) {
     _db = new Database(process.env.SESSION_DB_PATH || SESSION_DB_PATH);
-    _db.pragma('journal_mode = WAL');
+    _db.pragma('journal_mode = DELETE');
     _db.pragma('foreign_keys = ON');
   }
   return _db;

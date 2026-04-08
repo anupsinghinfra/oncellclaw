@@ -47,6 +47,14 @@ export function markCompleted(ids: string[]): void {
   })();
 }
 
+/** Update status_changed on processing messages (heartbeat for host idle detection). */
+export function touchProcessing(ids: string[]): void {
+  if (ids.length === 0) return;
+  const db = getSessionDb();
+  const stmt = db.prepare("UPDATE messages_in SET status_changed = datetime('now') WHERE id = ? AND status = 'processing'");
+  for (const id of ids) stmt.run(id);
+}
+
 /** Mark a single message as failed. */
 export function markFailed(id: string): void {
   getSessionDb().prepare("UPDATE messages_in SET status = 'failed', status_changed = datetime('now') WHERE id = ?").run(id);

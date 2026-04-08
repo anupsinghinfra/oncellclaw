@@ -200,6 +200,9 @@ export class ClaudeProvider implements AgentProvider {
         if (aborted) return;
         messageCount++;
 
+        // Yield activity for every SDK event so the poll loop knows the agent is working
+        yield { type: 'activity' };
+
         if (message.type === 'system' && message.subtype === 'init') {
           yield { type: 'init', sessionId: message.session_id };
         } else if (message.type === 'result') {
@@ -213,7 +216,6 @@ export class ClaudeProvider implements AgentProvider {
           const tn = message as { summary?: string };
           yield { type: 'progress', message: tn.summary || 'Task notification' };
         }
-        // All other message types are logged but not emitted
       }
       log(`Query completed after ${messageCount} SDK messages`);
     }

@@ -120,10 +120,11 @@ describe('mock provider', () => {
       events.push(event);
     }
 
-    expect(events.length).toBeGreaterThanOrEqual(2);
-    expect(events[0].type).toBe('init');
-    expect(events[1].type).toBe('result');
-    expect((events[1] as { text: string }).text).toBe('Echo: Hello');
+    const typed = events.filter((e) => e.type !== 'activity');
+    expect(typed.length).toBeGreaterThanOrEqual(2);
+    expect(typed[0].type).toBe('init');
+    expect(typed[1].type).toBe('result');
+    expect((typed[1] as { text: string }).text).toBe('Echo: Hello');
   });
 
   it('should handle push() during active query', async () => {

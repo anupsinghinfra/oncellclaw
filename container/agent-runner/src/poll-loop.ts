@@ -1,10 +1,11 @@
-import { getPendingMessages, markProcessing, markCompleted } from './db/messages-in.js';
+import { getPendingMessages, markProcessing, markCompleted, touchProcessing } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { formatMessages, extractRouting, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
 const ACTIVE_POLL_INTERVAL_MS = 500;
+const IDLE_END_MS = 20_000; // End stream after 20s with no SDK events
 
 function log(msg: string): void {
   console.error(`[poll-loop] ${msg}`);
@@ -68,10 +69,22 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     });
 
     // Process the query while concurrently polling for new messages
-    const result = await processQuery(query, routing, config);
-
-    if (result.sessionId) sessionId = result.sessionId;
-    if (result.resumeAt) resumeAt = result.resumeAt;
+    try {
+      const result = await processQuery(query, routing, config, ids);
+      if (result.sessionId) sessionId = result.sessionId;
+      if (result.resumeAt) resumeAt = result.resumeAt;
+    } catch (err) {
+      log(`Query error: ${err instanceof Error ? err.message : String(err)}`);
+      // Write error response so the user knows something went wrong
+      writeMessageOut({
+        id: generateId(),
+        kind: 'chat',
+        platform_id: routing.platformId,
+        channel_type: routing.channelType,
+        thread_id: routing.threadId,
+        content: JSON.stringify({ text: `Error: ${err instanceof Error ? err.message : String(err)}` }),
+      });
+    }
 
     markCompleted(ids);
     log(`Completed ${ids.length} message(s)`);
@@ -83,34 +96,43 @@ interface QueryResult {
   resumeAt?: string;
 }
 
-async function processQuery(query: AgentQuery, routing: RoutingContext, config: PollLoopConfig): Promise<QueryResult> {
+async function processQuery(query: AgentQuery, routing: RoutingContext, config: PollLoopConfig, processingIds: string[]): Promise<QueryResult> {
   let querySessionId: string | undefined;
   let done = false;
+  let lastEventTime = Date.now();
 
-  // Concurrent polling: push new messages into the active query
+  // Concurrent polling: push follow-ups, checkpoint WAL, detect idle
   const pollHandle = setInterval(() => {
     if (done) return;
+
     const newMessages = getPendingMessages();
-    if (newMessages.length === 0) return;
+    if (newMessages.length > 0) {
+      const newIds = newMessages.map((m) => m.id);
+      markProcessing(newIds);
 
-    const newIds = newMessages.map((m) => m.id);
-    markProcessing(newIds);
+      const prompt = formatMessages(newMessages);
+      log(`Pushing ${newMessages.length} follow-up message(s) into active query`);
+      query.push(prompt);
 
-    const prompt = formatMessages(newMessages);
-    log(`Pushing ${newMessages.length} follow-up message(s) into active query`);
-    query.push(prompt);
+      const newRouting = extractRouting(newMessages);
+      setRoutingEnv(newRouting, config.env);
 
-    // Update routing env for MCP tools with latest message context
-    const newRouting = extractRouting(newMessages);
-    setRoutingEnv(newRouting, config.env);
+      markCompleted(newIds);
+      lastEventTime = Date.now(); // new input counts as activity
+    }
 
-    // Mark these completed immediately (they've been pushed to the provider)
-    markCompleted(newIds);
+    // End stream when agent is idle: no SDK events and no pending messages
+    if (Date.now() - lastEventTime > IDLE_END_MS) {
+      log(`No SDK events for ${IDLE_END_MS / 1000}s, ending query`);
+      query.end();
+    }
   }, ACTIVE_POLL_INTERVAL_MS);
 
   try {
     for await (const event of query.events) {
+      lastEventTime = Date.now();
       handleEvent(event, routing);
+      touchProcessing(processingIds);
 
       if (event.type === 'init') {
         querySessionId = event.sessionId;

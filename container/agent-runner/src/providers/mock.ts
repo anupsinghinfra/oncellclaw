@@ -20,9 +20,11 @@ export class MockProvider implements AgentProvider {
 
     const events: AsyncIterable<ProviderEvent> = {
       async *[Symbol.asyncIterator]() {
+        yield { type: 'activity' };
         yield { type: 'init', sessionId: `mock-session-${Date.now()}` };
 
         // Process initial prompt
+        yield { type: 'activity' };
         yield { type: 'result', text: responseFactory(input.prompt) };
 
         // Process any pushed follow-ups

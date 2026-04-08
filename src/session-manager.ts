@@ -80,7 +80,7 @@ export function initSessionFolder(agentGroupId: string, sessionId: string): void
   const dbPath = sessionDbPath(agentGroupId, sessionId);
   if (!fs.existsSync(dbPath)) {
     const db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
+    db.pragma('journal_mode = DELETE');
     db.exec(SESSION_SCHEMA);
     db.close();
     log.debug('Session DB created', { dbPath });
@@ -105,7 +105,7 @@ export function writeSessionMessage(
 ): void {
   const dbPath = sessionDbPath(agentGroupId, sessionId);
   const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
+  db.pragma('journal_mode = DELETE');
 
   try {
     db.prepare(
@@ -134,7 +134,7 @@ export function writeSessionMessage(
 export function openSessionDb(agentGroupId: string, sessionId: string): Database.Database {
   const dbPath = sessionDbPath(agentGroupId, sessionId);
   const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
+  db.pragma('journal_mode = DELETE');
   return db;
 }
 
