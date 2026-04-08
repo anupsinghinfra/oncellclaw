@@ -26,6 +26,12 @@ export function getAllMessagingGroups(): MessagingGroup[] {
   return getDb().prepare('SELECT * FROM messaging_groups ORDER BY name').all() as MessagingGroup[];
 }
 
+export function getMessagingGroupsByChannel(channelType: string): MessagingGroup[] {
+  return getDb()
+    .prepare('SELECT * FROM messaging_groups WHERE channel_type = ?')
+    .all(channelType) as MessagingGroup[];
+}
+
 export function updateMessagingGroup(
   id: string,
   updates: Partial<Pick<MessagingGroup, 'name' | 'is_group' | 'admin_user_id'>>,
