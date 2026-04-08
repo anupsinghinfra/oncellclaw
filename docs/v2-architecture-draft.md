@@ -525,6 +525,48 @@ NanoClaw is customized via skills — branches that get merged into the user's i
 - One line in the barrel file (`channels/index.ts`) to import the self-registering module
 - Zero changes to routing, formatting, delivery, or container code
 
+### v1 Conflict Hotspots and v2 Solutions
+
+Analysis of 33 skill branches shows these files cause the most merge conflicts:
+
+| v1 hotspot | Why it conflicts | v2 solution |
+|-----------|-----------------|-------------|
+| `src/index.ts` (2000 LOC) | Every skill patches the main loop, imports, init logic | Thin index that wires modules. Logic lives in purpose-specific files (router, delivery, session-manager, host-sweep). |
+| `src/config.ts` | Every skill adds env vars to a central file | Config declared where it's used. Each module reads its own env vars. No central config registry that every skill edits. |
+| `src/container-runner.ts` | Channel skills add mounts, env vars, credential setup | Declarative mount registration. Channels declare their mounts in their own file. Container runner reads from a registry, not a hardcoded list. |
+| `src/db.ts` (750 LOC) | Schema, migrations, and all CRUD in one file | Split by entity. Numbered migrations. Skills add a migration file + edit one entity file. |
+| `container/agent-runner/src/index.ts` | Agent protocol, IPC handling, formatting all in one file | Split into poll-loop, formatter, providers/, mcp-tools/. Session DB replaces IPC. |
+| `src/ipc.ts` | Every MCP tool addition patches one file | `mcp-tools/` directory with barrel. Skills add a tool file + barrel line. |
+| `src/channels/index.ts` | Every channel adds an import line at the same location | Barrel file with comment slots per channel (current pattern works, keep it). |
+
+**Mount registration pattern:** Instead of every channel skill editing `buildVolumeMounts()`, channels declare mounts that the container runner collects:
+
+```typescript
+// channels/gmail.ts
+registerChannel('gmail', {
+  factory: createGmailAdapter,
+  mounts: [
+    { hostPath: '~/.gmail-mcp', containerPath: '/home/node/.gmail-mcp', readonly: false }
+  ],
+  env: ['GMAIL_OAUTH_TOKEN'],
+});
+```
+
+The container runner reads registered mounts from the channel registry — no need to edit `container-runner.ts`.
+
+**Config pattern:** Instead of a central `config.ts` that every skill edits:
+
+```typescript
+// Each module reads its own config
+// channels/discord.ts
+const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
+
+// channels/gmail.ts  
+const GMAIL_CREDS = process.env.GMAIL_CREDENTIALS_PATH;
+```
+
+Shared config (DATA_DIR, TIMEZONE, MAX_CONCURRENT_CONTAINERS) stays in `config.ts`. Channel/skill-specific config stays in the module that uses it.
+
 ### DB File Structure
 
 v1's DB is one 750-line file with all tables, all CRUD functions, and all migrations inline. v2 splits by entity:
