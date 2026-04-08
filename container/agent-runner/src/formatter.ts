@@ -67,7 +67,8 @@ function formatChatMessages(messages: MessageInRow[]): string {
     const sender = content.sender || content.author?.fullName || content.author?.userName || 'Unknown';
     const time = formatTime(msg.timestamp);
     const text = content.text || '';
-    lines.push(`<message sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}</message>`);
+    const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
+    lines.push(`<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}</message>`);
   }
   lines.push('</messages>');
   return lines.join('\n');
@@ -78,7 +79,8 @@ function formatSingleChat(msg: MessageInRow): string {
   const sender = content.sender || content.author?.fullName || content.author?.userName || 'Unknown';
   const time = formatTime(msg.timestamp);
   const text = content.text || '';
-  return `<message sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}</message>`;
+  const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
+  return `<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}</message>`;
 }
 
 function formatTaskMessage(msg: MessageInRow): string {

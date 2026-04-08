@@ -74,6 +74,7 @@ CREATE TABLE pending_questions (
 export const SESSION_SCHEMA = `
 CREATE TABLE messages_in (
   id             TEXT PRIMARY KEY,
+  seq            INTEGER UNIQUE,
   kind           TEXT NOT NULL,
   timestamp      TEXT NOT NULL,
   status         TEXT DEFAULT 'pending',
@@ -89,6 +90,7 @@ CREATE TABLE messages_in (
 
 CREATE TABLE messages_out (
   id             TEXT PRIMARY KEY,
+  seq            INTEGER UNIQUE,
   in_reply_to    TEXT,
   timestamp      TEXT NOT NULL,
   delivered      INTEGER DEFAULT 0,

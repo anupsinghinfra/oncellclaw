@@ -2,6 +2,7 @@ import { getSessionDb } from './connection.js';
 
 export interface MessageInRow {
   id: string;
+  seq: number | null;
   kind: string;
   timestamp: string;
   status: string;

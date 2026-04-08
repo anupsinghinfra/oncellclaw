@@ -17,7 +17,7 @@ import { routeInbound } from './router-v2.js';
 import { log } from './log.js';
 
 // Channel imports — each triggers self-registration
-// import './channels/discord-v2.js';
+import './channels/discord-v2.js';
 
 import type { ChannelAdapter, ChannelSetup, ConversationConfig } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';

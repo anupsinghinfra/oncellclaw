@@ -108,11 +108,23 @@ export function writeSessionMessage(
   db.pragma('journal_mode = DELETE');
 
   try {
+    const nextSeq = (
+      db
+        .prepare(
+          `SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM (
+             SELECT seq FROM messages_in WHERE seq IS NOT NULL
+             UNION ALL
+             SELECT seq FROM messages_out WHERE seq IS NOT NULL
+           )`,
+        )
+        .get() as { next: number }
+    ).next;
     db.prepare(
-      `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, thread_id, content, process_after, recurrence)
-       VALUES (@id, @kind, @timestamp, 'pending', @platformId, @channelType, @threadId, @content, @processAfter, @recurrence)`,
+      `INSERT INTO messages_in (id, seq, kind, timestamp, status, platform_id, channel_type, thread_id, content, process_after, recurrence)
+       VALUES (@id, @seq, @kind, @timestamp, 'pending', @platformId, @channelType, @threadId, @content, @processAfter, @recurrence)`,
     ).run({
       id: message.id,
+      seq: nextSeq,
       kind: message.kind,
       timestamp: message.timestamp,
       platformId: message.platformId ?? null,

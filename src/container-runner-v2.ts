@@ -185,15 +185,8 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
   const groupRunnerDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, 'agent-runner-src');
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index-v2.ts');
-    const cachedIndex = path.join(groupRunnerDir, 'index-v2.ts');
-    const needsCopy =
-      !fs.existsSync(groupRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs;
-    if (needsCopy) {
-      fs.cpSync(agentRunnerSrc, groupRunnerDir, { recursive: true });
-    }
+    // Always copy — source files may have changed beyond just the index
+    fs.cpSync(agentRunnerSrc, groupRunnerDir, { recursive: true });
   }
   mounts.push({ hostPath: groupRunnerDir, containerPath: '/app/src', readonly: false });
 

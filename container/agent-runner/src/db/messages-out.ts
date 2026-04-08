@@ -2,6 +2,7 @@ import { getSessionDb } from './connection.js';
 
 export interface MessageOutRow {
   id: string;
+  seq: number | null;
   in_reply_to: string | null;
   timestamp: string;
   delivered: number;
@@ -26,22 +27,44 @@ export interface WriteMessageOut {
   content: string;
 }
 
-/** Write a new outbound message. */
-export function writeMessageOut(msg: WriteMessageOut): void {
-  getSessionDb()
-    .prepare(
-      `INSERT INTO messages_out (id, in_reply_to, timestamp, delivered, deliver_after, recurrence, kind, platform_id, channel_type, thread_id, content)
-       VALUES (@id, @in_reply_to, datetime('now'), 0, @deliver_after, @recurrence, @kind, @platform_id, @channel_type, @thread_id, @content)`,
-    )
-    .run({
-      in_reply_to: null,
-      deliver_after: null,
-      recurrence: null,
-      platform_id: null,
-      channel_type: null,
-      thread_id: null,
-      ...msg,
-    });
+/** Write a new outbound message, auto-assigning a seq number. */
+export function writeMessageOut(msg: WriteMessageOut): number {
+  const db = getSessionDb();
+  const nextSeq = (
+    db
+      .prepare(
+        `SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM (
+           SELECT seq FROM messages_in WHERE seq IS NOT NULL
+           UNION ALL
+           SELECT seq FROM messages_out WHERE seq IS NOT NULL
+         )`,
+      )
+      .get() as { next: number }
+  ).next;
+
+  db.prepare(
+    `INSERT INTO messages_out (id, seq, in_reply_to, timestamp, delivered, deliver_after, recurrence, kind, platform_id, channel_type, thread_id, content)
+     VALUES (@id, @seq, @in_reply_to, datetime('now'), 0, @deliver_after, @recurrence, @kind, @platform_id, @channel_type, @thread_id, @content)`,
+  ).run({
+    in_reply_to: null,
+    deliver_after: null,
+    recurrence: null,
+    platform_id: null,
+    channel_type: null,
+    thread_id: null,
+    ...msg,
+    seq: nextSeq,
+  });
+
+  return nextSeq;
+}
+
+/** Look up a message's platform ID by seq number. */
+export function getMessageIdBySeq(seq: number): string | null {
+  const inRow = getSessionDb().prepare('SELECT id FROM messages_in WHERE seq = ?').get(seq) as { id: string } | undefined;
+  if (inRow) return inRow.id;
+  const outRow = getSessionDb().prepare('SELECT id FROM messages_out WHERE seq = ?').get(seq) as { id: string } | undefined;
+  return outRow?.id ?? null;
 }
 
 /** Get undelivered messages (for host polling). */

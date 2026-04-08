@@ -8,6 +8,7 @@ export function getSessionDb(): Database.Database {
   if (!_db) {
     _db = new Database(process.env.SESSION_DB_PATH || SESSION_DB_PATH);
     _db.pragma('journal_mode = DELETE');
+    _db.pragma('busy_timeout = 5000');
     _db.pragma('foreign_keys = ON');
   }
   return _db;
@@ -20,6 +21,7 @@ export function initTestSessionDb(): Database.Database {
   _db.exec(`
     CREATE TABLE messages_in (
       id             TEXT PRIMARY KEY,
+      seq            INTEGER UNIQUE,
       kind           TEXT NOT NULL,
       timestamp      TEXT NOT NULL,
       status         TEXT DEFAULT 'pending',
@@ -34,6 +36,7 @@ export function initTestSessionDb(): Database.Database {
     );
     CREATE TABLE messages_out (
       id             TEXT PRIMARY KEY,
+      seq            INTEGER UNIQUE,
       in_reply_to    TEXT,
       timestamp      TEXT NOT NULL,
       delivered      INTEGER DEFAULT 0,

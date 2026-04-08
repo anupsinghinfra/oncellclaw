@@ -64,7 +64,7 @@ async function main(): Promise<void> {
 
   // MCP server path
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const mcpServerPath = path.join(__dirname, 'mcp-tools.js');
+  const mcpServerPath = path.join(__dirname, 'mcp-tools', 'index.js');
 
   // SDK env
   const env: Record<string, string | undefined> = {
