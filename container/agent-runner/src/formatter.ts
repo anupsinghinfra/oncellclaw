@@ -1,6 +1,52 @@
 import type { MessageInRow } from './db/messages-in.js';
 
 /**
+ * Command categories for messages starting with '/'.
+ * - admin: requires NANOCLAW_ADMIN_USER_ID check
+ * - filtered: silently drop (mark completed without processing)
+ * - passthrough: pass raw to the agent (no XML wrapping)
+ * - none: not a command — format normally
+ */
+export type CommandCategory = 'admin' | 'filtered' | 'passthrough' | 'none';
+
+const ADMIN_COMMANDS = new Set(['/remote-control', '/clear', '/compact']);
+const FILTERED_COMMANDS = new Set(['/help', '/login', '/logout', '/doctor', '/config']);
+
+export interface CommandInfo {
+  category: CommandCategory;
+  command: string; // the command name (e.g., '/clear')
+  text: string; // full original text
+  senderId: string | null;
+}
+
+/**
+ * Categorize a message as a command or not.
+ * Only applies to chat/chat-sdk messages.
+ */
+export function categorizeMessage(msg: MessageInRow): CommandInfo {
+  const content = parseContent(msg.content);
+  const text = (content.text || '').trim();
+  const senderId = content.senderId || content.author?.userId || null;
+
+  if (!text.startsWith('/')) {
+    return { category: 'none', command: '', text, senderId };
+  }
+
+  // Extract the command name (e.g., '/clear' from '/clear some args')
+  const command = text.split(/\s/)[0].toLowerCase();
+
+  if (ADMIN_COMMANDS.has(command)) {
+    return { category: 'admin', command, text, senderId };
+  }
+
+  if (FILTERED_COMMANDS.has(command)) {
+    return { category: 'filtered', command, text, senderId };
+  }
+
+  return { category: 'passthrough', command, text, senderId };
+}
+
+/**
  * Routing context extracted from messages_in rows.
  * Copied to messages_out by default so responses go back to the sender.
  */
@@ -68,7 +114,8 @@ function formatChatMessages(messages: MessageInRow[]): string {
     const time = formatTime(msg.timestamp);
     const text = content.text || '';
     const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
-    lines.push(`<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}</message>`);
+    const attachmentsSuffix = formatAttachments(content.attachments);
+    lines.push(`<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}${attachmentsSuffix}</message>`);
   }
   lines.push('</messages>');
   return lines.join('\n');
@@ -80,7 +127,8 @@ function formatSingleChat(msg: MessageInRow): string {
   const time = formatTime(msg.timestamp);
   const text = content.text || '';
   const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
-  return `<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}</message>`;
+  const attachmentsSuffix = formatAttachments(content.attachments);
+  return `<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}${attachmentsSuffix}</message>`;
 }
 
 function formatTaskMessage(msg: MessageInRow): string {
@@ -103,6 +151,18 @@ function formatWebhookMessage(msg: MessageInRow): string {
 function formatSystemMessage(msg: MessageInRow): string {
   const content = parseContent(msg.content);
   return `[SYSTEM RESPONSE]\n\nAction: ${content.action || 'unknown'}\nStatus: ${content.status || 'unknown'}\nResult: ${JSON.stringify(content.result || null)}`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatAttachments(attachments: any[] | undefined): string {
+  if (!Array.isArray(attachments) || attachments.length === 0) return '';
+  const parts = attachments.map((a) => {
+    const name = a.name || a.filename || 'attachment';
+    const type = a.type || 'file';
+    const url = a.url || '';
+    return url ? `[${type}: ${escapeXml(name)} (${escapeXml(url)})]` : `[${type}: ${escapeXml(name)}]`;
+  });
+  return '\n' + parts.join('\n');
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

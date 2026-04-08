@@ -68,13 +68,13 @@ async function main(): Promise<void> {
 
   // 4. Delivery adapter bridge — dispatches to channel adapters
   setDeliveryAdapter({
-    async deliver(channelType, platformId, threadId, kind, content) {
+    async deliver(channelType, platformId, threadId, kind, content, files) {
       const adapter = getChannelAdapter(channelType);
       if (!adapter) {
         log.warn('No adapter for channel type', { channelType });
         return;
       }
-      await adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content) });
+      await adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });
     },
     async setTyping(channelType, platformId, threadId) {
       const adapter = getChannelAdapter(channelType);

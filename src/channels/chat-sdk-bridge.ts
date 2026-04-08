@@ -104,31 +104,33 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           if (gatewayAbort?.signal.aborted) return;
           // Capture the long-running listener promise via waitUntil
           let listenerPromise: Promise<unknown> | undefined;
-          adapter
-            .startGatewayListener!(
-              { waitUntil: (p: Promise<unknown>) => { listenerPromise = p; } },
-              24 * 60 * 60 * 1000,
-              gatewayAbort!.signal,
-            )
-            .then(() => {
-              // startGatewayListener resolves immediately with a Response;
-              // the actual work is in the listenerPromise passed to waitUntil
-              if (listenerPromise) {
-                listenerPromise
-                  .then(() => {
-                    if (!gatewayAbort?.signal.aborted) {
-                      log.info('Gateway listener expired, restarting', { adapter: adapter.name });
-                      startGateway();
-                    }
-                  })
-                  .catch((err) => {
-                    if (!gatewayAbort?.signal.aborted) {
-                      log.error('Gateway listener error, restarting in 5s', { adapter: adapter.name, err });
-                      setTimeout(startGateway, 5000);
-                    }
-                  });
-              }
-            });
+          adapter.startGatewayListener!(
+            {
+              waitUntil: (p: Promise<unknown>) => {
+                listenerPromise = p;
+              },
+            },
+            24 * 60 * 60 * 1000,
+            gatewayAbort!.signal,
+          ).then(() => {
+            // startGatewayListener resolves immediately with a Response;
+            // the actual work is in the listenerPromise passed to waitUntil
+            if (listenerPromise) {
+              listenerPromise
+                .then(() => {
+                  if (!gatewayAbort?.signal.aborted) {
+                    log.info('Gateway listener expired, restarting', { adapter: adapter.name });
+                    startGateway();
+                  }
+                })
+                .catch((err) => {
+                  if (!gatewayAbort?.signal.aborted) {
+                    log.error('Gateway listener error, restarting in 5s', { adapter: adapter.name, err });
+                    setTimeout(startGateway, 5000);
+                  }
+                });
+            }
+          });
         };
         startGateway();
         log.info('Gateway listener started', { adapter: adapter.name });
@@ -156,7 +158,17 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // Normal message
       const text = (content.markdown as string) || (content.text as string);
       if (text) {
-        await adapter.postMessage(tid, { markdown: text });
+        // Attach files if present (FileUpload format: { data, filename })
+        const fileUploads = message.files?.map((f) => ({ data: f.data, filename: f.filename }));
+        if (fileUploads && fileUploads.length > 0) {
+          await adapter.postMessage(tid, { markdown: text, files: fileUploads });
+        } else {
+          await adapter.postMessage(tid, { markdown: text });
+        }
+      } else if (message.files && message.files.length > 0) {
+        // Files only, no text
+        const fileUploads = message.files.map((f) => ({ data: f.data, filename: f.filename }));
+        await adapter.postMessage(tid, { markdown: '', files: fileUploads });
       }
     },
 

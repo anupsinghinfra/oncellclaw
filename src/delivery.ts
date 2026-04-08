@@ -3,12 +3,15 @@
  * Polls active session DBs for undelivered messages_out, delivers through channel adapters.
  */
 import Database from 'better-sqlite3';
+import fs from 'fs';
+import path from 'path';
 
 import { getRunningSessions, getActiveSessions } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { log } from './log.js';
-import { openSessionDb, sessionDbPath } from './session-manager.js';
+import { openSessionDb, sessionDir } from './session-manager.js';
 import { resetContainerIdleTimer } from './container-runner-v2.js';
+import type { OutboundFile } from './channels/adapter.js';
 import type { Session } from './types-v2.js';
 
 const ACTIVE_POLL_MS = 1000;
@@ -21,6 +24,7 @@ export interface ChannelDeliveryAdapter {
     threadId: string | null,
     kind: string,
     content: string,
+    files?: OutboundFile[],
   ): Promise<void>;
   setTyping?(channelType: string, platformId: string, threadId: string | null): Promise<void>;
 }
@@ -159,8 +163,29 @@ async function deliverMessage(
     return;
   }
 
-  await deliveryAdapter.deliver(msg.channel_type, msg.platform_id, msg.thread_id, msg.kind, msg.content);
-  log.info('Message delivered', { id: msg.id, channelType: msg.channel_type, platformId: msg.platform_id });
+  // Read file attachments from outbox if the content declares files
+  let files: OutboundFile[] | undefined;
+  const outboxDir = path.join(sessionDir(session.agent_group_id, session.id), 'outbox', msg.id);
+  if (Array.isArray(content.files) && content.files.length > 0 && fs.existsSync(outboxDir)) {
+    files = [];
+    for (const filename of content.files as string[]) {
+      const filePath = path.join(outboxDir, filename);
+      if (fs.existsSync(filePath)) {
+        files.push({ filename, data: fs.readFileSync(filePath) });
+      } else {
+        log.warn('Outbox file not found', { messageId: msg.id, filename });
+      }
+    }
+    if (files.length === 0) files = undefined;
+  }
+
+  await deliveryAdapter.deliver(msg.channel_type, msg.platform_id, msg.thread_id, msg.kind, msg.content, files);
+  log.info('Message delivered', { id: msg.id, channelType: msg.channel_type, platformId: msg.platform_id, fileCount: files?.length });
+
+  // Clean up outbox directory after successful delivery
+  if (fs.existsSync(outboxDir)) {
+    fs.rmSync(outboxDir, { recursive: true, force: true });
+  }
 }
 
 export function stopDeliveryPolls(): void {

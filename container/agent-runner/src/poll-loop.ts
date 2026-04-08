@@ -1,6 +1,6 @@
-import { getPendingMessages, markProcessing, markCompleted, touchProcessing } from './db/messages-in.js';
+import { getPendingMessages, markProcessing, markCompleted, touchProcessing, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
-import { formatMessages, extractRouting, type RoutingContext } from './formatter.js';
+import { formatMessages, extractRouting, categorizeMessage, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -50,9 +50,69 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     markProcessing(ids);
 
     const routing = extractRouting(messages);
-    const prompt = formatMessages(messages);
 
-    log(`Processing ${messages.length} message(s), kinds: ${[...new Set(messages.map((m) => m.kind))].join(',')}`);
+    // Handle commands: categorize chat messages
+    const adminUserId = config.env.NANOCLAW_ADMIN_USER_ID;
+    const normalMessages = [];
+    const commandIds: string[] = [];
+
+    for (const msg of messages) {
+      if (msg.kind !== 'chat' && msg.kind !== 'chat-sdk') {
+        normalMessages.push(msg);
+        continue;
+      }
+
+      const cmdInfo = categorizeMessage(msg);
+
+      if (cmdInfo.category === 'filtered') {
+        // Silently drop — mark completed, don't process
+        log(`Filtered command: ${cmdInfo.command} (msg: ${msg.id})`);
+        commandIds.push(msg.id);
+        continue;
+      }
+
+      if (cmdInfo.category === 'admin') {
+        if (!adminUserId || cmdInfo.senderId !== adminUserId) {
+          // Not admin — send error, mark completed
+          log(`Admin command denied: ${cmdInfo.command} from ${cmdInfo.senderId} (msg: ${msg.id})`);
+          writeMessageOut({
+            id: generateId(),
+            kind: 'chat',
+            platform_id: routing.platformId,
+            channel_type: routing.channelType,
+            thread_id: routing.threadId,
+            content: JSON.stringify({ text: `Permission denied: ${cmdInfo.command} requires admin access.` }),
+          });
+          commandIds.push(msg.id);
+          continue;
+        }
+        // Admin user — format as system command
+        normalMessages.push(msg);
+        continue;
+      }
+
+      // passthrough or none
+      normalMessages.push(msg);
+    }
+
+    // Mark filtered/denied command messages as completed immediately
+    if (commandIds.length > 0) {
+      markCompleted(commandIds);
+    }
+
+    // If all messages were filtered commands, skip processing
+    if (normalMessages.length === 0) {
+      // Mark remaining processing IDs as completed
+      const remainingIds = ids.filter((id) => !commandIds.includes(id));
+      if (remainingIds.length > 0) markCompleted(remainingIds);
+      log(`All ${messages.length} message(s) were commands, skipping query`);
+      continue;
+    }
+
+    // Format messages: passthrough commands get raw text, others get XML
+    const prompt = formatMessagesWithCommands(normalMessages);
+
+    log(`Processing ${normalMessages.length} message(s), kinds: ${[...new Set(normalMessages.map((m) => m.kind))].join(',')}`);
 
     // Set routing context as env vars for MCP tools
     setRoutingEnv(routing, config.env);
@@ -69,8 +129,9 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     });
 
     // Process the query while concurrently polling for new messages
+    const processingIds = ids.filter((id) => !commandIds.includes(id));
     try {
-      const result = await processQuery(query, routing, config, ids);
+      const result = await processQuery(query, routing, config, processingIds);
       if (result.sessionId) sessionId = result.sessionId;
       if (result.resumeAt) resumeAt = result.resumeAt;
     } catch (err) {
@@ -86,9 +147,53 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       });
     }
 
-    markCompleted(ids);
+    markCompleted(processingIds);
     log(`Completed ${ids.length} message(s)`);
   }
+}
+
+/**
+ * Format messages, handling passthrough commands differently.
+ * Passthrough commands (e.g., /foo) are sent raw (no XML wrapping).
+ * Admin commands from authorized users are formatted as system commands.
+ * Normal messages get standard XML formatting.
+ */
+function formatMessagesWithCommands(messages: MessageInRow[]): string {
+  // Check if any message is a passthrough command
+  const parts: string[] = [];
+  const normalBatch: MessageInRow[] = [];
+
+  for (const msg of messages) {
+    if (msg.kind === 'chat' || msg.kind === 'chat-sdk') {
+      const cmdInfo = categorizeMessage(msg);
+      if (cmdInfo.category === 'passthrough') {
+        // Flush normal batch first
+        if (normalBatch.length > 0) {
+          parts.push(formatMessages(normalBatch));
+          normalBatch.length = 0;
+        }
+        // Pass raw command text (no XML wrapping)
+        parts.push(cmdInfo.text);
+        continue;
+      }
+      if (cmdInfo.category === 'admin') {
+        // Format admin command as a system command block
+        if (normalBatch.length > 0) {
+          parts.push(formatMessages(normalBatch));
+          normalBatch.length = 0;
+        }
+        parts.push(`[SYSTEM COMMAND: ${cmdInfo.command}]\n${cmdInfo.text}`);
+        continue;
+      }
+    }
+    normalBatch.push(msg);
+  }
+
+  if (normalBatch.length > 0) {
+    parts.push(formatMessages(normalBatch));
+  }
+
+  return parts.join('\n\n');
 }
 
 interface QueryResult {

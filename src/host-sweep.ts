@@ -58,7 +58,8 @@ async function sweepSession(session: Session): Promise<void> {
   let db: Database.Database;
   try {
     db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
+    db.pragma('journal_mode = DELETE');
+    db.pragma('busy_timeout = 5000');
   } catch {
     return;
   }
@@ -125,10 +126,23 @@ async function sweepSession(session: Session): Promise<void> {
         const nextRun = interval.next().toISOString();
         const newId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+        // Compute next seq from both tables (same pattern as session-manager.ts)
+        const nextSeq = (
+          db
+            .prepare(
+              `SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM (
+                 SELECT seq FROM messages_in WHERE seq IS NOT NULL
+                 UNION ALL
+                 SELECT seq FROM messages_out WHERE seq IS NOT NULL
+               )`,
+            )
+            .get() as { next: number }
+        ).next;
+
         db.prepare(
-          `INSERT INTO messages_in (id, kind, timestamp, status, process_after, recurrence, platform_id, channel_type, thread_id, content)
-           VALUES (?, ?, datetime('now'), 'pending', ?, ?, ?, ?, ?, ?)`,
-        ).run(newId, msg.kind, nextRun, msg.recurrence, msg.platform_id, msg.channel_type, msg.thread_id, msg.content);
+          `INSERT INTO messages_in (id, seq, kind, timestamp, status, process_after, recurrence, platform_id, channel_type, thread_id, content)
+           VALUES (?, ?, ?, datetime('now'), 'pending', ?, ?, ?, ?, ?, ?)`,
+        ).run(newId, nextSeq, msg.kind, nextRun, msg.recurrence, msg.platform_id, msg.channel_type, msg.thread_id, msg.content);
 
         // Remove recurrence from the completed message so it doesn't spawn again
         db.prepare('UPDATE messages_in SET recurrence = NULL WHERE id = ?').run(msg.id);
