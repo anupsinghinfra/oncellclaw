@@ -43,7 +43,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Chat SDK SQLite state adapter (KV, subscriptions, locks, lists)
 - [x] Discord via Chat SDK
 - [~] Slack via Chat SDK (adapter + skill written, not tested)
-- [~] Telegram via Chat SDK (adapter + skill written, not tested)
+- [x] Telegram via Chat SDK (E2E verified: inbound, routing, typing, delivery)
 - [~] Microsoft Teams via Chat SDK (adapter + skill written, not tested)
 - [~] Google Chat via Chat SDK (adapter + skill written, not tested)
 - [~] Linear via Chat SDK (adapter + skill written, not tested)
