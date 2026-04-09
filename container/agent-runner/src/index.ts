@@ -5,14 +5,18 @@
  * No stdin, no stdout markers, no IPC files.
  *
  * Config:
- *   - SESSION_DB_PATH: path to session SQLite DB (default: /workspace/session.db)
+ *   - SESSION_INBOUND_DB_PATH:  path to host-owned inbound DB (default: /workspace/inbound.db)
+ *   - SESSION_OUTBOUND_DB_PATH: path to container-owned outbound DB (default: /workspace/outbound.db)
+ *   - SESSION_HEARTBEAT_PATH:   heartbeat file path (default: /workspace/.heartbeat)
  *   - AGENT_PROVIDER: 'claude' | 'mock' (default: claude)
  *   - NANOCLAW_ASSISTANT_NAME: assistant name for transcript archiving
  *   - NANOCLAW_ADMIN_USER_ID: admin user ID for permission checks
  *
  * Mount structure:
  *   /workspace/
- *     session.db        ← session SQLite DB
+ *     inbound.db        ← host-owned session DB (container reads only)
+ *     outbound.db       ← container-owned session DB
+ *     .heartbeat        ← container touches for liveness detection
  *     outbox/           ← outbound files
  *     agent/            ← agent group folder (CLAUDE.md, skills, working files)
  *     .claude/          ← Claude SDK session data
@@ -80,7 +84,9 @@ async function main(): Promise<void> {
         command: 'node',
         args: [mcpServerPath],
         env: {
-          SESSION_DB_PATH: process.env.SESSION_DB_PATH || '/workspace/session.db',
+          SESSION_INBOUND_DB_PATH: process.env.SESSION_INBOUND_DB_PATH || '/workspace/inbound.db',
+          SESSION_OUTBOUND_DB_PATH: process.env.SESSION_OUTBOUND_DB_PATH || '/workspace/outbound.db',
+          SESSION_HEARTBEAT_PATH: process.env.SESSION_HEARTBEAT_PATH || '/workspace/.heartbeat',
         },
       },
     },

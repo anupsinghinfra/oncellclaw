@@ -1,4 +1,13 @@
-import { getSessionDb } from './connection.js';
+/**
+ * Inbound message operations (container side).
+ *
+ * Reads from inbound.db (host-owned, opened read-only).
+ * Writes processing status to processing_ack in outbound.db (container-owned).
+ *
+ * The container never writes to inbound.db — all status tracking goes through
+ * processing_ack. The host reads processing_ack to sync message lifecycle.
+ */
+import { getInboundDb, getOutboundDb } from './connection.js';
 
 export interface MessageInRow {
   id: string;
@@ -6,7 +15,6 @@ export interface MessageInRow {
   kind: string;
   timestamp: string;
   status: string;
-  status_changed: string | null;
   process_after: string | null;
   recurrence: string | null;
   tries: number;
@@ -16,9 +24,16 @@ export interface MessageInRow {
   content: string;
 }
 
-/** Fetch all pending messages that are due for processing. */
+/**
+ * Fetch pending messages that are due for processing.
+ * Reads from inbound.db (read-only), filters against processing_ack in outbound.db
+ * to skip messages already picked up by this or a previous container run.
+ */
 export function getPendingMessages(): MessageInRow[] {
-  return getSessionDb()
+  const inbound = getInboundDb();
+  const outbound = getOutboundDb();
+
+  const pending = inbound
     .prepare(
       `SELECT * FROM messages_in
        WHERE status = 'pending'
@@ -26,49 +41,74 @@ export function getPendingMessages(): MessageInRow[] {
        ORDER BY timestamp ASC`,
     )
     .all() as MessageInRow[];
+
+  if (pending.length === 0) return [];
+
+  // Filter out messages already acknowledged in outbound.db
+  const ackedIds = new Set(
+    (outbound.prepare('SELECT message_id FROM processing_ack').all() as Array<{ message_id: string }>).map(
+      (r) => r.message_id,
+    ),
+  );
+
+  return pending.filter((m) => !ackedIds.has(m.id));
 }
 
-/** Mark messages as processing. */
+/** Mark messages as processing — writes to processing_ack in outbound.db. */
 export function markProcessing(ids: string[]): void {
   if (ids.length === 0) return;
-  const db = getSessionDb();
-  const stmt = db.prepare("UPDATE messages_in SET status = 'processing', status_changed = datetime('now'), tries = tries + 1 WHERE id = ?");
+  const db = getOutboundDb();
+  const stmt = db.prepare(
+    "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'processing', datetime('now'))",
+  );
   db.transaction(() => {
     for (const id of ids) stmt.run(id);
   })();
 }
 
-/** Mark messages as completed. */
+/** Mark messages as completed — updates processing_ack in outbound.db. */
 export function markCompleted(ids: string[]): void {
   if (ids.length === 0) return;
-  const db = getSessionDb();
-  const stmt = db.prepare("UPDATE messages_in SET status = 'completed', status_changed = datetime('now') WHERE id = ?");
+  const db = getOutboundDb();
+  const stmt = db.prepare(
+    "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', datetime('now'))",
+  );
   db.transaction(() => {
     for (const id of ids) stmt.run(id);
   })();
 }
 
-/** Update status_changed on processing messages (heartbeat for host idle detection). */
-export function touchProcessing(ids: string[]): void {
-  if (ids.length === 0) return;
-  const db = getSessionDb();
-  const stmt = db.prepare("UPDATE messages_in SET status_changed = datetime('now') WHERE id = ? AND status = 'processing'");
-  for (const id of ids) stmt.run(id);
-}
-
-/** Mark a single message as failed. */
+/** Mark a single message as failed — writes to processing_ack in outbound.db. */
 export function markFailed(id: string): void {
-  getSessionDb().prepare("UPDATE messages_in SET status = 'failed', status_changed = datetime('now') WHERE id = ?").run(id);
+  getOutboundDb()
+    .prepare(
+      "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'failed', datetime('now'))",
+    )
+    .run(id);
 }
 
-/** Get a message by ID. */
+/** Get a message by ID (read from inbound.db). */
 export function getMessageIn(id: string): MessageInRow | undefined {
-  return getSessionDb().prepare('SELECT * FROM messages_in WHERE id = ?').get(id) as MessageInRow | undefined;
+  return getInboundDb().prepare('SELECT * FROM messages_in WHERE id = ?').get(id) as MessageInRow | undefined;
 }
 
-/** Find a pending response to a question (by questionId in content). */
+/**
+ * Find a pending response to a question (by questionId in content).
+ * Reads from inbound.db, checks processing_ack to skip already-handled responses.
+ */
 export function findQuestionResponse(questionId: string): MessageInRow | undefined {
-  return getSessionDb()
+  const inbound = getInboundDb();
+  const outbound = getOutboundDb();
+
+  const response = inbound
     .prepare("SELECT * FROM messages_in WHERE status = 'pending' AND content LIKE ?")
     .get(`%"questionId":"${questionId}"%`) as MessageInRow | undefined;
+
+  if (!response) return undefined;
+
+  // Check it hasn't been acked already
+  const acked = outbound.prepare('SELECT 1 FROM processing_ack WHERE message_id = ?').get(response.id);
+  if (acked) return undefined;
+
+  return response;
 }

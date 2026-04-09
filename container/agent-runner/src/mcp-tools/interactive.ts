@@ -4,7 +4,7 @@
  * ask_user_question is a blocking tool call — it writes a messages_out row
  * with a question card, then polls messages_in for the response.
  */
-import { getSessionDb } from '../db/connection.js';
+import { findQuestionResponse, markCompleted } from '../db/messages-in.js';
 import { writeMessageOut } from '../db/messages-out.js';
 import type { McpToolDefinition } from './types.js';
 
@@ -64,7 +64,7 @@ export const askUserQuestion: McpToolDefinition = {
     const questionId = generateId();
     const r = routing();
 
-    // Write question card to messages_out
+    // Write question card to outbound.db
     writeMessageOut({
       id: questionId,
       kind: 'chat-sdk',
@@ -81,19 +81,15 @@ export const askUserQuestion: McpToolDefinition = {
 
     log(`ask_user_question: ${questionId} → "${question}" [${options.join(', ')}]`);
 
-    // Poll for response in messages_in
+    // Poll for response in inbound.db (host writes the response there)
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
-      const response = getSessionDb()
-        .prepare("SELECT content FROM messages_in WHERE kind = 'system' AND content LIKE ? AND status = 'pending' LIMIT 1")
-        .get(`%"questionId":"${questionId}"%`) as { content: string } | undefined;
+      const response = findQuestionResponse(questionId);
 
       if (response) {
         const parsed = JSON.parse(response.content);
-        // Mark the response as completed so the poll loop doesn't pick it up
-        getSessionDb()
-          .prepare("UPDATE messages_in SET status = 'completed', status_changed = datetime('now') WHERE kind = 'system' AND content LIKE ?")
-          .run(`%"questionId":"${questionId}"%`);
+        // Mark the response as completed via processing_ack (outbound.db)
+        markCompleted([response.id]);
 
         log(`ask_user_question response: ${questionId} → ${parsed.selectedOption}`);
         return ok(parsed.selectedOption);

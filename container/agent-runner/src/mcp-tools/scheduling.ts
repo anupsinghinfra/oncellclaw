@@ -1,10 +1,12 @@
 /**
  * Scheduling MCP tools: schedule_task, list_tasks, cancel_task, pause_task, resume_task.
  *
- * Tasks are messages_in rows with process_after timestamps and optional recurrence.
- * The host sweep detects due tasks and wakes the container.
+ * With the two-DB split, the container cannot write to inbound.db (host-owned).
+ * Scheduling operations are sent as system actions via messages_out — the host
+ * reads them during delivery and applies the changes to inbound.db.
  */
-import { getSessionDb } from '../db/connection.js';
+import { getInboundDb } from '../db/connection.js';
+import { writeMessageOut } from '../db/messages-out.js';
 import type { McpToolDefinition } from './types.js';
 
 function log(msg: string): void {
@@ -57,22 +59,22 @@ export const scheduleTask: McpToolDefinition = {
     const recurrence = (args.recurrence as string) || null;
     const script = (args.script as string) || null;
 
-    const content = JSON.stringify({ prompt, script });
-
-    getSessionDb()
-      .prepare(
-        `INSERT INTO messages_in (id, timestamp, status, status_changed, tries, process_after, recurrence, kind, platform_id, channel_type, thread_id, content)
-         VALUES (@id, datetime('now'), 'pending', datetime('now'), 0, @process_after, @recurrence, 'task', @platform_id, @channel_type, @thread_id, @content)`,
-      )
-      .run({
-        id,
-        process_after: processAfter,
+    // Write as a system action — host will insert into inbound.db
+    writeMessageOut({
+      id,
+      kind: 'system',
+      platform_id: r.platform_id,
+      channel_type: r.channel_type,
+      thread_id: r.thread_id,
+      content: JSON.stringify({
+        action: 'schedule_task',
+        taskId: id,
+        prompt,
+        script,
+        processAfter,
         recurrence,
-        platform_id: r.platform_id,
-        channel_type: r.channel_type,
-        thread_id: r.thread_id,
-        content,
-      });
+      }),
+    });
 
     log(`schedule_task: ${id} at ${processAfter}${recurrence ? ` (recurring: ${recurrence})` : ''}`);
     return ok(`Task scheduled (id: ${id}, runs at: ${processAfter}${recurrence ? `, recurrence: ${recurrence}` : ''})`);
@@ -92,13 +94,14 @@ export const listTasks: McpToolDefinition = {
   },
   async handler(args) {
     const status = args.status as string | undefined;
+    const db = getInboundDb();
     let rows;
     if (status) {
-      rows = getSessionDb()
+      rows = db
         .prepare("SELECT id, status, process_after, recurrence, content FROM messages_in WHERE kind = 'task' AND status = ? ORDER BY process_after ASC")
         .all(status);
     } else {
-      rows = getSessionDb()
+      rows = db
         .prepare("SELECT id, status, process_after, recurrence, content FROM messages_in WHERE kind = 'task' AND status NOT IN ('completed') ORDER BY process_after ASC")
         .all();
     }
@@ -131,14 +134,15 @@ export const cancelTask: McpToolDefinition = {
     const taskId = args.taskId as string;
     if (!taskId) return err('taskId is required');
 
-    const result = getSessionDb()
-      .prepare("UPDATE messages_in SET status = 'completed', status_changed = datetime('now') WHERE id = ? AND kind = 'task' AND status IN ('pending', 'paused')")
-      .run(taskId);
-
-    if (result.changes === 0) return err(`Task not found or not cancellable: ${taskId}`);
+    // Write as a system action — host will update inbound.db
+    writeMessageOut({
+      id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'system',
+      content: JSON.stringify({ action: 'cancel_task', taskId }),
+    });
 
     log(`cancel_task: ${taskId}`);
-    return ok(`Task cancelled: ${taskId}`);
+    return ok(`Task cancellation requested: ${taskId}`);
   },
 };
 
@@ -158,14 +162,14 @@ export const pauseTask: McpToolDefinition = {
     const taskId = args.taskId as string;
     if (!taskId) return err('taskId is required');
 
-    const result = getSessionDb()
-      .prepare("UPDATE messages_in SET status = 'paused', status_changed = datetime('now') WHERE id = ? AND kind = 'task' AND status = 'pending'")
-      .run(taskId);
-
-    if (result.changes === 0) return err(`Task not found or not pausable: ${taskId}`);
+    writeMessageOut({
+      id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'system',
+      content: JSON.stringify({ action: 'pause_task', taskId }),
+    });
 
     log(`pause_task: ${taskId}`);
-    return ok(`Task paused: ${taskId}`);
+    return ok(`Task pause requested: ${taskId}`);
   },
 };
 
@@ -185,14 +189,14 @@ export const resumeTask: McpToolDefinition = {
     const taskId = args.taskId as string;
     if (!taskId) return err('taskId is required');
 
-    const result = getSessionDb()
-      .prepare("UPDATE messages_in SET status = 'pending', status_changed = datetime('now') WHERE id = ? AND kind = 'task' AND status = 'paused'")
-      .run(taskId);
-
-    if (result.changes === 0) return err(`Task not found or not paused: ${taskId}`);
+    writeMessageOut({
+      id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'system',
+      content: JSON.stringify({ action: 'resume_task', taskId }),
+    });
 
     log(`resume_task: ${taskId}`);
-    return ok(`Task resumed: ${taskId}`);
+    return ok(`Task resume requested: ${taskId}`);
   },
 };
 

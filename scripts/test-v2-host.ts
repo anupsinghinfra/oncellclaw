@@ -2,9 +2,9 @@
  * Real end-to-end test of v2: host router → Docker container → agent-runner → delivery.
  *
  * 1. Init central DB with agent group + messaging group + wiring
- * 2. Route an inbound message (creates session, writes messages_in, spawns container)
- * 3. Container runs v2 agent-runner, polls session DB, queries Claude
- * 4. Poll session DB for messages_out response
+ * 2. Route an inbound message (creates session, writes inbound.db, spawns container)
+ * 3. Container runs v2 agent-runner, polls inbound.db, queries Claude, writes outbound.db
+ * 4. Poll outbound.db for messages_out response
  *
  * Usage: npx tsx scripts/test-v2-host.ts
  */
@@ -71,7 +71,7 @@ console.log('\n=== Step 2: Route inbound message ===');
 
 import { routeInbound } from '../src/router.js';
 import { findSession } from '../src/db/sessions.js';
-import { sessionDbPath } from '../src/session-manager.js';
+import { inboundDbPath, outboundDbPath } from '../src/session-manager.js';
 
 await routeInbound({
   channelType: 'test',
@@ -96,8 +96,10 @@ if (!session) {
 console.log(`✓ Session: ${session.id}`);
 console.log(`✓ Container status: ${session.container_status}`);
 
-const sessDbPath = sessionDbPath('ag-e2e', session.id);
-console.log(`✓ Session DB: ${sessDbPath}`);
+const inDbPath = inboundDbPath('ag-e2e', session.id);
+const outDbPath = outboundDbPath('ag-e2e', session.id);
+console.log(`✓ Inbound DB: ${inDbPath}`);
+console.log(`✓ Outbound DB: ${outDbPath}`);
 
 // --- Step 3: Wait for response ---
 console.log('\n=== Step 3: Waiting for Claude response... ===');
@@ -107,7 +109,7 @@ const TIMEOUT_MS = 120_000;
 
 const checkForResponse = (): boolean => {
   try {
-    const db = new Database(sessDbPath, { readonly: true });
+    const db = new Database(outDbPath, { readonly: true });
     const out = db.prepare('SELECT * FROM messages_out').all() as Array<Record<string, unknown>>;
     db.close();
     return out.length > 0;
@@ -147,22 +149,36 @@ process.exit(0);
 
 function printState() {
   try {
-    const db = new Database(sessDbPath, { readonly: true });
-    const inRows = db.prepare('SELECT * FROM messages_in').all() as Array<Record<string, unknown>>;
-    const outRows = db.prepare('SELECT * FROM messages_out').all() as Array<Record<string, unknown>>;
-    db.close();
+    const inDb = new Database(inDbPath, { readonly: true });
+    const inRows = inDb.prepare('SELECT * FROM messages_in').all() as Array<Record<string, unknown>>;
+    inDb.close();
 
-    console.log('\nmessages_in:');
+    console.log('\nmessages_in (inbound.db):');
     for (const r of inRows) {
       console.log(`  [${r.id}] status=${r.status} kind=${r.kind}`);
     }
-    console.log('\nmessages_out:');
+  } catch (err) {
+    console.log(`  (could not read inbound DB: ${err})`);
+  }
+
+  try {
+    const outDb = new Database(outDbPath, { readonly: true });
+    const outRows = outDb.prepare('SELECT * FROM messages_out').all() as Array<Record<string, unknown>>;
+    const ackRows = outDb.prepare('SELECT * FROM processing_ack').all() as Array<Record<string, unknown>>;
+    outDb.close();
+
+    console.log('\nmessages_out (outbound.db):');
     for (const r of outRows) {
       const content = JSON.parse(r.content as string);
       console.log(`  [${r.id}] kind=${r.kind}`);
       console.log(`  → ${content.text}`);
     }
+
+    console.log('\nprocessing_ack (outbound.db):');
+    for (const r of ackRows) {
+      console.log(`  [${r.message_id}] status=${r.status} changed=${r.status_changed}`);
+    }
   } catch (err) {
-    console.log(`  (could not read session DB: ${err})`);
+    console.log(`  (could not read outbound DB: ${err})`);
   }
 }

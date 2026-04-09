@@ -69,16 +69,21 @@ CREATE TABLE pending_questions (
 `;
 
 /**
- * Session DB schema — created fresh by the host for each session.
+ * Session DB schemas — split into two files so each has exactly one writer.
+ * This eliminates SQLite write contention across the host-container mount boundary.
+ *
+ *   inbound.db  — host writes, container reads (read-only mount or open read-only)
+ *   outbound.db — container writes, host reads (read-only open)
  */
-export const SESSION_SCHEMA = `
+
+/** Host-owned: inbound messages + delivery tracking. */
+export const INBOUND_SCHEMA = `
 CREATE TABLE messages_in (
   id             TEXT PRIMARY KEY,
   seq            INTEGER UNIQUE,
   kind           TEXT NOT NULL,
   timestamp      TEXT NOT NULL,
   status         TEXT DEFAULT 'pending',
-  status_changed TEXT,
   process_after  TEXT,
   recurrence     TEXT,
   tries          INTEGER DEFAULT 0,
@@ -88,12 +93,21 @@ CREATE TABLE messages_in (
   content        TEXT NOT NULL
 );
 
+-- Host tracks which messages_out IDs have been delivered.
+-- Avoids writing to outbound.db (container-owned).
+CREATE TABLE delivered (
+  message_out_id TEXT PRIMARY KEY,
+  delivered_at   TEXT NOT NULL
+);
+`;
+
+/** Container-owned: outbound messages + processing acknowledgments. */
+export const OUTBOUND_SCHEMA = `
 CREATE TABLE messages_out (
   id             TEXT PRIMARY KEY,
   seq            INTEGER UNIQUE,
   in_reply_to    TEXT,
   timestamp      TEXT NOT NULL,
-  delivered      INTEGER DEFAULT 0,
   deliver_after  TEXT,
   recurrence     TEXT,
   kind           TEXT NOT NULL,
@@ -101,5 +115,14 @@ CREATE TABLE messages_out (
   channel_type   TEXT,
   thread_id      TEXT,
   content        TEXT NOT NULL
+);
+
+-- Container tracks processing status here instead of updating messages_in.
+-- Host reads this to know which messages have been processed.
+-- On container startup, stale 'processing' entries are cleared (crash recovery).
+CREATE TABLE processing_ack (
+  message_id     TEXT PRIMARY KEY,
+  status         TEXT NOT NULL,
+  status_changed TEXT NOT NULL
 );
 `;

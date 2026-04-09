@@ -1,5 +1,6 @@
-import { getPendingMessages, markProcessing, markCompleted, touchProcessing, type MessageInRow } from './db/messages-in.js';
+import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
+import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { formatMessages, extractRouting, categorizeMessage, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent } from './providers/types.js';
 
@@ -37,6 +38,10 @@ export interface PollLoopConfig {
 export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   let sessionId: string | undefined;
   let resumeAt: string | undefined;
+
+  // Clear leftover 'processing' acks from a previous crashed container.
+  // This lets the new container re-process those messages.
+  clearStaleProcessingAcks();
 
   let pollCount = 0;
   while (true) {
@@ -260,7 +265,7 @@ async function processQuery(query: AgentQuery, routing: RoutingContext, config: 
     for await (const event of query.events) {
       lastEventTime = Date.now();
       handleEvent(event, routing);
-      touchProcessing(processingIds);
+      touchHeartbeat();
 
       if (event.type === 'init') {
         querySessionId = event.sessionId;

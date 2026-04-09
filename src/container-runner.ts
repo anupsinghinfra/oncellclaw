@@ -19,7 +19,6 @@ import {
   markContainerIdle,
   markContainerRunning,
   markContainerStopped,
-  sessionDbPath,
   sessionDir,
 } from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
@@ -135,7 +134,7 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   const sessDir = sessionDir(agentGroup.id, session.id);
   const groupDir = path.resolve(GROUPS_DIR, agentGroup.folder);
 
-  // Session folder at /workspace (contains session.db, outbox/, .claude/)
+  // Session folder at /workspace (contains inbound.db, outbound.db, outbox/, .claude/)
   mounts.push({ hostPath: sessDir, containerPath: '/workspace', readonly: false });
 
   // Agent group folder at /workspace/agent
@@ -226,7 +225,10 @@ async function buildContainerArgs(
   // Environment
   args.push('-e', `TZ=${TIMEZONE}`);
   args.push('-e', `AGENT_PROVIDER=${session.agent_provider || agentGroup.agent_provider || 'claude'}`);
-  args.push('-e', `SESSION_DB_PATH=/workspace/session.db`);
+  // Two-DB split: container reads inbound.db, writes outbound.db
+  args.push('-e', 'SESSION_INBOUND_DB_PATH=/workspace/inbound.db');
+  args.push('-e', 'SESSION_OUTBOUND_DB_PATH=/workspace/outbound.db');
+  args.push('-e', 'SESSION_HEARTBEAT_PATH=/workspace/.heartbeat');
 
   // Pass admin user ID and assistant name from messaging group/agent group
   if (session.messaging_group_id) {
@@ -239,10 +241,22 @@ async function buildContainerArgs(
     args.push('-e', `NANOCLAW_ASSISTANT_NAME=${agentGroup.name}`);
   }
 
-  // OneCLI gateway
-  const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
-  if (onecliApplied) {
-    log.debug('OneCLI gateway applied', { containerName });
+  // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
+  // are routed through the agent vault for credential injection.
+  // Must ensureAgent first for non-admin groups, otherwise applyContainerConfig
+  // rejects the unknown agent identifier and returns false.
+  try {
+    if (agentIdentifier) {
+      await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
+    }
+    const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
+    if (onecliApplied) {
+      log.info('OneCLI gateway applied', { containerName });
+    } else {
+      log.warn('OneCLI gateway not applied — container will have no credentials', { containerName });
+    }
+  } catch (err) {
+    log.warn('OneCLI gateway error — container will have no credentials', { containerName, err });
   }
 
   // Host gateway

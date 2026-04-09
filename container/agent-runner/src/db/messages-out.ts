@@ -1,11 +1,16 @@
-import { getSessionDb } from './connection.js';
+/**
+ * Outbound message operations (container side).
+ *
+ * Writes to outbound.db (container-owned).
+ * The host polls this DB (read-only) for undelivered messages.
+ */
+import { getInboundDb, getOutboundDb } from './connection.js';
 
 export interface MessageOutRow {
   id: string;
   seq: number | null;
   in_reply_to: string | null;
   timestamp: string;
-  delivered: number;
   deliver_after: string | null;
   recurrence: string | null;
   kind: string;
@@ -27,59 +32,63 @@ export interface WriteMessageOut {
   content: string;
 }
 
-/** Write a new outbound message, auto-assigning a seq number. */
+/**
+ * Write a new outbound message, auto-assigning an odd seq number.
+ * Container uses odd seq (1, 3, 5...), host uses even (2, 4, 6...) —
+ * this prevents seq collisions without cross-DB coordination.
+ */
 export function writeMessageOut(msg: WriteMessageOut): number {
-  const db = getSessionDb();
-  const nextSeq = (
-    db
-      .prepare(
-        `SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM (
-           SELECT seq FROM messages_in WHERE seq IS NOT NULL
-           UNION ALL
-           SELECT seq FROM messages_out WHERE seq IS NOT NULL
-         )`,
-      )
-      .get() as { next: number }
-  ).next;
+  const outbound = getOutboundDb();
+  const inbound = getInboundDb();
 
-  db.prepare(
-    `INSERT INTO messages_out (id, seq, in_reply_to, timestamp, delivered, deliver_after, recurrence, kind, platform_id, channel_type, thread_id, content)
-     VALUES (@id, @seq, @in_reply_to, datetime('now'), 0, @deliver_after, @recurrence, @kind, @platform_id, @channel_type, @thread_id, @content)`,
-  ).run({
-    in_reply_to: null,
-    deliver_after: null,
-    recurrence: null,
-    platform_id: null,
-    channel_type: null,
-    thread_id: null,
-    ...msg,
-    seq: nextSeq,
-  });
+  // Read max seq from both DBs to maintain global ordering.
+  // Safe: each side only reads the other DB, never writes to it.
+  const maxOut = (outbound.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_out').get() as { m: number }).m;
+  const maxIn = (inbound.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }).m;
+  const max = Math.max(maxOut, maxIn);
+  const nextSeq = max % 2 === 0 ? max + 1 : max + 2; // next odd
+
+  outbound
+    .prepare(
+      `INSERT INTO messages_out (id, seq, in_reply_to, timestamp, deliver_after, recurrence, kind, platform_id, channel_type, thread_id, content)
+     VALUES (@id, @seq, @in_reply_to, datetime('now'), @deliver_after, @recurrence, @kind, @platform_id, @channel_type, @thread_id, @content)`,
+    )
+    .run({
+      in_reply_to: null,
+      deliver_after: null,
+      recurrence: null,
+      platform_id: null,
+      channel_type: null,
+      thread_id: null,
+      ...msg,
+      seq: nextSeq,
+    });
 
   return nextSeq;
 }
 
-/** Look up a message's platform ID by seq number. */
+/**
+ * Look up a message's platform ID by seq number.
+ * Searches both inbound and outbound DBs since seq spans both.
+ */
 export function getMessageIdBySeq(seq: number): string | null {
-  const inRow = getSessionDb().prepare('SELECT id FROM messages_in WHERE seq = ?').get(seq) as { id: string } | undefined;
+  const inRow = getInboundDb().prepare('SELECT id FROM messages_in WHERE seq = ?').get(seq) as
+    | { id: string }
+    | undefined;
   if (inRow) return inRow.id;
-  const outRow = getSessionDb().prepare('SELECT id FROM messages_out WHERE seq = ?').get(seq) as { id: string } | undefined;
+  const outRow = getOutboundDb().prepare('SELECT id FROM messages_out WHERE seq = ?').get(seq) as
+    | { id: string }
+    | undefined;
   return outRow?.id ?? null;
 }
 
-/** Get undelivered messages (for host polling). */
+/** Get undelivered messages (for host polling — reads from outbound.db). */
 export function getUndeliveredMessages(): MessageOutRow[] {
-  return getSessionDb()
+  return getOutboundDb()
     .prepare(
       `SELECT * FROM messages_out
-       WHERE delivered = 0
-         AND (deliver_after IS NULL OR deliver_after <= datetime('now'))
+       WHERE (deliver_after IS NULL OR deliver_after <= datetime('now'))
        ORDER BY timestamp ASC`,
     )
     .all() as MessageOutRow[];
-}
-
-/** Mark a message as delivered. */
-export function markDelivered(id: string): void {
-  getSessionDb().prepare('UPDATE messages_out SET delivered = 1 WHERE id = ?').run(id);
 }

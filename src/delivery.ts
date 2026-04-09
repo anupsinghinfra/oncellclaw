@@ -1,6 +1,11 @@
 /**
  * Outbound message delivery.
- * Polls active session DBs for undelivered messages_out, delivers through channel adapters.
+ * Polls session outbound DBs for undelivered messages, delivers through channel adapters.
+ *
+ * Two-DB architecture:
+ *   - Reads messages_out from outbound.db (container-owned, opened read-only)
+ *   - Tracks delivery in inbound.db's `delivered` table (host-owned)
+ *   - Never writes to outbound.db — preserves single-writer-per-file invariant
  */
 import Database from 'better-sqlite3';
 import fs from 'fs';
@@ -9,7 +14,7 @@ import path from 'path';
 import { getRunningSessions, getActiveSessions, createPendingQuestion } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { log } from './log.js';
-import { openSessionDb, sessionDir } from './session-manager.js';
+import { openInboundDb, openOutboundDb, sessionDir, inboundDbPath } from './session-manager.js';
 import { resetContainerIdleTimer } from './container-runner.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { Session } from './types.js';
@@ -85,19 +90,21 @@ async function deliverSessionMessages(session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) return;
 
-  let db: Database.Database;
+  let outDb: Database.Database;
+  let inDb: Database.Database;
   try {
-    db = openSessionDb(agentGroup.id, session.id);
+    outDb = openOutboundDb(agentGroup.id, session.id);
+    inDb = openInboundDb(agentGroup.id, session.id);
   } catch {
-    return; // Session DB might not exist yet
+    return; // DBs might not exist yet
   }
 
   try {
-    const undelivered = db
+    // Read all due messages from outbound.db (read-only)
+    const allDue = outDb
       .prepare(
         `SELECT * FROM messages_out
-         WHERE delivered = 0
-           AND (deliver_after IS NULL OR deliver_after <= datetime('now'))
+         WHERE (deliver_after IS NULL OR deliver_after <= datetime('now'))
          ORDER BY timestamp ASC`,
       )
       .all() as Array<{
@@ -109,19 +116,32 @@ async function deliverSessionMessages(session: Session): Promise<void> {
       content: string;
     }>;
 
+    if (allDue.length === 0) return;
+
+    // Filter out already-delivered messages using inbound.db's delivered table
+    const deliveredIds = new Set(
+      (inDb.prepare('SELECT message_out_id FROM delivered').all() as Array<{ message_out_id: string }>).map(
+        (r) => r.message_out_id,
+      ),
+    );
+    const undelivered = allDue.filter((m) => !deliveredIds.has(m.id));
     if (undelivered.length === 0) return;
 
     for (const msg of undelivered) {
       try {
-        await deliverMessage(msg, session);
-        db.prepare('UPDATE messages_out SET delivered = 1 WHERE id = ?').run(msg.id);
+        await deliverMessage(msg, session, inDb);
+        // Track delivery in inbound.db (host-owned) — not outbound.db
+        inDb.prepare("INSERT OR IGNORE INTO delivered (message_out_id, delivered_at) VALUES (?, datetime('now'))").run(
+          msg.id,
+        );
         resetContainerIdleTimer(session.id);
       } catch (err) {
         log.error('Failed to deliver message', { messageId: msg.id, sessionId: session.id, err });
       }
     }
   } finally {
-    db.close();
+    outDb.close();
+    inDb.close();
   }
 }
 
@@ -135,6 +155,7 @@ async function deliverMessage(
     content: string;
   },
   session: Session,
+  inDb: Database.Database,
 ): Promise<void> {
   if (!deliveryAdapter) {
     log.warn('No delivery adapter configured, dropping message', { id: msg.id });
@@ -143,10 +164,9 @@ async function deliverMessage(
 
   const content = JSON.parse(msg.content);
 
-  // System actions — handle internally
+  // System actions — handle internally (schedule_task, cancel_task, etc.)
   if (msg.kind === 'system') {
-    log.info('System action from agent', { sessionId: session.id, action: content.action });
-    // TODO: handle system actions (register_group, reset_session, etc.)
+    await handleSystemAction(content, session, inDb);
     return;
   }
 
@@ -204,6 +224,84 @@ async function deliverMessage(
   // Clean up outbox directory after successful delivery
   if (fs.existsSync(outboxDir)) {
     fs.rmSync(outboxDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Handle system actions from the container agent.
+ * These are written to messages_out because the container can't write to inbound.db.
+ * The host applies them to inbound.db here.
+ */
+async function handleSystemAction(
+  content: Record<string, unknown>,
+  session: Session,
+  inDb: Database.Database,
+): Promise<void> {
+  const action = content.action as string;
+  log.info('System action from agent', { sessionId: session.id, action });
+
+  switch (action) {
+    case 'schedule_task': {
+      const taskId = content.taskId as string;
+      const prompt = content.prompt as string;
+      const script = content.script as string | null;
+      const processAfter = content.processAfter as string;
+      const recurrence = (content.recurrence as string) || null;
+
+      // Compute next even seq for host-owned inbound.db
+      const maxSeq = (
+        inDb.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }
+      ).m;
+      const nextSeq = maxSeq < 2 ? 2 : maxSeq + 2 - (maxSeq % 2);
+
+      inDb
+        .prepare(
+          `INSERT INTO messages_in (id, seq, timestamp, status, tries, process_after, recurrence, kind, platform_id, channel_type, thread_id, content)
+           VALUES (@id, @seq, datetime('now'), 'pending', 0, @process_after, @recurrence, 'task', @platform_id, @channel_type, @thread_id, @content)`,
+        )
+        .run({
+          id: taskId,
+          seq: nextSeq,
+          process_after: processAfter,
+          recurrence,
+          platform_id: content.platformId ?? null,
+          channel_type: content.channelType ?? null,
+          thread_id: content.threadId ?? null,
+          content: JSON.stringify({ prompt, script }),
+        });
+      log.info('Scheduled task created', { taskId, processAfter, recurrence });
+      break;
+    }
+
+    case 'cancel_task': {
+      const taskId = content.taskId as string;
+      inDb
+        .prepare("UPDATE messages_in SET status = 'completed' WHERE id = ? AND kind = 'task' AND status IN ('pending', 'paused')")
+        .run(taskId);
+      log.info('Task cancelled', { taskId });
+      break;
+    }
+
+    case 'pause_task': {
+      const taskId = content.taskId as string;
+      inDb
+        .prepare("UPDATE messages_in SET status = 'paused' WHERE id = ? AND kind = 'task' AND status = 'pending'")
+        .run(taskId);
+      log.info('Task paused', { taskId });
+      break;
+    }
+
+    case 'resume_task': {
+      const taskId = content.taskId as string;
+      inDb
+        .prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND kind = 'task' AND status = 'paused'")
+        .run(taskId);
+      log.info('Task resumed', { taskId });
+      break;
+    }
+
+    default:
+      log.warn('Unknown system action', { action });
   }
 }
 

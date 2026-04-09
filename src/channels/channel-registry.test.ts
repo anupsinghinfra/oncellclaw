@@ -162,7 +162,7 @@ describe('channel + router integration', () => {
   it('should route inbound message from adapter to session DB', async () => {
     const { routeInbound } = await import('../router.js');
     const { findSession } = await import('../db/sessions.js');
-    const { sessionDbPath } = await import('../session-manager.js');
+    const { inboundDbPath } = await import('../session-manager.js');
 
     // Simulate what the adapter bridge does: stringify content, call routeInbound
     const inboundContent = { sender: 'TestUser', senderId: 'u1', text: 'Hello from adapter', isFromMe: false };
@@ -183,7 +183,7 @@ describe('channel + router integration', () => {
     const session = findSession('mg-1', null);
     expect(session).toBeDefined();
 
-    const dbPath = sessionDbPath('ag-1', session!.id);
+    const dbPath = inboundDbPath('ag-1', session!.id);
     const db = new Database(dbPath);
     const rows = db.prepare('SELECT * FROM messages_in').all() as Array<{ id: string; content: string }>;
     db.close();

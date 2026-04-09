@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { initTestSessionDb, closeSessionDb, getSessionDb } from './db/connection.js';
+import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
 import { getPendingMessages, markCompleted } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 function insertMessage(id: string, kind: string, content: object, opts?: { processAfter?: string }) {
-  getSessionDb()
+  getInboundDb()
     .prepare(
       `INSERT INTO messages_in (id, kind, timestamp, status, process_after, content)
      VALUES (?, ?, datetime('now'), 'pending', ?, ?)`,
@@ -86,7 +86,7 @@ describe('formatter', () => {
 
 describe('routing', () => {
   it('should extract routing from messages', () => {
-    getSessionDb()
+    getInboundDb()
       .prepare(
         `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, thread_id, content)
        VALUES ('m1', 'chat', datetime('now'), 'pending', 'chan-123', 'discord', 'thread-456', '{"text":"hi"}')`,
@@ -113,7 +113,6 @@ describe('mock provider', () => {
     });
 
     const events: Array<{ type: string }> = [];
-    // End the stream after initial response
     setTimeout(() => query.end(), 50);
 
     for await (const event of query.events) {
@@ -138,7 +137,6 @@ describe('mock provider', () => {
 
     const events: Array<{ type: string; text?: string }> = [];
 
-    // Push a follow-up after a short delay, then end
     setTimeout(() => query.push('Second'), 30);
     setTimeout(() => query.end(), 60);
 
@@ -155,7 +153,7 @@ describe('mock provider', () => {
 
 describe('end-to-end with mock provider', () => {
   it('should read messages_in, process with mock provider, write messages_out', async () => {
-    // Insert a chat message
+    // Insert a chat message into inbound DB
     insertMessage('m1', 'chat', { sender: 'User', text: 'What is 2+2?' });
 
     // Read and process
@@ -198,11 +196,11 @@ describe('end-to-end with mock provider', () => {
 
     markCompleted(['m1']);
 
-    // Verify: message was processed
+    // Verify: message was processed (not pending, acked in processing_ack)
     const processed = getPendingMessages();
     expect(processed).toHaveLength(0);
 
-    // Verify: response was written
+    // Verify: response was written to outbound DB
     const outMessages = getUndeliveredMessages();
     expect(outMessages).toHaveLength(1);
     expect(JSON.parse(outMessages[0].content).text).toBe('The answer is 4');

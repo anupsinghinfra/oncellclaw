@@ -1,31 +1,86 @@
+/**
+ * Two-DB connection layer.
+ *
+ * The session uses two SQLite files to eliminate write contention across
+ * the host-container mount boundary:
+ *
+ *   inbound.db  — host writes new messages here; container opens READ-ONLY
+ *   outbound.db — container writes responses + acks here; host opens read-only
+ *
+ * Each file has exactly one writer, so no cross-process lock contention.
+ */
 import Database from 'better-sqlite3';
+import fs from 'fs';
 
-const SESSION_DB_PATH = '/workspace/session.db';
+const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
+const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
+const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
 
-let _db: Database.Database | null = null;
+let _inbound: Database.Database | null = null;
+let _outbound: Database.Database | null = null;
+let _heartbeatPath: string = DEFAULT_HEARTBEAT_PATH;
 
-export function getSessionDb(): Database.Database {
-  if (!_db) {
-    _db = new Database(process.env.SESSION_DB_PATH || SESSION_DB_PATH);
-    _db.pragma('journal_mode = DELETE');
-    _db.pragma('busy_timeout = 5000');
-    _db.pragma('foreign_keys = ON');
+/** Inbound DB — container opens read-only (host is the sole writer). */
+export function getInboundDb(): Database.Database {
+  if (!_inbound) {
+    const dbPath = process.env.SESSION_INBOUND_DB_PATH || DEFAULT_INBOUND_PATH;
+    _inbound = new Database(dbPath, { readonly: true });
+    _inbound.pragma('busy_timeout = 5000');
   }
-  return _db;
+  return _inbound;
 }
 
-/** For tests — opens an in-memory DB with session schema. */
-export function initTestSessionDb(): Database.Database {
-  _db = new Database(':memory:');
-  _db.pragma('foreign_keys = ON');
-  _db.exec(`
+/** Outbound DB — container owns this file (sole writer). */
+export function getOutboundDb(): Database.Database {
+  if (!_outbound) {
+    const dbPath = process.env.SESSION_OUTBOUND_DB_PATH || DEFAULT_OUTBOUND_PATH;
+    _outbound = new Database(dbPath);
+    _outbound.pragma('journal_mode = DELETE');
+    _outbound.pragma('busy_timeout = 5000');
+    _outbound.pragma('foreign_keys = ON');
+  }
+  return _outbound;
+}
+
+/**
+ * Touch the heartbeat file — replaces the old touchProcessing() DB writes.
+ * The host checks this file's mtime for stale container detection.
+ * A file touch is cheaper and avoids cross-boundary DB write contention.
+ */
+export function touchHeartbeat(): void {
+  const p = process.env.SESSION_HEARTBEAT_PATH || _heartbeatPath;
+  const now = new Date();
+  try {
+    fs.utimesSync(p, now, now);
+  } catch {
+    try {
+      fs.writeFileSync(p, '');
+    } catch {
+      // Silently ignore — parent dir may not exist (e.g., in-memory test DBs)
+    }
+  }
+}
+
+/**
+ * Clear stale processing_ack entries on container startup.
+ * If the previous container crashed, 'processing' entries are leftover.
+ * Clearing them lets the new container re-process those messages.
+ */
+export function clearStaleProcessingAcks(): void {
+  getOutboundDb().prepare("DELETE FROM processing_ack WHERE status = 'processing'").run();
+}
+
+/** For tests — creates in-memory DBs with the session schemas. */
+export function initTestSessionDb(): { inbound: Database.Database; outbound: Database.Database } {
+  _inbound = new Database(':memory:');
+  _inbound.pragma('foreign_keys = ON');
+  _inbound.exec(`
     CREATE TABLE messages_in (
       id             TEXT PRIMARY KEY,
       seq            INTEGER UNIQUE,
       kind           TEXT NOT NULL,
       timestamp      TEXT NOT NULL,
       status         TEXT DEFAULT 'pending',
-      status_changed TEXT,
       process_after  TEXT,
       recurrence     TEXT,
       tries          INTEGER DEFAULT 0,
@@ -34,12 +89,20 @@ export function initTestSessionDb(): Database.Database {
       thread_id      TEXT,
       content        TEXT NOT NULL
     );
+    CREATE TABLE delivered (
+      message_out_id TEXT PRIMARY KEY,
+      delivered_at   TEXT NOT NULL
+    );
+  `);
+
+  _outbound = new Database(':memory:');
+  _outbound.pragma('foreign_keys = ON');
+  _outbound.exec(`
     CREATE TABLE messages_out (
       id             TEXT PRIMARY KEY,
       seq            INTEGER UNIQUE,
       in_reply_to    TEXT,
       timestamp      TEXT NOT NULL,
-      delivered      INTEGER DEFAULT 0,
       deliver_after  TEXT,
       recurrence     TEXT,
       kind           TEXT NOT NULL,
@@ -48,11 +111,27 @@ export function initTestSessionDb(): Database.Database {
       thread_id      TEXT,
       content        TEXT NOT NULL
     );
+    CREATE TABLE processing_ack (
+      message_id     TEXT PRIMARY KEY,
+      status         TEXT NOT NULL,
+      status_changed TEXT NOT NULL
+    );
   `);
-  return _db;
+
+  return { inbound: _inbound, outbound: _outbound };
 }
 
 export function closeSessionDb(): void {
-  _db?.close();
-  _db = null;
+  _inbound?.close();
+  _inbound = null;
+  _outbound?.close();
+  _outbound = null;
+}
+
+/**
+ * @deprecated Use getInboundDb() / getOutboundDb() instead.
+ * Kept for backward compatibility during migration.
+ */
+export function getSessionDb(): Database.Database {
+  return getInboundDb();
 }

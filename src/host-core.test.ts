@@ -21,7 +21,8 @@ import {
   writeSessionMessage,
   initSessionFolder,
   sessionDir,
-  sessionDbPath,
+  inboundDbPath,
+  outboundDbPath,
   sessionsBaseDir,
 } from './session-manager.js';
 import { getSession, findSession } from './db/sessions.js';
@@ -84,22 +85,29 @@ describe('session manager', () => {
     });
   });
 
-  it('should create session folder and DB', () => {
+  it('should create session folder and both DBs', () => {
     initSessionFolder('ag-1', 'sess-test');
     const dir = sessionDir('ag-1', 'sess-test');
     expect(fs.existsSync(dir)).toBe(true);
     expect(fs.existsSync(path.join(dir, 'outbox'))).toBe(true);
 
-    const dbPath = sessionDbPath('ag-1', 'sess-test');
-    expect(fs.existsSync(dbPath)).toBe(true);
+    // Verify inbound.db
+    const inPath = inboundDbPath('ag-1', 'sess-test');
+    expect(fs.existsSync(inPath)).toBe(true);
+    const inDb = new Database(inPath);
+    const inTables = inDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
+    expect(inTables.map((t) => t.name)).toContain('messages_in');
+    expect(inTables.map((t) => t.name)).toContain('delivered');
+    inDb.close();
 
-    // Verify session DB has the right tables
-    const db = new Database(dbPath);
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
-    const tableNames = tables.map((t) => t.name);
-    expect(tableNames).toContain('messages_in');
-    expect(tableNames).toContain('messages_out');
-    db.close();
+    // Verify outbound.db
+    const outPath = outboundDbPath('ag-1', 'sess-test');
+    expect(fs.existsSync(outPath)).toBe(true);
+    const outDb = new Database(outPath);
+    const outTables = outDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
+    expect(outTables.map((t) => t.name)).toContain('messages_out');
+    expect(outTables.map((t) => t.name)).toContain('processing_ack');
+    outDb.close();
   });
 
   it('should resolve to existing session (shared mode)', () => {
@@ -124,7 +132,7 @@ describe('session manager', () => {
     expect(s2.id).toBe(s1.id);
   });
 
-  it('should write message to session DB', () => {
+  it('should write message to inbound DB', () => {
     const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
 
     writeSessionMessage('ag-1', session.id, {
@@ -137,8 +145,8 @@ describe('session manager', () => {
       content: JSON.stringify({ sender: 'User', text: 'Hello' }),
     });
 
-    // Read from the session DB
-    const dbPath = sessionDbPath('ag-1', session.id);
+    // Read from the inbound DB
+    const dbPath = inboundDbPath('ag-1', session.id);
     const db = new Database(dbPath);
     const rows = db.prepare('SELECT * FROM messages_in').all() as Array<{
       id: string;
@@ -223,8 +231,8 @@ describe('router', () => {
     const session = findSession('mg-1', null);
     expect(session).toBeDefined();
 
-    // Verify message was written to session DB
-    const dbPath = sessionDbPath('ag-1', session!.id);
+    // Verify message was written to inbound DB
+    const dbPath = inboundDbPath('ag-1', session!.id);
     const db = new Database(dbPath);
     const rows = db.prepare('SELECT * FROM messages_in').all() as Array<{ id: string; content: string }>;
     db.close();
@@ -239,8 +247,6 @@ describe('router', () => {
   it('should auto-create messaging group for unknown platform', async () => {
     const { routeInbound } = await import('./router.js');
 
-    // This platform ID isn't registered — but since there's no agent configured for it,
-    // it should create the messaging group but not route (no agents configured)
     const event: InboundEvent = {
       channelType: 'slack',
       platformId: 'C-NEW-CHANNEL',
@@ -255,7 +261,6 @@ describe('router', () => {
 
     await routeInbound(event);
 
-    // Messaging group should be created
     const { getMessagingGroupByPlatform } = await import('./db/messaging-groups.js');
     const mg = getMessagingGroupByPlatform('slack', 'C-NEW-CHANNEL');
     expect(mg).toBeDefined();
@@ -285,7 +290,7 @@ describe('router', () => {
 
     // Both should be in the same session
     const session = findSession('mg-1', null);
-    const dbPath = sessionDbPath('ag-1', session!.id);
+    const dbPath = inboundDbPath('ag-1', session!.id);
     const db = new Database(dbPath);
     const rows = db.prepare('SELECT * FROM messages_in ORDER BY timestamp').all();
     db.close();
@@ -295,7 +300,7 @@ describe('router', () => {
 });
 
 describe('delivery', () => {
-  it('should detect undelivered messages in session DB', () => {
+  it('should detect undelivered messages in outbound DB', () => {
     createAgentGroup({
       id: 'ag-1',
       name: 'Agent',
@@ -317,16 +322,15 @@ describe('delivery', () => {
 
     const { session } = resolveSession('ag-1', 'mg-test', null, 'shared');
 
-    // Write a response to the session DB (simulating what the agent-runner does)
-    const dbPath = sessionDbPath('ag-1', session.id);
+    // Write a response to the outbound DB (simulating what the agent-runner does)
+    const dbPath = outboundDbPath('ag-1', session.id);
     const db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
     db.prepare(
-      `INSERT INTO messages_out (id, timestamp, delivered, kind, platform_id, channel_type, content)
-       VALUES ('out-1', datetime('now'), 0, 'chat', 'chan-123', 'discord', ?)`,
+      `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, content)
+       VALUES ('out-1', datetime('now'), 'chat', 'chan-123', 'discord', ?)`,
     ).run(JSON.stringify({ text: 'Agent response' }));
 
-    const undelivered = db.prepare('SELECT * FROM messages_out WHERE delivered = 0').all() as Array<{
+    const undelivered = db.prepare('SELECT * FROM messages_out').all() as Array<{
       id: string;
       content: string;
     }>;

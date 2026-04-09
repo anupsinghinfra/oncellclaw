@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { initTestSessionDb, closeSessionDb, getSessionDb } from './db/connection.js';
+import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { getPendingMessages } from './db/messages-in.js';
 import { MockProvider } from './providers/mock.js';
@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 function insertMessage(id: string, content: object, opts?: { platformId?: string; channelType?: string; threadId?: string }) {
-  getSessionDb()
+  getInboundDb()
     .prepare(
       `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, thread_id, content)
        VALUES (?, 'chat', datetime('now'), 'pending', ?, ?, ?, ?)`,
@@ -25,20 +25,16 @@ function insertMessage(id: string, content: object, opts?: { platformId?: string
 
 describe('poll loop integration', () => {
   it('should pick up a message, process it, and write a response', async () => {
-    // Insert a message before starting the loop
     insertMessage('m1', { sender: 'Alice', text: 'What is the meaning of life?' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' });
 
     const provider = new MockProvider(() => '42');
 
-    // Run the poll loop in background, abort after it processes
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
 
-    // Wait for processing
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
     controller.abort();
 
-    // Verify
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0].content).text).toBe('42');
@@ -47,11 +43,11 @@ describe('poll loop integration', () => {
     expect(out[0].thread_id).toBe('thread-1');
     expect(out[0].in_reply_to).toBe('m1');
 
-    // Input message should be completed
+    // Input message should be acked (not pending)
     const pending = getPendingMessages();
     expect(pending).toHaveLength(0);
 
-    await loopPromise.catch(() => {}); // swallow abort
+    await loopPromise.catch(() => {});
   });
 
   it('should process multiple messages in a batch', async () => {
