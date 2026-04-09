@@ -15,12 +15,7 @@ import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import {
-  markContainerIdle,
-  markContainerRunning,
-  markContainerStopped,
-  sessionDir,
-} from './session-manager.js';
+import { markContainerIdle, markContainerRunning, markContainerStopped, sessionDir } from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });

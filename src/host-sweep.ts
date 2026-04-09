@@ -115,9 +115,7 @@ function syncProcessingAcks(inDb: Database.Database, outDb: Database.Database): 
   if (completed.length === 0) return;
 
   // Batch-update messages_in status for completed/failed messages
-  const updateStmt = inDb.prepare(
-    "UPDATE messages_in SET status = 'completed' WHERE id = ? AND status != 'completed'",
-  );
+  const updateStmt = inDb.prepare("UPDATE messages_in SET status = 'completed' WHERE id = ? AND status != 'completed'");
   inDb.transaction(() => {
     for (const { message_id } of completed) {
       updateStmt.run(message_id);
@@ -148,9 +146,9 @@ function detectStaleContainers(
   if (heartbeatAge < STALE_THRESHOLD_MS) return; // Container is alive
 
   // Heartbeat is stale — check for stuck processing entries
-  const processing = outDb
-    .prepare("SELECT message_id FROM processing_ack WHERE status = 'processing'")
-    .all() as Array<{ message_id: string }>;
+  const processing = outDb.prepare("SELECT message_id FROM processing_ack WHERE status = 'processing'").all() as Array<{
+    message_id: string;
+  }>;
 
   if (processing.length === 0) return;
 
@@ -200,9 +198,7 @@ async function handleRecurrence(inDb: Database.Database, session: Session): Prom
       const newId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       // Host uses even seq numbers
-      const maxSeq = (
-        inDb.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }
-      ).m;
+      const maxSeq = (inDb.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }).m;
       const nextSeq = maxSeq < 2 ? 2 : maxSeq + 2 - (maxSeq % 2);
 
       inDb
@@ -210,7 +206,17 @@ async function handleRecurrence(inDb: Database.Database, session: Session): Prom
           `INSERT INTO messages_in (id, seq, kind, timestamp, status, process_after, recurrence, platform_id, channel_type, thread_id, content)
            VALUES (?, ?, ?, datetime('now'), 'pending', ?, ?, ?, ?, ?, ?)`,
         )
-        .run(newId, nextSeq, msg.kind, nextRun, msg.recurrence, msg.platform_id, msg.channel_type, msg.thread_id, msg.content);
+        .run(
+          newId,
+          nextSeq,
+          msg.kind,
+          nextRun,
+          msg.recurrence,
+          msg.platform_id,
+          msg.channel_type,
+          msg.thread_id,
+          msg.content,
+        );
 
       // Remove recurrence from the completed message so it doesn't spawn again
       inDb.prepare('UPDATE messages_in SET recurrence = NULL WHERE id = ?').run(msg.id);

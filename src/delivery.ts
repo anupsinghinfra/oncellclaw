@@ -131,9 +131,9 @@ async function deliverSessionMessages(session: Session): Promise<void> {
       try {
         await deliverMessage(msg, session, inDb);
         // Track delivery in inbound.db (host-owned) — not outbound.db
-        inDb.prepare("INSERT OR IGNORE INTO delivered (message_out_id, delivered_at) VALUES (?, datetime('now'))").run(
-          msg.id,
-        );
+        inDb
+          .prepare("INSERT OR IGNORE INTO delivered (message_out_id, delivered_at) VALUES (?, datetime('now'))")
+          .run(msg.id);
         resetContainerIdleTimer(session.id);
       } catch (err) {
         log.error('Failed to deliver message', { messageId: msg.id, sessionId: session.id, err });
@@ -249,9 +249,7 @@ async function handleSystemAction(
       const recurrence = (content.recurrence as string) || null;
 
       // Compute next even seq for host-owned inbound.db
-      const maxSeq = (
-        inDb.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }
-      ).m;
+      const maxSeq = (inDb.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }).m;
       const nextSeq = maxSeq < 2 ? 2 : maxSeq + 2 - (maxSeq % 2);
 
       inDb
@@ -276,7 +274,9 @@ async function handleSystemAction(
     case 'cancel_task': {
       const taskId = content.taskId as string;
       inDb
-        .prepare("UPDATE messages_in SET status = 'completed' WHERE id = ? AND kind = 'task' AND status IN ('pending', 'paused')")
+        .prepare(
+          "UPDATE messages_in SET status = 'completed' WHERE id = ? AND kind = 'task' AND status IN ('pending', 'paused')",
+        )
         .run(taskId);
       log.info('Task cancelled', { taskId });
       break;

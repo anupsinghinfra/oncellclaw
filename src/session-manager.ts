@@ -139,9 +139,7 @@ export function writeSessionMessage(
   try {
     // Host uses even seq numbers, container uses odd — prevents collisions
     // across the two-DB boundary without cross-DB coordination.
-    const maxSeq = (
-      db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }
-    ).m;
+    const maxSeq = (db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }).m;
     const nextSeq = maxSeq < 2 ? 2 : maxSeq + 2 - (maxSeq % 2); // next even
 
     db.prepare(

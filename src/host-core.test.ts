@@ -104,7 +104,9 @@ describe('session manager', () => {
     const outPath = outboundDbPath('ag-1', 'sess-test');
     expect(fs.existsSync(outPath)).toBe(true);
     const outDb = new Database(outPath);
-    const outTables = outDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
+    const outTables = outDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+      name: string;
+    }>;
     expect(outTables.map((t) => t.name)).toContain('messages_out');
     expect(outTables.map((t) => t.name)).toContain('processing_ack');
     outDb.close();
