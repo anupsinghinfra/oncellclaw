@@ -9,7 +9,7 @@ This skill adds Matrix support to NanoClaw v2 using the Chat SDK bridge. Works w
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/matrix-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/matrix.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @beeper/chat-adapter-matrix
 Uncomment the Matrix import in `src/channels/index.ts`:
 
 ```typescript
-import './matrix-v2.js';
+import './matrix.js';
 ```
 
 ### Build
@@ -71,7 +71,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './matrix-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './matrix.js'` in `src/channels/index.ts`
 2. Remove `MATRIX_BASE_URL`, `MATRIX_ACCESS_TOKEN`, `MATRIX_USER_ID`, `MATRIX_BOT_USERNAME` from `.env`
 3. `npm uninstall @beeper/chat-adapter-matrix`
 4. Rebuild and restart

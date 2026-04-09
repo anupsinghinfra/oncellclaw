@@ -242,26 +242,43 @@ Verify the proxy starts: `npm run dev` should show "Credential proxy listening" 
 ## 5. Set Up Channels
 
 AskUserQuestion (multiSelect): Which messaging channels do you want to enable?
-- WhatsApp (authenticates via QR code or pairing code)
-- Telegram (authenticates via bot token from @BotFather)
-- Slack (authenticates via Slack app with Socket Mode)
-- Discord (authenticates via Discord bot token)
+- Discord (bot token + public key)
+- Slack (bot token + signing secret)
+- Telegram (bot token from @BotFather)
+- GitHub (PR/issue comment threads)
+- Linear (issue comment threads)
+- Microsoft Teams (Azure Bot)
+- Google Chat (service account)
+- WhatsApp Cloud API (Meta Business API)
+- WhatsApp Baileys (QR code / pairing code)
+- Resend (email)
+- Matrix (any homeserver)
+- Webex (bot token)
+- iMessage (macOS local or Photon API)
 
-**Delegate to each selected channel's own skill.** Each channel skill handles its own code installation, authentication, registration, and JID resolution. This avoids duplicating channel-specific logic and ensures JIDs are always correct.
+**Delegate to each selected channel's own skill.** Each channel skill handles its own package installation, authentication, registration, and configuration. This avoids duplicating channel-specific logic.
 
 For each selected channel, invoke its skill:
 
-- **WhatsApp:** Invoke `/add-whatsapp`
-- **Telegram:** Invoke `/add-telegram`
-- **Slack:** Invoke `/add-slack`
 - **Discord:** Invoke `/add-discord`
+- **Slack:** Invoke `/add-slack-v2`
+- **Telegram:** Invoke `/add-telegram-v2`
+- **GitHub:** Invoke `/add-github-v2`
+- **Linear:** Invoke `/add-linear-v2`
+- **Microsoft Teams:** Invoke `/add-teams-v2`
+- **Google Chat:** Invoke `/add-gchat-v2`
+- **WhatsApp Cloud API:** Invoke `/add-whatsapp-cloud-v2`
+- **WhatsApp Baileys:** Invoke `/add-whatsapp`
+- **Resend:** Invoke `/add-resend-v2`
+- **Matrix:** Invoke `/add-matrix-v2`
+- **Webex:** Invoke `/add-webex-v2`
+- **iMessage:** Invoke `/add-imessage-v2`
 
 Each skill will:
-1. Install the channel code (via `git merge` of the skill branch)
-2. Collect credentials/tokens and write to `.env`
-3. Authenticate (WhatsApp QR/pairing, or verify token-based connection)
-4. Register the chat with the correct JID format
-5. Build and verify
+1. Install the Chat SDK adapter package
+2. Uncomment the channel import in `src/channels/index.ts`
+3. Collect credentials/tokens and write to `.env`
+4. Build and verify
 
 **After all channel skills complete**, install dependencies and rebuild — channel merges may introduce new packages:
 

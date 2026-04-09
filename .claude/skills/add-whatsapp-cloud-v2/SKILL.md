@@ -9,7 +9,7 @@ This skill adds WhatsApp support via the official Meta WhatsApp Business Cloud A
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/whatsapp-cloud-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/whatsapp-cloud.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @chat-adapter/whatsapp
 Uncomment the WhatsApp Cloud API import in `src/channels/index.ts`:
 
 ```typescript
-import './whatsapp-cloud-v2.js';
+import './whatsapp-cloud.js';
 ```
 
 ### Build
@@ -76,7 +76,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './whatsapp-cloud-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './whatsapp-cloud.js'` in `src/channels/index.ts`
 2. Remove `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` from `.env`
 3. `npm uninstall @chat-adapter/whatsapp`
 4. Rebuild and restart

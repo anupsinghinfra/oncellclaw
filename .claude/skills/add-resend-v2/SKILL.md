@@ -9,7 +9,7 @@ This skill adds email support via Resend to NanoClaw v2 using the Chat SDK bridg
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/resend-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/resend.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @resend/chat-sdk-adapter
 Uncomment the Resend import in `src/channels/index.ts`:
 
 ```typescript
-import './resend-v2.js';
+import './resend.js';
 ```
 
 ### Build
@@ -73,7 +73,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './resend-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './resend.js'` in `src/channels/index.ts`
 2. Remove `RESEND_API_KEY`, `RESEND_FROM_ADDRESS`, `RESEND_FROM_NAME`, `RESEND_WEBHOOK_SECRET` from `.env`
 3. `npm uninstall @resend/chat-sdk-adapter`
 4. Rebuild and restart

@@ -9,7 +9,7 @@ This skill adds iMessage support to NanoClaw v2 using the Chat SDK bridge. Suppo
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/imessage-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/imessage.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install chat-adapter-imessage
 Uncomment the iMessage import in `src/channels/index.ts`:
 
 ```typescript
-import './imessage-v2.js';
+import './imessage.js';
 ```
 
 ### Build
@@ -80,7 +80,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './imessage-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './imessage.js'` in `src/channels/index.ts`
 2. Remove iMessage env vars from `.env`
 3. `npm uninstall chat-adapter-imessage`
 4. Rebuild and restart

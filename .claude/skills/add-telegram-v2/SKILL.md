@@ -9,7 +9,7 @@ This skill adds Telegram support to NanoClaw v2 using the Chat SDK bridge.
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/telegram-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/telegram.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @chat-adapter/telegram
 Uncomment the Telegram import in `src/channels/index.ts`:
 
 ```typescript
-import './telegram-v2.js';
+import './telegram.js';
 ```
 
 ### Build
@@ -76,7 +76,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './telegram-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './telegram.js'` in `src/channels/index.ts`
 2. Remove `TELEGRAM_BOT_TOKEN` from `.env`
 3. `npm uninstall @chat-adapter/telegram`
 4. Rebuild and restart

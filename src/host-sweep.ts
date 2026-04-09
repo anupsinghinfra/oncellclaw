@@ -13,8 +13,8 @@ import { getActiveSessions, updateSession } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { log } from './log.js';
 import { openSessionDb, sessionDbPath } from './session-manager.js';
-import { wakeContainer, isContainerRunning } from './container-runner-v2.js';
-import type { Session } from './types-v2.js';
+import { wakeContainer, isContainerRunning } from './container-runner.js';
+import type { Session } from './types.js';
 
 const SWEEP_INTERVAL_MS = 60_000;
 const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes

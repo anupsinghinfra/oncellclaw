@@ -9,7 +9,7 @@ This skill adds Linear support to NanoClaw v2 using the Chat SDK bridge. The age
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/linear-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/linear.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @chat-adapter/linear
 Uncomment the Linear import in `src/channels/index.ts`:
 
 ```typescript
-import './linear-v2.js';
+import './linear.js';
 ```
 
 ### Build
@@ -71,7 +71,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './linear-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './linear.js'` in `src/channels/index.ts`
 2. Remove `LINEAR_API_KEY` and `LINEAR_WEBHOOK_SECRET` from `.env`
 3. `npm uninstall @chat-adapter/linear`
 4. Rebuild and restart

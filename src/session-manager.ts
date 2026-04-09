@@ -10,7 +10,7 @@ import { DATA_DIR } from './config.js';
 import { createSession, findSession, getSession, updateSession } from './db/sessions.js';
 import { log } from './log.js';
 import { SESSION_SCHEMA } from './db/schema.js';
-import type { Session } from './types-v2.js';
+import type { Session } from './types.js';
 
 /** Root directory for all session data. */
 export function sessionsBaseDir(): string {

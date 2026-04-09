@@ -20,6 +20,6 @@ registerChannelAdapter('imessage', {
       serverUrl: env.IMESSAGE_SERVER_URL,
       apiKey: env.IMESSAGE_API_KEY,
     });
-    return createChatSdkBridge({ adapter: imessageAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: imessageAdapter as never, concurrency: 'concurrent' });
   },
 });

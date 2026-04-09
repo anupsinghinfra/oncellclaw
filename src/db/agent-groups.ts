@@ -1,4 +1,4 @@
-import type { AgentGroup } from '../types-v2.js';
+import type { AgentGroup } from '../types.js';
 import { getDb } from './connection.js';
 
 export function createAgentGroup(group: AgentGroup): void {

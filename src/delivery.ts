@@ -10,9 +10,9 @@ import { getRunningSessions, getActiveSessions, createPendingQuestion } from './
 import { getAgentGroup } from './db/agent-groups.js';
 import { log } from './log.js';
 import { openSessionDb, sessionDir } from './session-manager.js';
-import { resetContainerIdleTimer } from './container-runner-v2.js';
+import { resetContainerIdleTimer } from './container-runner.js';
 import type { OutboundFile } from './channels/adapter.js';
-import type { Session } from './types-v2.js';
+import type { Session } from './types.js';
 
 const ACTIVE_POLL_MS = 1000;
 const SWEEP_POLL_MS = 60_000;

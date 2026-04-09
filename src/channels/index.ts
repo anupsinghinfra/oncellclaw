@@ -2,40 +2,40 @@
 // Each import triggers the channel module's registerChannelAdapter() call.
 
 // discord
-// import './discord-v2.js';
+// import './discord.js';
 
 // slack
-// import './slack-v2.js';
+// import './slack.js';
 
 // telegram
-// import './telegram-v2.js';
+// import './telegram.js';
 
 // github
-// import './github-v2.js';
+// import './github.js';
 
 // linear
-// import './linear-v2.js';
+// import './linear.js';
 
 // google chat
-// import './gchat-v2.js';
+// import './gchat.js';
 
 // microsoft teams
-// import './teams-v2.js';
+// import './teams.js';
 
 // whatsapp cloud api
-// import './whatsapp-cloud-v2.js';
+// import './whatsapp-cloud.js';
 
 // resend (email)
-// import './resend-v2.js';
+// import './resend.js';
 
 // matrix
-// import './matrix-v2.js';
+// import './matrix.js';
 
 // webex
-// import './webex-v2.js';
+// import './webex.js';
 
 // imessage
-// import './imessage-v2.js';
+// import './imessage.js';
 
 // gmail (native, no Chat SDK)
 

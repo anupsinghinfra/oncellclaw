@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 
 import { STORE_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
-import { logger } from '../src/logger.js';
+import { log } from '../src/log.js';
 import {
   getPlatform,
   getServiceManager,
@@ -27,7 +27,7 @@ export async function run(_args: string[]): Promise<void> {
   const platform = getPlatform();
   const homeDir = os.homedir();
 
-  logger.info('Starting verification');
+  log.info('Starting verification');
 
   // 1. Check service status
   let service = 'not_found';
@@ -80,7 +80,7 @@ export async function run(_args: string[]): Promise<void> {
       }
     }
   }
-  logger.info({ service }, 'Service status');
+  log.info('Service status', { service });
 
   // 2. Check container runtime
   let containerRuntime = 'none';
@@ -174,7 +174,7 @@ export async function run(_args: string[]): Promise<void> {
       ? 'success'
       : 'failed';
 
-  logger.info({ status, channelAuth }, 'Verification complete');
+  log.info('Verification complete', { status, channelAuth });
 
   emitStatus('VERIFY', {
     SERVICE: service,

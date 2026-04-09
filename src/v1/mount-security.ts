@@ -10,25 +10,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { MOUNT_ALLOWLIST_PATH } from './config.js';
-import { log } from './log.js';
-
-export interface AdditionalMount {
-  hostPath: string;
-  containerPath?: string;
-  readonly?: boolean;
-}
-
-export interface MountAllowlist {
-  allowedRoots: AllowedRoot[];
-  blockedPatterns: string[];
-  nonMainReadOnly: boolean;
-}
-
-export interface AllowedRoot {
-  path: string;
-  allowReadWrite: boolean;
-  description?: string;
-}
+import { logger } from './logger.js';
+import { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
 
 // Cache the allowlist in memory - only reloads on process restart
 let cachedAllowlist: MountAllowlist | null = null;
@@ -76,7 +59,11 @@ export function loadMountAllowlist(): MountAllowlist | null {
     if (!fs.existsSync(MOUNT_ALLOWLIST_PATH)) {
       // Do NOT cache this as an error — file may be created later without restart.
       // Only parse/structural errors are permanently cached.
-      log.warn('Mount allowlist not found - additional mounts will be BLOCKED. Create the file to enable additional mounts.', { path: MOUNT_ALLOWLIST_PATH });
+      logger.warn(
+        { path: MOUNT_ALLOWLIST_PATH },
+        'Mount allowlist not found - additional mounts will be BLOCKED. ' +
+          'Create the file to enable additional mounts.',
+      );
       return null;
     }
 
@@ -101,12 +88,25 @@ export function loadMountAllowlist(): MountAllowlist | null {
     allowlist.blockedPatterns = mergedBlockedPatterns;
 
     cachedAllowlist = allowlist;
-    log.info('Mount allowlist loaded successfully', { path: MOUNT_ALLOWLIST_PATH, allowedRoots: allowlist.allowedRoots.length, blockedPatterns: allowlist.blockedPatterns.length });
+    logger.info(
+      {
+        path: MOUNT_ALLOWLIST_PATH,
+        allowedRoots: allowlist.allowedRoots.length,
+        blockedPatterns: allowlist.blockedPatterns.length,
+      },
+      'Mount allowlist loaded successfully',
+    );
 
     return cachedAllowlist;
   } catch (err) {
     allowlistLoadError = err instanceof Error ? err.message : String(err);
-    log.error('Failed to load mount allowlist - additional mounts will be BLOCKED', { path: MOUNT_ALLOWLIST_PATH, error: allowlistLoadError });
+    logger.error(
+      {
+        path: MOUNT_ALLOWLIST_PATH,
+        error: allowlistLoadError,
+      },
+      'Failed to load mount allowlist - additional mounts will be BLOCKED',
+    );
     return null;
   }
 }
@@ -283,11 +283,22 @@ export function validateMount(mount: AdditionalMount, isMain: boolean): MountVal
     if (!isMain && allowlist.nonMainReadOnly) {
       // Non-main groups forced to read-only
       effectiveReadonly = true;
-      log.info('Mount forced to read-only for non-main group', { mount: mount.hostPath });
+      logger.info(
+        {
+          mount: mount.hostPath,
+        },
+        'Mount forced to read-only for non-main group',
+      );
     } else if (!allowedRoot.allowReadWrite) {
       // Root doesn't allow read-write
       effectiveReadonly = true;
-      log.info('Mount forced to read-only - root does not allow read-write', { mount: mount.hostPath, root: allowedRoot.path });
+      logger.info(
+        {
+          mount: mount.hostPath,
+          root: allowedRoot.path,
+        },
+        'Mount forced to read-only - root does not allow read-write',
+      );
     } else {
       // Read-write allowed
       effectiveReadonly = false;
@@ -333,9 +344,26 @@ export function validateAdditionalMounts(
         readonly: result.effectiveReadonly!,
       });
 
-      log.debug('Mount validated successfully', { group: groupName, hostPath: result.realHostPath, containerPath: result.resolvedContainerPath, readonly: result.effectiveReadonly, reason: result.reason });
+      logger.debug(
+        {
+          group: groupName,
+          hostPath: result.realHostPath,
+          containerPath: result.resolvedContainerPath,
+          readonly: result.effectiveReadonly,
+          reason: result.reason,
+        },
+        'Mount validated successfully',
+      );
     } else {
-      log.warn('Additional mount REJECTED', { group: groupName, requestedPath: mount.hostPath, containerPath: mount.containerPath, reason: result.reason });
+      logger.warn(
+        {
+          group: groupName,
+          requestedPath: mount.hostPath,
+          containerPath: mount.containerPath,
+          reason: result.reason,
+        },
+        'Additional mount REJECTED',
+      );
     }
   }
 

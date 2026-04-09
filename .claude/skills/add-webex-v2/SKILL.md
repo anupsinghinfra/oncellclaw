@@ -9,7 +9,7 @@ This skill adds Cisco Webex support to NanoClaw v2 using the Chat SDK bridge.
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/webex-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/webex.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @bitbasti/chat-adapter-webex
 Uncomment the Webex import in `src/channels/index.ts`:
 
 ```typescript
-import './webex-v2.js';
+import './webex.js';
 ```
 
 ### Build
@@ -69,7 +69,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './webex-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './webex.js'` in `src/channels/index.ts`
 2. Remove `WEBEX_BOT_TOKEN` and `WEBEX_WEBHOOK_SECRET` from `.env`
 3. `npm uninstall @bitbasti/chat-adapter-webex`
 4. Rebuild and restart

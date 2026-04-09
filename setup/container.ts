@@ -5,7 +5,7 @@
 import { execSync } from 'child_process';
 import path from 'path';
 
-import { logger } from '../src/logger.js';
+import { log } from '../src/log.js';
 import { commandExists } from './platform.js';
 import { emitStatus } from './status.js';
 
@@ -101,31 +101,31 @@ export async function run(args: string[]): Promise<void> {
 
   // Build
   let buildOk = false;
-  logger.info({ runtime }, 'Building container');
+  log.info('Building container', { runtime });
   try {
     execSync(`${buildCmd} -t ${image} .`, {
       cwd: path.join(projectRoot, 'container'),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     buildOk = true;
-    logger.info('Container build succeeded');
+    log.info('Container build succeeded');
   } catch (err) {
-    logger.error({ err }, 'Container build failed');
+    log.error('Container build failed', { err });
   }
 
   // Test
   let testOk = false;
   if (buildOk) {
-    logger.info('Testing container');
+    log.info('Testing container');
     try {
       const output = execSync(
         `echo '{}' | ${runCmd} run -i --rm --entrypoint /bin/echo ${image} "Container OK"`,
         { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
       );
       testOk = output.includes('Container OK');
-      logger.info({ testOk }, 'Container test result');
+      log.info('Container test result', { testOk });
     } catch {
-      logger.error('Container test failed');
+      log.error('Container test failed');
     }
   }
 

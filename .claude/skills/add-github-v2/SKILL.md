@@ -9,7 +9,7 @@ This skill adds GitHub support to NanoClaw v2 using the Chat SDK bridge. The age
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/github-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/github.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @chat-adapter/github
 Uncomment the GitHub import in `src/channels/index.ts`:
 
 ```typescript
-import './github-v2.js';
+import './github.js';
 ```
 
 ### Build
@@ -74,7 +74,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './github-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './github.js'` in `src/channels/index.ts`
 2. Remove `GITHUB_TOKEN` and `GITHUB_WEBHOOK_SECRET` from `.env`
 3. `npm uninstall @chat-adapter/github`
 4. Rebuild and restart

@@ -9,7 +9,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { logger } from '../src/logger.js';
+import { log } from '../src/log.js';
 import {
   getPlatform,
   getNodePath,
@@ -26,18 +26,18 @@ export async function run(_args: string[]): Promise<void> {
   const nodePath = getNodePath();
   const homeDir = os.homedir();
 
-  logger.info({ platform, nodePath, projectRoot }, 'Setting up service');
+  log.info('Setting up service', { platform, nodePath, projectRoot });
 
   // Build first
-  logger.info('Building TypeScript');
+  log.info('Building TypeScript');
   try {
     execSync('npm run build', {
       cwd: projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    logger.info('Build succeeded');
+    log.info('Build succeeded');
   } catch {
-    logger.error('Build failed');
+    log.error('Build failed');
     emitStatus('SETUP_SERVICE', {
       SERVICE_TYPE: 'unknown',
       NODE_PATH: nodePath,
@@ -113,15 +113,15 @@ function setupLaunchd(
 </plist>`;
 
   fs.writeFileSync(plistPath, plist);
-  logger.info({ plistPath }, 'Wrote launchd plist');
+  log.info('Wrote launchd plist', { plistPath });
 
   try {
     execSync(`launchctl load ${JSON.stringify(plistPath)}`, {
       stdio: 'ignore',
     });
-    logger.info('launchctl load succeeded');
+    log.info('launchctl load succeeded');
   } catch {
-    logger.warn('launchctl load failed (may already be loaded)');
+    log.warn('launchctl load failed (may already be loaded)');
   }
 
   // Verify
@@ -168,7 +168,7 @@ function killOrphanedProcesses(projectRoot: string): void {
     execSync(`pkill -f '${projectRoot}/dist/index\\.js' || true`, {
       stdio: 'ignore',
     });
-    logger.info('Stopped any orphaned nanoclaw processes');
+    log.info('Stopped any orphaned nanoclaw processes');
   } catch {
     // pkill not available or no orphans
   }
@@ -215,13 +215,13 @@ function setupSystemd(
   if (runningAsRoot) {
     unitPath = '/etc/systemd/system/nanoclaw.service';
     systemctlPrefix = 'systemctl';
-    logger.info('Running as root — installing system-level systemd unit');
+    log.info('Running as root — installing system-level systemd unit');
   } else {
     // Check if user-level systemd session is available
     try {
       execSync('systemctl --user daemon-reload', { stdio: 'pipe' });
     } catch {
-      logger.warn(
+      log.warn(
         'systemd user session not available — falling back to nohup wrapper',
       );
       setupNohupFallback(projectRoot, nodePath, homeDir);
@@ -253,12 +253,12 @@ StandardError=append:${projectRoot}/logs/nanoclaw.error.log
 WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
 
   fs.writeFileSync(unitPath, unit);
-  logger.info({ unitPath }, 'Wrote systemd unit');
+  log.info('Wrote systemd unit', { unitPath });
 
   // Detect stale docker group before starting (user systemd only)
   const dockerGroupStale = !runningAsRoot && checkDockerGroupStale();
   if (dockerGroupStale) {
-    logger.warn(
+    log.warn(
       'Docker group not active in systemd session — user was likely added to docker group mid-session',
     );
   }
@@ -271,11 +271,11 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
   if (!runningAsRoot) {
     try {
       execSync('loginctl enable-linger', { stdio: 'ignore' });
-      logger.info('Enabled loginctl linger for current user');
+      log.info('Enabled loginctl linger for current user');
     } catch (err) {
-      logger.warn(
-        { err },
+      log.warn(
         'loginctl enable-linger failed — service may stop on SSH logout',
+        { err },
       );
     }
   }
@@ -284,19 +284,19 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
   try {
     execSync(`${systemctlPrefix} daemon-reload`, { stdio: 'ignore' });
   } catch (err) {
-    logger.error({ err }, 'systemctl daemon-reload failed');
+    log.error('systemctl daemon-reload failed', { err });
   }
 
   try {
     execSync(`${systemctlPrefix} enable nanoclaw`, { stdio: 'ignore' });
   } catch (err) {
-    logger.error({ err }, 'systemctl enable failed');
+    log.error('systemctl enable failed', { err });
   }
 
   try {
     execSync(`${systemctlPrefix} start nanoclaw`, { stdio: 'ignore' });
   } catch (err) {
-    logger.error({ err }, 'systemctl start failed');
+    log.error('systemctl start failed', { err });
   }
 
   // Verify
@@ -326,7 +326,7 @@ function setupNohupFallback(
   nodePath: string,
   homeDir: string,
 ): void {
-  logger.warn('No systemd detected — generating nohup wrapper script');
+  log.warn('No systemd detected — generating nohup wrapper script');
 
   const wrapperPath = path.join(projectRoot, 'start-nanoclaw.sh');
   const pidFile = path.join(projectRoot, 'nanoclaw.pid');
@@ -362,7 +362,7 @@ function setupNohupFallback(
   const wrapper = lines.join('\n') + '\n';
 
   fs.writeFileSync(wrapperPath, wrapper, { mode: 0o755 });
-  logger.info({ wrapperPath }, 'Wrote nohup wrapper script');
+  log.info('Wrote nohup wrapper script', { wrapperPath });
 
   emitStatus('SETUP_SERVICE', {
     SERVICE_TYPE: 'nohup',

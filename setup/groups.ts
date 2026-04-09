@@ -11,7 +11,7 @@ import path from 'path';
 import Database from 'better-sqlite3';
 
 import { STORE_DIR } from '../src/config.js';
-import { logger } from '../src/logger.js';
+import { log } from '../src/log.js';
 import { emitStatus } from './status.js';
 
 function parseArgs(args: string[]): { list: boolean; limit: number } {
@@ -71,7 +71,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
     fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
 
   if (!hasWhatsAppAuth) {
-    logger.info('WhatsApp auth not found — skipping group sync');
+    log.info('WhatsApp auth not found — skipping group sync');
     emitStatus('SYNC_GROUPS', {
       BUILD: 'skipped',
       SYNC: 'skipped',
@@ -84,7 +84,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
   }
 
   // Build TypeScript first
-  logger.info('Building TypeScript');
+  log.info('Building TypeScript');
   let buildOk = false;
   try {
     execSync('npm run build', {
@@ -92,9 +92,9 @@ async function syncGroups(projectRoot: string): Promise<void> {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     buildOk = true;
-    logger.info('Build succeeded');
+    log.info('Build succeeded');
   } catch {
-    logger.error('Build failed');
+    log.error('Build failed');
     emitStatus('SYNC_GROUPS', {
       BUILD: 'failed',
       SYNC: 'skipped',
@@ -107,7 +107,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
   }
 
   // Run sync script via a temp file to avoid shell escaping issues with node -e
-  logger.info('Fetching group metadata');
+  log.info('Fetching group metadata');
   let syncOk = false;
   try {
     const syncScript = `
@@ -189,12 +189,12 @@ sock.ev.on('connection.update', async (update) => {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       syncOk = output.includes('SYNCED:');
-      logger.info({ output: output.trim() }, 'Sync output');
+      log.info('Sync output', { output: output.trim() });
     } finally {
       try { fs.unlinkSync(tmpScript); } catch { /* ignore cleanup errors */ }
     }
   } catch (err) {
-    logger.error({ err }, 'Sync failed');
+    log.error('Sync failed', { err });
   }
 
   // Count groups in DB using better-sqlite3 (no sqlite3 CLI)

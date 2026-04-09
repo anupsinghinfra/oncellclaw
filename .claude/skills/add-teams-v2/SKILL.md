@@ -9,7 +9,7 @@ This skill adds Microsoft Teams support to NanoClaw v2 using the Chat SDK bridge
 
 ## Phase 1: Pre-flight
 
-Check if `src/channels/teams-v2.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
+Check if `src/channels/teams.ts` exists and the import is uncommented in `src/channels/index.ts`. If both are in place, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
@@ -24,7 +24,7 @@ npm install @chat-adapter/teams
 Uncomment the Teams import in `src/channels/index.ts`:
 
 ```typescript
-import './teams-v2.js';
+import './teams.js';
 ```
 
 ### Build
@@ -69,7 +69,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 
 ## Removal
 
-1. Comment out `import './teams-v2.js'` in `src/channels/index.ts`
+1. Comment out `import './teams.js'` in `src/channels/index.ts`
 2. Remove `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` from `.env`
 3. `npm uninstall @chat-adapter/teams`
 4. Rebuild and restart

@@ -1,4 +1,4 @@
-import type { MessagingGroup, MessagingGroupAgent } from '../types-v2.js';
+import type { MessagingGroup, MessagingGroupAgent } from '../types.js';
 import { getDb } from './connection.js';
 
 // ── Messaging Groups ──

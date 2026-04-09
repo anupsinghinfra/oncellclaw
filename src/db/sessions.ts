@@ -1,4 +1,4 @@
-import type { PendingQuestion, Session } from '../types-v2.js';
+import type { PendingQuestion, Session } from '../types.js';
 import { getDb } from './connection.js';
 
 // ── Sessions ──

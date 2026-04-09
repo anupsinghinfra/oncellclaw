@@ -8,9 +8,9 @@ import fs from 'fs';
 import path from 'path';
 
 import { STORE_DIR } from '../src/config.ts';
-import { initDatabase, setRegisteredGroup } from '../src/db.ts';
+import { initDatabase, setRegisteredGroup } from '../src/v1/db.ts';
 import { isValidGroupFolder } from '../src/group-folder.ts';
-import { logger } from '../src/logger.ts';
+import { log } from '../src/log.js';
 import { emitStatus } from './status.ts';
 
 interface RegisterArgs {
@@ -90,7 +90,7 @@ export async function run(args: string[]): Promise<void> {
     process.exit(4);
   }
 
-  logger.info(parsed, 'Registering channel');
+  log.info('Registering channel', parsed);
 
   // Ensure data and store directories exist (store/ may not exist on
   // fresh installs that skip WhatsApp auth, which normally creates it)
@@ -109,7 +109,7 @@ export async function run(args: string[]): Promise<void> {
     isMain: parsed.isMain,
   });
 
-  logger.info('Wrote registration to SQLite');
+  log.info('Wrote registration to SQLite');
 
   // Create group folders
   fs.mkdirSync(path.join(projectRoot, 'groups', parsed.folder, 'logs'), {
@@ -133,9 +133,9 @@ export async function run(args: string[]): Promise<void> {
       : path.join(projectRoot, 'groups', 'global', 'CLAUDE.md');
     if (fs.existsSync(templatePath)) {
       fs.copyFileSync(templatePath, groupClaudeMdPath);
-      logger.info(
-        { file: groupClaudeMdPath, template: templatePath },
+      log.info(
         'Created CLAUDE.md from template',
+        { file: groupClaudeMdPath, template: templatePath },
       );
     }
   }
@@ -143,9 +143,9 @@ export async function run(args: string[]): Promise<void> {
   // Update assistant name in CLAUDE.md files if different from default
   let nameUpdated = false;
   if (parsed.assistantName !== 'Andy') {
-    logger.info(
-      { from: 'Andy', to: parsed.assistantName },
+    log.info(
       'Updating assistant name',
+      { from: 'Andy', to: parsed.assistantName },
     );
 
     const groupsDir = path.join(projectRoot, 'groups');
@@ -163,7 +163,7 @@ export async function run(args: string[]): Promise<void> {
           `You are ${parsed.assistantName}`,
         );
         fs.writeFileSync(mdFile, content);
-        logger.info({ file: mdFile }, 'Updated CLAUDE.md');
+        log.info('Updated CLAUDE.md', { file: mdFile });
       }
     }
 
@@ -183,7 +183,7 @@ export async function run(args: string[]): Promise<void> {
     } else {
       fs.writeFileSync(envFile, `ASSISTANT_NAME="${parsed.assistantName}"\n`);
     }
-    logger.info('Set ASSISTANT_NAME in .env');
+    log.info('Set ASSISTANT_NAME in .env');
     nameUpdated = true;
   }
 

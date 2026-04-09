@@ -1,112 +1,90 @@
-export interface AdditionalMount {
-  hostPath: string; // Absolute path on host (supports ~ for home)
-  containerPath?: string; // Optional — defaults to basename of hostPath. Mounted at /workspace/extra/{value}
-  readonly?: boolean; // Default: true for safety
-}
+// ── Central DB entities ──
 
-/**
- * Mount Allowlist - Security configuration for additional mounts
- * This file should be stored at ~/.config/nanoclaw/mount-allowlist.json
- * and is NOT mounted into any container, making it tamper-proof from agents.
- */
-export interface MountAllowlist {
-  // Directories that can be mounted into containers
-  allowedRoots: AllowedRoot[];
-  // Glob patterns for paths that should never be mounted (e.g., ".ssh", ".gnupg")
-  blockedPatterns: string[];
-  // If true, non-main groups can only mount read-only regardless of config
-  nonMainReadOnly: boolean;
-}
-
-export interface AllowedRoot {
-  // Absolute path or ~ for home (e.g., "~/projects", "/var/repos")
-  path: string;
-  // Whether read-write mounts are allowed under this root
-  allowReadWrite: boolean;
-  // Optional description for documentation
-  description?: string;
-}
-
-export interface ContainerConfig {
-  additionalMounts?: AdditionalMount[];
-  timeout?: number; // Default: 300000 (5 minutes)
-}
-
-export interface RegisteredGroup {
+export interface AgentGroup {
+  id: string;
   name: string;
   folder: string;
-  trigger: string;
-  added_at: string;
-  containerConfig?: ContainerConfig;
-  requiresTrigger?: boolean; // Default: true for groups, false for solo chats
-  isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
-}
-
-export interface NewMessage {
-  id: string;
-  chat_jid: string;
-  sender: string;
-  sender_name: string;
-  content: string;
-  timestamp: string;
-  is_from_me?: boolean;
-  is_bot_message?: boolean;
-  thread_id?: string;
-  reply_to_message_id?: string;
-  reply_to_message_content?: string;
-  reply_to_sender_name?: string;
-}
-
-export interface ScheduledTask {
-  id: string;
-  group_folder: string;
-  chat_jid: string;
-  prompt: string;
-  script?: string | null;
-  schedule_type: 'cron' | 'interval' | 'once';
-  schedule_value: string;
-  context_mode: 'group' | 'isolated';
-  next_run: string | null;
-  last_run: string | null;
-  last_result: string | null;
-  status: 'active' | 'paused' | 'completed';
+  is_admin: number; // 0 | 1
+  agent_provider: string | null;
+  container_config: string | null; // JSON: { additionalMounts, timeout }
   created_at: string;
 }
 
-export interface TaskRunLog {
-  task_id: string;
-  run_at: string;
-  duration_ms: number;
-  status: 'success' | 'error';
-  result: string | null;
-  error: string | null;
+export interface MessagingGroup {
+  id: string;
+  channel_type: string;
+  platform_id: string;
+  name: string | null;
+  is_group: number; // 0 | 1
+  admin_user_id: string | null;
+  created_at: string;
 }
 
-// --- Channel abstraction ---
-
-export interface Channel {
-  name: string;
-  connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
-  isConnected(): boolean;
-  ownsJid(jid: string): boolean;
-  disconnect(): Promise<void>;
-  // Optional: typing indicator. Channels that support it implement it.
-  setTyping?(jid: string, isTyping: boolean): Promise<void>;
-  // Optional: sync group/chat names from the platform.
-  syncGroups?(force: boolean): Promise<void>;
+export interface MessagingGroupAgent {
+  id: string;
+  messaging_group_id: string;
+  agent_group_id: string;
+  trigger_rules: string | null; // JSON: { pattern, mentionOnly, excludeSenders, includeSenders }
+  response_scope: 'all' | 'triggered' | 'allowlisted';
+  session_mode: 'shared' | 'per-thread';
+  priority: number;
+  created_at: string;
 }
 
-// Callback type that channels use to deliver inbound messages
-export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
+export interface Session {
+  id: string;
+  agent_group_id: string;
+  messaging_group_id: string | null;
+  thread_id: string | null;
+  agent_provider: string | null;
+  status: 'active' | 'closed';
+  container_status: 'running' | 'idle' | 'stopped';
+  last_active: string | null;
+  created_at: string;
+}
 
-// Callback for chat metadata discovery.
-// name is optional — channels that deliver names inline (Telegram) pass it here;
-// channels that sync names separately (via syncGroups) omit it.
-export type OnChatMetadata = (
-  chatJid: string,
-  timestamp: string,
-  name?: string,
-  channel?: string,
-  isGroup?: boolean,
-) => void;
+// ── Session DB entities ──
+
+export type MessageInKind = 'chat' | 'chat-sdk' | 'task' | 'webhook' | 'system';
+export type MessageInStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface MessageIn {
+  id: string;
+  kind: MessageInKind;
+  timestamp: string;
+  status: MessageInStatus;
+  status_changed: string | null;
+  process_after: string | null;
+  recurrence: string | null;
+  tries: number;
+  platform_id: string | null;
+  channel_type: string | null;
+  thread_id: string | null;
+  content: string; // JSON blob
+}
+
+export interface MessageOut {
+  id: string;
+  in_reply_to: string | null;
+  timestamp: string;
+  delivered: number; // 0 | 1
+  deliver_after: string | null;
+  recurrence: string | null;
+  kind: string;
+  platform_id: string | null;
+  channel_type: string | null;
+  thread_id: string | null;
+  content: string; // JSON blob
+}
+
+// ── Pending questions (central DB) ──
+
+export interface PendingQuestion {
+  question_id: string;
+  session_id: string;
+  message_out_id: string;
+  platform_id: string | null;
+  channel_type: string | null;
+  thread_id: string | null;
+  created_at: string;
+}

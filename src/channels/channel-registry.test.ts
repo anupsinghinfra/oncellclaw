@@ -8,7 +8,7 @@ import fs from 'fs';
 import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
 
 // Mock container runner
-vi.mock('../container-runner-v2.js', () => ({
+vi.mock('../container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
   resetContainerIdleTimer: vi.fn(),
   isContainerRunning: vi.fn().mockReturnValue(false),
@@ -160,7 +160,7 @@ describe('channel + router integration', () => {
   });
 
   it('should route inbound message from adapter to session DB', async () => {
-    const { routeInbound } = await import('../router-v2.js');
+    const { routeInbound } = await import('../router.js');
     const { findSession } = await import('../db/sessions.js');
     const { sessionDbPath } = await import('../session-manager.js');
 
@@ -209,7 +209,7 @@ describe('channel + router integration', () => {
       onAction: () => {},
     }));
 
-    // Set up delivery adapter bridge (same pattern as index-v2.ts)
+    // Set up delivery adapter bridge (same pattern as index.ts)
     setDeliveryAdapter({
       async deliver(channelType, platformId, threadId, kind, content) {
         const adapter = getChannelAdapter(channelType);

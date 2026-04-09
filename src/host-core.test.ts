@@ -25,10 +25,10 @@ import {
   sessionsBaseDir,
 } from './session-manager.js';
 import { getSession, findSession } from './db/sessions.js';
-import type { InboundEvent } from './router-v2.js';
+import type { InboundEvent } from './router.js';
 
 // Mock container runner to prevent actual Docker spawning
-vi.mock('./container-runner-v2.js', () => ({
+vi.mock('./container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
   resetContainerIdleTimer: vi.fn(),
   isContainerRunning: vi.fn().mockReturnValue(false),
@@ -202,8 +202,8 @@ describe('router', () => {
   });
 
   it('should route a message end-to-end', async () => {
-    const { routeInbound } = await import('./router-v2.js');
-    const { wakeContainer } = await import('./container-runner-v2.js');
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
 
     const event: InboundEvent = {
       channelType: 'discord',
@@ -237,7 +237,7 @@ describe('router', () => {
   });
 
   it('should auto-create messaging group for unknown platform', async () => {
-    const { routeInbound } = await import('./router-v2.js');
+    const { routeInbound } = await import('./router.js');
 
     // This platform ID isn't registered — but since there's no agent configured for it,
     // it should create the messaging group but not route (no agents configured)
@@ -262,7 +262,7 @@ describe('router', () => {
   });
 
   it('should route multiple messages to the same session', async () => {
-    const { routeInbound } = await import('./router-v2.js');
+    const { routeInbound } = await import('./router.js');
 
     await routeInbound({
       channelType: 'discord',

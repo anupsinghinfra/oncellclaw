@@ -2,7 +2,7 @@
  * Setup CLI entry point.
  * Usage: npx tsx setup/index.ts --step <name> [args...]
  */
-import { logger } from '../src/logger.js';
+import { log } from '../src/log.js';
 import { emitStatus } from './status.js';
 
 const STEPS: Record<
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     await mod.run(stepArgs);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ err, step: stepName }, 'Setup step failed');
+    log.error('Setup step failed', { err, step: stepName });
     emitStatus(stepName.toUpperCase(), {
       STATUS: 'failed',
       ERROR: message,

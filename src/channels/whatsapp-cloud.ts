@@ -11,7 +11,12 @@ import { registerChannelAdapter } from './channel-registry.js';
 
 registerChannelAdapter('whatsapp-cloud', {
   factory: () => {
-    const env = readEnvFile(['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN']);
+    const env = readEnvFile([
+      'WHATSAPP_ACCESS_TOKEN',
+      'WHATSAPP_PHONE_NUMBER_ID',
+      'WHATSAPP_APP_SECRET',
+      'WHATSAPP_VERIFY_TOKEN',
+    ]);
     if (!env.WHATSAPP_ACCESS_TOKEN) return null;
     const whatsappAdapter = createWhatsAppAdapter({
       accessToken: env.WHATSAPP_ACCESS_TOKEN,
