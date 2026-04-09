@@ -42,6 +42,15 @@ export function setDeliveryAdapter(adapter: ChannelDeliveryAdapter): void {
   deliveryAdapter = adapter;
 }
 
+/** Show typing indicator on a channel. Called when a message is routed to the agent. */
+export async function triggerTyping(channelType: string, platformId: string, threadId: string | null): Promise<void> {
+  try {
+    await deliveryAdapter?.setTyping?.(channelType, platformId, threadId);
+  } catch {
+    // Typing is best-effort — don't fail routing if it errors
+  }
+}
+
 /** Start the active container poll loop (~1s). */
 export function startActiveDeliveryPoll(): void {
   if (activePolling) return;

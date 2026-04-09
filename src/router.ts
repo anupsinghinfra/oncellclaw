@@ -5,6 +5,7 @@
  * → resolve/create session → write messages_in → wake container
  */
 import { getMessagingGroupByPlatform, createMessagingGroup, getMessagingGroupAgents } from './db/messaging-groups.js';
+import { triggerTyping } from './delivery.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
@@ -99,7 +100,10 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     created,
   });
 
-  // 5. Wake container
+  // 5. Show typing indicator while agent processes
+  triggerTyping(event.channelType, event.platformId, event.threadId);
+
+  // 6. Wake container
   const freshSession = getSession(session.id);
   if (freshSession) {
     await wakeContainer(freshSession);

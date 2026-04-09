@@ -8,7 +8,7 @@ import './discord.js';
 // import './slack.js';
 
 // telegram
-// import './telegram.js';
+import './telegram.js';
 
 // github
 // import './github.js';
