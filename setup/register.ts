@@ -19,6 +19,7 @@ import {
 } from '../src/db/messaging-groups.js';
 import { isValidGroupFolder } from '../src/group-folder.js';
 import { log } from '../src/log.js';
+import { resolveSession, writeSessionMessage } from '../src/session-manager.js';
 import { emitStatus } from './status.js';
 
 interface RegisterArgs {
@@ -190,7 +191,21 @@ export async function run(args: string[]): Promise<void> {
     log.info('Wired agent to messaging group', { mgaId, agentGroup: agentGroup.id, messagingGroup: messagingGroup.id });
   }
 
-  // 4. Create group folders
+  // 4. Send onboarding message — triggers the /welcome skill in the container
+  const { session } = resolveSession(agentGroup.id, messagingGroup.id, null, parsed.sessionMode as 'shared' | 'per-thread' | 'agent-shared');
+  writeSessionMessage(agentGroup.id, session.id, {
+    id: generateId('onboard'),
+    kind: 'task',
+    timestamp: new Date().toISOString(),
+    platformId: parsed.platformId,
+    channelType: parsed.channel,
+    content: JSON.stringify({
+      prompt: `A new ${parsed.channel} channel has been connected. Run /welcome to introduce yourself to the user.`,
+    }),
+  });
+  log.info('Onboarding message written', { sessionId: session.id, channel: parsed.channel });
+
+  // 5. Create group folders
   fs.mkdirSync(path.join(projectRoot, 'groups', parsed.folder, 'logs'), { recursive: true });
 
   // Create CLAUDE.md from template if it doesn't exist
@@ -205,7 +220,7 @@ export async function run(args: string[]): Promise<void> {
     }
   }
 
-  // 5. Update assistant name in CLAUDE.md files if different from default
+  // 6. Update assistant name in CLAUDE.md files if different from default
   let nameUpdated = false;
   if (parsed.assistantName !== 'Andy') {
     log.info('Updating assistant name', { from: 'Andy', to: parsed.assistantName });
