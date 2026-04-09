@@ -118,13 +118,6 @@ export async function run(args: string[]): Promise<void> {
     process.exit(4);
   }
 
-  // Chat SDK adapters prefix platform IDs with the channel type (e.g. "telegram:123",
-  // "discord:guild:channel"). Auto-prefix if the user provided a raw ID so the router
-  // matches the adapter's format.
-  if (parsed.platformId && !parsed.platformId.startsWith(`${parsed.channel}:`)) {
-    parsed.platformId = `${parsed.channel}:${parsed.platformId}`;
-  }
-
   log.info('Registering channel', parsed);
 
   // Init v2 central DB

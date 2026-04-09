@@ -34,7 +34,15 @@ export interface InboundEvent {
  */
 export async function routeInbound(event: InboundEvent): Promise<void> {
   // 1. Resolve messaging group
+  // Adapters send prefixed platform IDs (e.g. "telegram:123") but users may
+  // register with raw IDs ("123"). Try exact match first, then stripped prefix.
   let mg = getMessagingGroupByPlatform(event.channelType, event.platformId);
+  if (!mg) {
+    const prefix = `${event.channelType}:`;
+    if (event.platformId.startsWith(prefix)) {
+      mg = getMessagingGroupByPlatform(event.channelType, event.platformId.slice(prefix.length));
+    }
+  }
 
   if (!mg) {
     // Auto-create messaging group (adapter already decided to forward this)
