@@ -12,6 +12,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZONE } from './config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { getMessagingGroup } from './db/messaging-groups.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import {
@@ -226,6 +227,17 @@ async function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
   args.push('-e', `AGENT_PROVIDER=${session.agent_provider || agentGroup.agent_provider || 'claude'}`);
   args.push('-e', `SESSION_DB_PATH=/workspace/session.db`);
+
+  // Pass admin user ID and assistant name from messaging group/agent group
+  if (session.messaging_group_id) {
+    const mg = getMessagingGroup(session.messaging_group_id);
+    if (mg?.admin_user_id) {
+      args.push('-e', `NANOCLAW_ADMIN_USER_ID=${mg.admin_user_id}`);
+    }
+  }
+  if (agentGroup.name) {
+    args.push('-e', `NANOCLAW_ASSISTANT_NAME=${agentGroup.name}`);
+  }
 
   // OneCLI gateway
   const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });

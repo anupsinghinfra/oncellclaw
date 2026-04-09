@@ -81,7 +81,6 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
       if (cmdInfo.category === 'admin') {
         if (!adminUserId || cmdInfo.senderId !== adminUserId) {
-          // Not admin — send error, mark completed
           log(`Admin command denied: ${cmdInfo.command} from ${cmdInfo.senderId} (msg: ${msg.id})`);
           writeMessageOut({
             id: generateId(),
@@ -94,7 +93,24 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
           commandIds.push(msg.id);
           continue;
         }
-        // Admin user — format as system command
+        // Handle admin commands directly
+        if (cmdInfo.command === '/clear') {
+          log('Clearing session (resetting sessionId)');
+          sessionId = undefined;
+          resumeAt = undefined;
+          writeMessageOut({
+            id: generateId(),
+            kind: 'chat',
+            platform_id: routing.platformId,
+            channel_type: routing.channelType,
+            thread_id: routing.threadId,
+            content: JSON.stringify({ text: 'Session cleared.' }),
+          });
+          commandIds.push(msg.id);
+          continue;
+        }
+
+        // Other admin commands — pass through to agent
         normalMessages.push(msg);
         continue;
       }
@@ -174,23 +190,14 @@ function formatMessagesWithCommands(messages: MessageInRow[]): string {
   for (const msg of messages) {
     if (msg.kind === 'chat' || msg.kind === 'chat-sdk') {
       const cmdInfo = categorizeMessage(msg);
-      if (cmdInfo.category === 'passthrough') {
+      if (cmdInfo.category === 'passthrough' || cmdInfo.category === 'admin') {
         // Flush normal batch first
         if (normalBatch.length > 0) {
           parts.push(formatMessages(normalBatch));
           normalBatch.length = 0;
         }
-        // Pass raw command text (no XML wrapping)
+        // Pass raw command text (no XML wrapping) — SDK handles it natively
         parts.push(cmdInfo.text);
-        continue;
-      }
-      if (cmdInfo.category === 'admin') {
-        // Format admin command as a system command block
-        if (normalBatch.length > 0) {
-          parts.push(formatMessages(normalBatch));
-          normalBatch.length = 0;
-        }
-        parts.push(`[SYSTEM COMMAND: ${cmdInfo.command}]\n${cmdInfo.text}`);
         continue;
       }
     }
@@ -218,8 +225,15 @@ async function processQuery(query: AgentQuery, routing: RoutingContext, config: 
   const pollHandle = setInterval(() => {
     if (done) return;
 
-    // Skip system messages — they're responses for MCP tools (e.g., ask_user_question)
-    const newMessages = getPendingMessages().filter((m) => m.kind !== 'system');
+    // Skip system messages (MCP tool responses) and admin commands (need fresh query)
+    const newMessages = getPendingMessages().filter((m) => {
+      if (m.kind === 'system') return false;
+      if (m.kind === 'chat' || m.kind === 'chat-sdk') {
+        const cmd = categorizeMessage(m);
+        if (cmd.category === 'admin') return false;
+      }
+      return true;
+    });
     if (newMessages.length > 0) {
       const newIds = newMessages.map((m) => m.id);
       markProcessing(newIds);

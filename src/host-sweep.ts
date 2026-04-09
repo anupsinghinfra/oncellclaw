@@ -142,7 +142,17 @@ async function sweepSession(session: Session): Promise<void> {
         db.prepare(
           `INSERT INTO messages_in (id, seq, kind, timestamp, status, process_after, recurrence, platform_id, channel_type, thread_id, content)
            VALUES (?, ?, ?, datetime('now'), 'pending', ?, ?, ?, ?, ?, ?)`,
-        ).run(newId, nextSeq, msg.kind, nextRun, msg.recurrence, msg.platform_id, msg.channel_type, msg.thread_id, msg.content);
+        ).run(
+          newId,
+          nextSeq,
+          msg.kind,
+          nextRun,
+          msg.recurrence,
+          msg.platform_id,
+          msg.channel_type,
+          msg.thread_id,
+          msg.content,
+        );
 
         // Remove recurrence from the completed message so it doesn't spawn again
         db.prepare('UPDATE messages_in SET recurrence = NULL WHERE id = ?').run(msg.id);

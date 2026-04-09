@@ -6,10 +6,18 @@
  */
 import http from 'http';
 
-import { Chat, Card, CardText, Actions, Button, type Adapter, type ConcurrencyStrategy, type Message as ChatMessage } from 'chat';
-import { createMemoryState } from '@chat-adapter/state-memory';
-
+import {
+  Chat,
+  Card,
+  CardText,
+  Actions,
+  Button,
+  type Adapter,
+  type ConcurrencyStrategy,
+  type Message as ChatMessage,
+} from 'chat';
 import { log } from '../log.js';
+import { SqliteStateAdapter } from '../state-sqlite.js';
 import type { ChannelAdapter, ChannelSetup, ConversationConfig, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -32,7 +40,7 @@ export interface ChatSdkBridgeConfig {
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
   const { adapter } = config;
   let chat: Chat;
-  let state: ReturnType<typeof createMemoryState>;
+  let state: SqliteStateAdapter;
   let setupConfig: ChannelSetup;
   let conversations: Map<string, ConversationConfig>;
   let gatewayAbort: AbortController | null = null;
@@ -62,7 +70,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       setupConfig = hostConfig;
       conversations = buildConversationMap(hostConfig.conversations);
 
-      state = createMemoryState();
+      state = new SqliteStateAdapter();
 
       chat = new Chat({
         adapters: { [adapter.name]: adapter },
@@ -104,14 +112,6 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       });
 
       await chat.initialize();
-
-      // Subscribe registered conversations (after initialize connects state)
-      for (const conv of hostConfig.conversations) {
-        if (conv.agentGroupId) {
-          const threadId = adapter.encodeThreadId({ guildId: '', channelId: conv.platformId } as never);
-          await state.subscribe(threadId);
-        }
-      }
 
       // Start Gateway listener for adapters that support it (e.g., Discord)
       if (adapter.startGatewayListener) {
@@ -184,11 +184,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           title: '❓ Question',
           children: [
             CardText(content.question as string),
-            Actions(
-              options.map((opt) =>
-                Button({ id: `ncq:${questionId}:${opt}`, label: opt, value: opt }),
-              ),
-            ),
+            Actions(options.map((opt) => Button({ id: `ncq:${questionId}:${opt}`, label: opt, value: opt }))),
           ],
         });
         await adapter.postMessage(tid, { card, fallbackText: `${content.question}\nOptions: ${options.join(', ')}` });
@@ -229,13 +225,6 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
 
     updateConversations(configs: ConversationConfig[]) {
       conversations = buildConversationMap(configs);
-      // Subscribe new conversations
-      for (const conv of configs) {
-        if (conv.agentGroupId) {
-          const threadId = adapter.encodeThreadId({ guildId: '', channelId: conv.platformId } as never);
-          state.subscribe(threadId).catch(() => {});
-        }
-      }
     },
   };
 }
@@ -246,7 +235,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
  * sends ALL raw events (including INTERACTION_CREATE for button clicks)
  * to the webhookUrl, which we handle here.
  */
-function startLocalWebhookServer(adapter: GatewayAdapter, setupConfig: ChannelSetup, botToken?: string): Promise<string> {
+function startLocalWebhookServer(
+  adapter: GatewayAdapter,
+  setupConfig: ChannelSetup,
+  botToken?: string,
+): Promise<string> {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const chunks: Buffer[] = [];
@@ -275,7 +268,12 @@ function startLocalWebhookServer(adapter: GatewayAdapter, setupConfig: ChannelSe
   });
 }
 
-async function handleForwardedEvent(body: string, adapter: GatewayAdapter, setupConfig: ChannelSetup, botToken?: string): Promise<void> {
+async function handleForwardedEvent(
+  body: string,
+  adapter: GatewayAdapter,
+  setupConfig: ChannelSetup,
+  botToken?: string,
+): Promise<void> {
   let event: { type: string; data: Record<string, unknown> };
   try {
     event = JSON.parse(body);
@@ -305,7 +303,8 @@ async function handleForwardedEvent(body: string, adapter: GatewayAdapter, setup
       }
 
       // Update the card to show the selected answer and remove buttons
-      const originalEmbeds = ((interaction.message as Record<string, unknown>)?.embeds as Array<Record<string, unknown>>) || [];
+      const originalEmbeds =
+        ((interaction.message as Record<string, unknown>)?.embeds as Array<Record<string, unknown>>) || [];
       const originalDescription = (originalEmbeds[0]?.description as string) || '';
       try {
         await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {

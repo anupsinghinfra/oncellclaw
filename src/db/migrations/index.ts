@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 
 import { log } from '../../log.js';
 import { migration001 } from './001-initial.js';
+import { migration002 } from './002-chat-sdk-state.js';
 
 export interface Migration {
   version: number;
@@ -9,7 +10,7 @@ export interface Migration {
   up: (db: Database.Database) => void;
 }
 
-const migrations: Migration[] = [migration001];
+const migrations: Migration[] = [migration001, migration002];
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
