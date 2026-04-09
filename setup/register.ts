@@ -169,8 +169,10 @@ export async function run(args: string[]): Promise<void> {
   }
 
   // 3. Wire agent to messaging group
+  let newlyWired = false;
   const existing = getMessagingGroupAgentByPair(messagingGroup.id, agentGroup.id);
   if (!existing) {
+    newlyWired = true;
     const mgaId = generateId('mga');
     const triggerRules = parsed.trigger
       ? JSON.stringify({
@@ -191,19 +193,21 @@ export async function run(args: string[]): Promise<void> {
     log.info('Wired agent to messaging group', { mgaId, agentGroup: agentGroup.id, messagingGroup: messagingGroup.id });
   }
 
-  // 4. Send onboarding message — triggers the /welcome skill in the container
-  const { session } = resolveSession(agentGroup.id, messagingGroup.id, null, parsed.sessionMode as 'shared' | 'per-thread' | 'agent-shared');
-  writeSessionMessage(agentGroup.id, session.id, {
-    id: generateId('onboard'),
-    kind: 'task',
-    timestamp: new Date().toISOString(),
-    platformId: parsed.platformId,
-    channelType: parsed.channel,
-    content: JSON.stringify({
-      prompt: `A new ${parsed.channel} channel has been connected. Run /welcome to introduce yourself to the user.`,
-    }),
-  });
-  log.info('Onboarding message written', { sessionId: session.id, channel: parsed.channel });
+  // 4. Send onboarding message — only on first wiring, not re-registration
+  if (newlyWired) {
+    const { session } = resolveSession(agentGroup.id, messagingGroup.id, null, parsed.sessionMode as 'shared' | 'per-thread' | 'agent-shared');
+    writeSessionMessage(agentGroup.id, session.id, {
+      id: generateId('onboard'),
+      kind: 'task',
+      timestamp: new Date().toISOString(),
+      platformId: parsed.platformId,
+      channelType: parsed.channel,
+      content: JSON.stringify({
+        prompt: `A new ${parsed.channel} channel has been connected. Run /welcome to introduce yourself to the user.`,
+      }),
+    });
+    log.info('Onboarding message written', { sessionId: session.id, channel: parsed.channel });
+  }
 
   // 5. Create group folders
   fs.mkdirSync(path.join(projectRoot, 'groups', parsed.folder, 'logs'), { recursive: true });
