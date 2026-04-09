@@ -5,8 +5,18 @@
 import { createTelegramAdapter } from '@chat-adapter/telegram';
 
 import { readEnvFile } from '../env.js';
-import { createChatSdkBridge } from './chat-sdk-bridge.js';
+import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
 import { registerChannelAdapter } from './channel-registry.js';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractReplyContext(raw: Record<string, any>): ReplyContext | null {
+  if (!raw.reply_to_message) return null;
+  const reply = raw.reply_to_message;
+  return {
+    text: reply.text || reply.caption || '',
+    sender: reply.from?.first_name || reply.from?.username || 'Unknown',
+  };
+}
 
 registerChannelAdapter('telegram', {
   factory: () => {
@@ -16,6 +26,6 @@ registerChannelAdapter('telegram', {
       botToken: env.TELEGRAM_BOT_TOKEN,
       mode: 'polling',
     });
-    return createChatSdkBridge({ adapter: telegramAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: telegramAdapter, concurrency: 'concurrent', extractReplyContext });
   },
 });

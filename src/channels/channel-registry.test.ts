@@ -54,8 +54,9 @@ function createMockAdapter(
       return setupConfig !== null;
     },
 
-    async deliver(_platformId: string, _threadId: string | null, message: OutboundMessage) {
+    async deliver(_platformId: string, _threadId: string | null, message: OutboundMessage): Promise<string | undefined> {
       delivered.push(message);
+      return undefined;
     },
 
     async setTyping() {},
@@ -213,8 +214,8 @@ describe('channel + router integration', () => {
     setDeliveryAdapter({
       async deliver(channelType, platformId, threadId, kind, content) {
         const adapter = getChannelAdapter(channelType);
-        if (!adapter) return;
-        await adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content) });
+        if (!adapter) return undefined;
+        return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content) });
       },
     });
 

@@ -67,8 +67,8 @@ export interface ChannelAdapter {
   teardown(): Promise<void>;
   isConnected(): boolean;
 
-  // Outbound delivery
-  deliver(platformId: string, threadId: string | null, message: OutboundMessage): Promise<void>;
+  // Outbound delivery — returns the platform message ID if available
+  deliver(platformId: string, threadId: string | null, message: OutboundMessage): Promise<string | undefined>;
 
   // Optional
   setTyping?(platformId: string, threadId: string | null): Promise<void>;

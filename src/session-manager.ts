@@ -64,7 +64,7 @@ function generateId(): string {
  */
 export function resolveSession(
   agentGroupId: string,
-  messagingGroupId: string,
+  messagingGroupId: string | null,
   threadId: string | null,
   sessionMode: 'shared' | 'per-thread' | 'agent-shared',
 ): { session: Session; created: boolean } {
@@ -74,7 +74,7 @@ export function resolveSession(
     if (existing) {
       return { session: existing, created: false };
     }
-  } else {
+  } else if (messagingGroupId) {
     const lookupThreadId = sessionMode === 'shared' ? null : threadId;
     const existing = findSession(messagingGroupId, lookupThreadId);
     if (existing) {
@@ -144,6 +144,9 @@ export function writeSessionMessage(
     recurrence?: string | null;
   },
 ): void {
+  // Extract base64 attachment data, save to inbox, replace with file paths
+  const content = extractAttachmentFiles(agentGroupId, sessionId, message.id, message.content);
+
   const dbPath = inboundDbPath(agentGroupId, sessionId);
   const db = new Database(dbPath);
   db.pragma('journal_mode = DELETE');
@@ -166,7 +169,7 @@ export function writeSessionMessage(
       platformId: message.platformId ?? null,
       channelType: message.channelType ?? null,
       threadId: message.threadId ?? null,
-      content: message.content,
+      content,
       processAfter: message.processAfter ?? null,
       recurrence: message.recurrence ?? null,
     });
@@ -175,6 +178,44 @@ export function writeSessionMessage(
   }
 
   updateSession(sessionId, { last_active: new Date().toISOString() });
+}
+
+/**
+ * If message content has attachments with base64 `data`, save them to
+ * the session's inbox directory and replace with `localPath`.
+ */
+function extractAttachmentFiles(
+  agentGroupId: string,
+  sessionId: string,
+  messageId: string,
+  contentStr: string,
+): string {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(contentStr);
+  } catch {
+    return contentStr;
+  }
+
+  const attachments = parsed.attachments as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(attachments)) return contentStr;
+
+  let changed = false;
+  for (const att of attachments) {
+    if (typeof att.data === 'string') {
+      const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', messageId);
+      fs.mkdirSync(inboxDir, { recursive: true });
+      const filename = (att.name as string) || `attachment-${Date.now()}`;
+      const filePath = path.join(inboxDir, filename);
+      fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'));
+      att.localPath = `inbox/${messageId}/${filename}`;
+      delete att.data;
+      changed = true;
+      log.debug('Saved attachment to inbox', { messageId, filename, size: att.size });
+    }
+  }
+
+  return changed ? JSON.stringify(parsed) : contentStr;
 }
 
 /** Open the inbound DB for a session (host reads/writes). */
@@ -199,6 +240,27 @@ export function openOutboundDb(agentGroupId: string, sessionId: string): Databas
  */
 export function openSessionDb(agentGroupId: string, sessionId: string): Database.Database {
   return openInboundDb(agentGroupId, sessionId);
+}
+
+/** Write a system response to a session's inbound.db so the container's findQuestionResponse() picks it up. */
+export function writeSystemResponse(
+  agentGroupId: string,
+  sessionId: string,
+  requestId: string,
+  status: string,
+  result: Record<string, unknown>,
+): void {
+  writeSessionMessage(agentGroupId, sessionId, {
+    id: `sys-resp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'system',
+    timestamp: new Date().toISOString(),
+    content: JSON.stringify({
+      type: 'question_response',
+      questionId: requestId,
+      status,
+      result,
+    }),
+  });
 }
 
 /** Mark a container as running for a session. */

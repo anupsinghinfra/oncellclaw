@@ -30,11 +30,23 @@ interface GatewayAdapter extends Adapter {
   ): Promise<Response>;
 }
 
+/** Reply context extracted from a platform's raw message. */
+export interface ReplyContext {
+  text: string;
+  sender: string;
+}
+
+/** Extract reply context from a platform-specific raw message. Return null if no reply. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type ReplyContextExtractor = (raw: Record<string, any>) => ReplyContext | null;
+
 export interface ChatSdkBridgeConfig {
   adapter: Adapter;
   concurrency?: ConcurrencyStrategy;
   /** Bot token for authenticating forwarded Gateway events (required for interaction handling). */
   botToken?: string;
+  /** Platform-specific reply context extraction. */
+  extractReplyContext?: ReplyContextExtractor;
 }
 
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
@@ -53,11 +65,50 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     return map;
   }
 
-  function messageToInbound(message: ChatMessage): InboundMessage {
+  async function messageToInbound(message: ChatMessage): Promise<InboundMessage> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const serialized = message.toJSON() as Record<string, any>;
+
+    // Download attachment data before serialization loses fetchData()
+    if (message.attachments && message.attachments.length > 0) {
+      const enriched = [];
+      for (const att of message.attachments) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const entry: Record<string, any> = {
+          type: att.type,
+          name: att.name,
+          mimeType: att.mimeType,
+          size: att.size,
+          width: (att as unknown as Record<string, unknown>).width,
+          height: (att as unknown as Record<string, unknown>).height,
+        };
+        if (att.fetchData) {
+          try {
+            const buffer = await att.fetchData();
+            entry.data = buffer.toString('base64');
+          } catch (err) {
+            log.warn('Failed to download attachment', { type: att.type, err });
+          }
+        }
+        enriched.push(entry);
+      }
+      serialized.attachments = enriched;
+    }
+
+    // Extract reply context via platform-specific hook
+    if (config.extractReplyContext && message.raw) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const replyTo = config.extractReplyContext(message.raw as Record<string, any>);
+      if (replyTo) serialized.replyTo = replyTo;
+    }
+
+    // Drop raw to save DB space (can be very large)
+    serialized.raw = undefined;
+
     return {
       id: message.id,
       kind: 'chat-sdk',
-      content: message.toJSON(),
+      content: serialized,
       timestamp: message.metadata.dateSent.toISOString(),
     };
   }
@@ -83,20 +134,20 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // Subscribed threads — forward all messages
       chat.onSubscribedMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        setupConfig.onInbound(channelId, thread.id, messageToInbound(message));
+        setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
       });
 
       // @mention in unsubscribed thread — forward + subscribe
       chat.onNewMention(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        setupConfig.onInbound(channelId, thread.id, messageToInbound(message));
+        setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
         await thread.subscribe();
       });
 
       // DMs — always forward + subscribe
       chat.onDirectMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        setupConfig.onInbound(channelId, null, messageToInbound(message));
+        setupConfig.onInbound(channelId, null, await messageToInbound(message));
         await thread.subscribe();
       });
 
@@ -108,6 +159,17 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const questionId = parts[1];
         const selectedOption = event.value || '';
         const userId = event.user?.userId || '';
+
+        // Update the card to show the selected answer and remove buttons
+        try {
+          const tid = event.threadId;
+          await adapter.editMessage(tid, event.messageId, {
+            markdown: `❓ **Question**\n\n${selectedOption ? `✅ **${selectedOption}**` : '(clicked)'}`,
+          });
+        } catch (err) {
+          log.warn('Failed to update card after action', { err });
+        }
+
         setupConfig.onAction(questionId, selectedOption, userId);
       });
 
@@ -161,7 +223,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       log.info('Chat SDK bridge initialized', { adapter: adapter.name });
     },
 
-    async deliver(platformId: string, threadId: string | null, message) {
+    async deliver(platformId: string, threadId: string | null, message): Promise<string | undefined> {
       // platformId is already in the adapter's encoded format (e.g. "telegram:6037840640",
       // "discord:guildId:channelId") — use it directly as the thread ID
       const tid = threadId ?? platformId;
@@ -190,24 +252,36 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
             Actions(options.map((opt) => Button({ id: `ncq:${questionId}:${opt}`, label: opt, value: opt }))),
           ],
         });
-        await adapter.postMessage(tid, { card, fallbackText: `${content.question}\nOptions: ${options.join(', ')}` });
-        return;
+        const result = await adapter.postMessage(tid, {
+          card,
+          fallbackText: `${content.question}\nOptions: ${options.join(', ')}`,
+        });
+        return result?.id;
       }
 
       // Normal message
       const text = (content.markdown as string) || (content.text as string);
       if (text) {
         // Attach files if present (FileUpload format: { data, filename })
-        const fileUploads = message.files?.map((f) => ({ data: f.data, filename: f.filename }));
+        const fileUploads = message.files?.map((f: { data: Buffer; filename: string }) => ({
+          data: f.data,
+          filename: f.filename,
+        }));
         if (fileUploads && fileUploads.length > 0) {
-          await adapter.postMessage(tid, { markdown: text, files: fileUploads });
+          const result = await adapter.postMessage(tid, { markdown: text, files: fileUploads });
+          return result?.id;
         } else {
-          await adapter.postMessage(tid, { markdown: text });
+          const result = await adapter.postMessage(tid, { markdown: text });
+          return result?.id;
         }
       } else if (message.files && message.files.length > 0) {
         // Files only, no text
-        const fileUploads = message.files.map((f) => ({ data: f.data, filename: f.filename }));
-        await adapter.postMessage(tid, { markdown: '', files: fileUploads });
+        const fileUploads = message.files.map((f: { data: Buffer; filename: string }) => ({
+          data: f.data,
+          filename: f.filename,
+        }));
+        const result = await adapter.postMessage(tid, { markdown: '', files: fileUploads });
+        return result?.id;
       }
     },
 

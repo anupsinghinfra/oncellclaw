@@ -90,8 +90,10 @@ export function initTestSessionDb(): { inbound: Database.Database; outbound: Dat
       content        TEXT NOT NULL
     );
     CREATE TABLE delivered (
-      message_out_id TEXT PRIMARY KEY,
-      delivered_at   TEXT NOT NULL
+      message_out_id      TEXT PRIMARY KEY,
+      platform_message_id TEXT,
+      status              TEXT NOT NULL DEFAULT 'delivered',
+      delivered_at        TEXT NOT NULL
     );
   `);
 

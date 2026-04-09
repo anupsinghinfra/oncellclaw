@@ -3,7 +3,7 @@
  * Spawns agent containers with session folder + agent group folder mounts.
  * The container runs the v2 agent-runner which polls the session DB.
  */
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -274,13 +274,71 @@ async function buildContainerArgs(
     }
   }
 
+  // Pass additional MCP servers from container config
+  const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
+  if (containerConfig.mcpServers && Object.keys(containerConfig.mcpServers).length > 0) {
+    args.push('-e', `NANOCLAW_MCP_SERVERS=${JSON.stringify(containerConfig.mcpServers)}`);
+  }
+
   // Override entrypoint: compile agent-runner source, run v2 entry point (no stdin)
   args.push('--entrypoint', 'bash');
-  args.push(CONTAINER_IMAGE);
+
+  // Use per-agent-group image if one has been built, otherwise base image
+  const imageTag = containerConfig.imageTag || CONTAINER_IMAGE;
+  args.push(imageTag);
+
   args.push(
     '-c',
     'cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2 && ln -sf /app/node_modules /tmp/dist/node_modules && node /tmp/dist/index.js',
   );
 
   return args;
+}
+
+/** Build a per-agent-group Docker image with custom packages. */
+export async function buildAgentGroupImage(agentGroupId: string): Promise<void> {
+  const agentGroup = getAgentGroup(agentGroupId);
+  if (!agentGroup) throw new Error('Agent group not found');
+
+  const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
+  const packages = containerConfig.packages || { apt: [], npm: [] };
+  const aptPackages = (packages.apt || []) as string[];
+  const npmPackages = (packages.npm || []) as string[];
+
+  if (aptPackages.length === 0 && npmPackages.length === 0) {
+    throw new Error('No packages to install. Use install_packages first.');
+  }
+
+  let dockerfile = `FROM ${CONTAINER_IMAGE}\nUSER root\n`;
+  if (aptPackages.length > 0) {
+    dockerfile += `RUN apt-get update && apt-get install -y ${aptPackages.join(' ')} && rm -rf /var/lib/apt/lists/*\n`;
+  }
+  if (npmPackages.length > 0) {
+    dockerfile += `RUN npm install -g ${npmPackages.join(' ')}\n`;
+  }
+  dockerfile += 'USER node\n';
+
+  const imageTag = `nanoclaw-agent:${agentGroupId}`;
+
+  log.info('Building per-agent-group image', { agentGroupId, imageTag, apt: aptPackages, npm: npmPackages });
+
+  // Write Dockerfile to temp file and build
+  const tmpDockerfile = path.join(DATA_DIR, `Dockerfile.${agentGroupId}`);
+  fs.writeFileSync(tmpDockerfile, dockerfile);
+  try {
+    execSync(`${CONTAINER_RUNTIME_BIN} build -t ${imageTag} -f ${tmpDockerfile} .`, {
+      cwd: DATA_DIR,
+      stdio: 'pipe',
+      timeout: 300_000,
+    });
+  } finally {
+    fs.unlinkSync(tmpDockerfile);
+  }
+
+  // Store the image tag in container_config
+  containerConfig.imageTag = imageTag;
+  const { updateAgentGroup } = await import('./db/agent-groups.js');
+  updateAgentGroup(agentGroupId, { container_config: JSON.stringify(containerConfig) });
+
+  log.info('Per-agent-group image built', { agentGroupId, imageTag });
 }

@@ -76,20 +76,36 @@ async function main(): Promise<void> {
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
   };
 
+  // Build MCP servers config: nanoclaw built-in + any additional from host
+  const mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        SESSION_INBOUND_DB_PATH: process.env.SESSION_INBOUND_DB_PATH || '/workspace/inbound.db',
+        SESSION_OUTBOUND_DB_PATH: process.env.SESSION_OUTBOUND_DB_PATH || '/workspace/outbound.db',
+        SESSION_HEARTBEAT_PATH: process.env.SESSION_HEARTBEAT_PATH || '/workspace/.heartbeat',
+      },
+    },
+  };
+
+  // Merge additional MCP servers from host configuration
+  if (process.env.NANOCLAW_MCP_SERVERS) {
+    try {
+      const additional = JSON.parse(process.env.NANOCLAW_MCP_SERVERS) as Record<string, { command: string; args: string[]; env: Record<string, string> }>;
+      for (const [name, config] of Object.entries(additional)) {
+        mcpServers[name] = config;
+        log(`Additional MCP server: ${name} (${config.command})`);
+      }
+    } catch (e) {
+      log(`Failed to parse NANOCLAW_MCP_SERVERS: ${e}`);
+    }
+  }
+
   await runPollLoop({
     provider,
     cwd: CWD,
-    mcpServers: {
-      nanoclaw: {
-        command: 'node',
-        args: [mcpServerPath],
-        env: {
-          SESSION_INBOUND_DB_PATH: process.env.SESSION_INBOUND_DB_PATH || '/workspace/inbound.db',
-          SESSION_OUTBOUND_DB_PATH: process.env.SESSION_OUTBOUND_DB_PATH || '/workspace/outbound.db',
-          SESSION_HEARTBEAT_PATH: process.env.SESSION_HEARTBEAT_PATH || '/workspace/.heartbeat',
-        },
-      },
-    },
+    mcpServers,
     systemPrompt,
     env,
     additionalDirectories: additionalDirectories.length > 0 ? additionalDirectories : undefined,

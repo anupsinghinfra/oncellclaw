@@ -14,12 +14,13 @@ import { coreTools } from './core.js';
 import { schedulingTools } from './scheduling.js';
 import { interactiveTools } from './interactive.js';
 import { agentTools } from './agents.js';
+import { selfModTools } from './self-mod.js';
 
 function log(msg: string): void {
   console.error(`[mcp-tools] ${msg}`);
 }
 
-const allTools: McpToolDefinition[] = [...coreTools, ...schedulingTools, ...interactiveTools, ...agentTools];
+const allTools: McpToolDefinition[] = [...coreTools, ...schedulingTools, ...interactiveTools, ...agentTools, ...selfModTools];
 
 const toolMap = new Map<string, McpToolDefinition>();
 for (const t of allTools) {

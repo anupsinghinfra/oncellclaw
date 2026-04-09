@@ -1,4 +1,4 @@
-import type { PendingQuestion, Session } from '../types.js';
+import type { PendingApproval, PendingQuestion, Session } from '../types.js';
 import { getDb } from './connection.js';
 
 // ── Sessions ──
@@ -89,4 +89,25 @@ export function getPendingQuestion(questionId: string): PendingQuestion | undefi
 
 export function deletePendingQuestion(questionId: string): void {
   getDb().prepare('DELETE FROM pending_questions WHERE question_id = ?').run(questionId);
+}
+
+// ── Pending Approvals ──
+
+export function createPendingApproval(pa: PendingApproval): void {
+  getDb()
+    .prepare(
+      `INSERT INTO pending_approvals (approval_id, session_id, request_id, action, payload, created_at)
+       VALUES (@approval_id, @session_id, @request_id, @action, @payload, @created_at)`,
+    )
+    .run(pa);
+}
+
+export function getPendingApproval(approvalId: string): PendingApproval | undefined {
+  return getDb().prepare('SELECT * FROM pending_approvals WHERE approval_id = ?').get(approvalId) as
+    | PendingApproval
+    | undefined;
+}
+
+export function deletePendingApproval(approvalId: string): void {
+  getDb().prepare('DELETE FROM pending_approvals WHERE approval_id = ?').run(approvalId);
 }

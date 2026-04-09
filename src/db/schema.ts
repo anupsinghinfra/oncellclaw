@@ -93,11 +93,13 @@ CREATE TABLE messages_in (
   content        TEXT NOT NULL
 );
 
--- Host tracks which messages_out IDs have been delivered.
+-- Host tracks delivery outcomes for messages_out IDs.
 -- Avoids writing to outbound.db (container-owned).
 CREATE TABLE delivered (
-  message_out_id TEXT PRIMARY KEY,
-  delivered_at   TEXT NOT NULL
+  message_out_id      TEXT PRIMARY KEY,
+  platform_message_id TEXT,
+  status              TEXT NOT NULL DEFAULT 'delivered',
+  delivered_at        TEXT NOT NULL
 );
 `;
 

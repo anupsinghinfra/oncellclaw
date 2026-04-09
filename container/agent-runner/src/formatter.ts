@@ -109,13 +109,7 @@ function formatChatMessages(messages: MessageInRow[]): string {
 
   const lines = ['<messages>'];
   for (const msg of messages) {
-    const content = parseContent(msg.content);
-    const sender = content.sender || content.author?.fullName || content.author?.userName || 'Unknown';
-    const time = formatTime(msg.timestamp);
-    const text = content.text || '';
-    const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
-    const attachmentsSuffix = formatAttachments(content.attachments);
-    lines.push(`<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}${attachmentsSuffix}</message>`);
+    lines.push(formatSingleChat(msg));
   }
   lines.push('</messages>');
   return lines.join('\n');
@@ -127,8 +121,9 @@ function formatSingleChat(msg: MessageInRow): string {
   const time = formatTime(msg.timestamp);
   const text = content.text || '';
   const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
+  const replyPrefix = formatReplyContext(content.replyTo);
   const attachmentsSuffix = formatAttachments(content.attachments);
-  return `<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${escapeXml(text)}${attachmentsSuffix}</message>`;
+  return `<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${replyPrefix}${escapeXml(text)}${attachmentsSuffix}</message>`;
 }
 
 function formatTaskMessage(msg: MessageInRow): string {
@@ -154,12 +149,25 @@ function formatSystemMessage(msg: MessageInRow): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatReplyContext(replyTo: any): string {
+  if (!replyTo) return '';
+  const sender = replyTo.sender || 'Unknown';
+  const text = replyTo.text || '';
+  const preview = text.length > 100 ? text.slice(0, 100) + '…' : text;
+  return `\n<reply-to sender="${escapeXml(sender)}">${escapeXml(preview)}</reply-to>\n`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatAttachments(attachments: any[] | undefined): string {
   if (!Array.isArray(attachments) || attachments.length === 0) return '';
   const parts = attachments.map((a) => {
     const name = a.name || a.filename || 'attachment';
     const type = a.type || 'file';
+    const localPath = a.localPath ? `/workspace/${a.localPath}` : '';
     const url = a.url || '';
+    if (localPath) {
+      return `[${type}: ${escapeXml(name)} — saved to ${escapeXml(localPath)}]`;
+    }
     return url ? `[${type}: ${escapeXml(name)} (${escapeXml(url)})]` : `[${type}: ${escapeXml(name)}]`;
   });
   return '\n' + parts.join('\n');

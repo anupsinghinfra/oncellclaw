@@ -88,3 +88,14 @@ export interface PendingQuestion {
   thread_id: string | null;
   created_at: string;
 }
+
+// ── Pending approvals (central DB) ──
+
+export interface PendingApproval {
+  approval_id: string;
+  session_id: string;
+  request_id: string;
+  action: string;
+  payload: string; // JSON
+  created_at: string;
+}

@@ -14,9 +14,10 @@ import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runti
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
-import { getPendingQuestion, deletePendingQuestion, getSession } from './db/sessions.js';
-import { writeSessionMessage } from './session-manager.js';
-import { wakeContainer } from './container-runner.js';
+import { getPendingQuestion, deletePendingQuestion, getPendingApproval, deletePendingApproval, getSession } from './db/sessions.js';
+import { getAgentGroup, updateAgentGroup } from './db/agent-groups.js';
+import { writeSessionMessage, writeSystemResponse } from './session-manager.js';
+import { wakeContainer, buildAgentGroupImage } from './container-runner.js';
 import { log } from './log.js';
 
 // Channel barrel — each enabled channel self-registers on import.
@@ -83,7 +84,7 @@ async function main(): Promise<void> {
         log.warn('No adapter for channel type', { channelType });
         return;
       }
-      await adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });
+      return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });
     },
     async setTyping(channelType, platformId, threadId) {
       const adapter = getChannelAdapter(channelType);
@@ -125,8 +126,15 @@ function buildConversationConfigs(channelType: string): ConversationConfig[] {
   return configs;
 }
 
-/** Handle a user's response to an ask_user_question card. */
+/** Handle a user's response to an ask_user_question card or an approval card. */
 async function handleQuestionResponse(questionId: string, selectedOption: string, userId: string): Promise<void> {
+  // Check if this is a pending approval (install_packages, request_rebuild)
+  const approval = getPendingApproval(questionId);
+  if (approval) {
+    await handleApprovalResponse(approval, selectedOption, userId);
+    return;
+  }
+
   const pq = getPendingQuestion(questionId);
   if (!pq) {
     log.warn('Pending question not found (may have expired)', { questionId });
@@ -161,6 +169,66 @@ async function handleQuestionResponse(questionId: string, selectedOption: string
 
   // Wake the container so the MCP tool's poll picks up the response
   await wakeContainer(session);
+}
+
+/** Handle an admin's response to an approval card. */
+async function handleApprovalResponse(
+  approval: import('./types.js').PendingApproval,
+  selectedOption: string,
+  userId: string,
+): Promise<void> {
+  const session = getSession(approval.session_id);
+  if (!session) {
+    deletePendingApproval(approval.approval_id);
+    return;
+  }
+
+  if (selectedOption === 'Approve') {
+    const payload = JSON.parse(approval.payload);
+
+    if (approval.action === 'install_packages') {
+      const agentGroup = getAgentGroup(session.agent_group_id);
+      const containerConfig = agentGroup?.container_config ? JSON.parse(agentGroup.container_config) : {};
+      if (!containerConfig.packages) containerConfig.packages = { apt: [], npm: [] };
+      if (payload.apt) containerConfig.packages.apt.push(...payload.apt);
+      if (payload.npm) containerConfig.packages.npm.push(...payload.npm);
+
+      updateAgentGroup(session.agent_group_id, { container_config: JSON.stringify(containerConfig) });
+
+      writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'success', {
+        message: 'Packages approved. Run request_rebuild to apply.',
+        approved: { apt: payload.apt, npm: payload.npm },
+      });
+
+      log.info('Package install approved', { approvalId: approval.approval_id, userId });
+    } else if (approval.action === 'request_rebuild') {
+      try {
+        await buildAgentGroupImage(session.agent_group_id);
+        writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'success', {
+          message: 'Container image rebuilt. Changes will take effect on next container start.',
+        });
+        log.info('Container rebuild approved and completed', { approvalId: approval.approval_id, userId });
+      } catch (e) {
+        writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'error', {
+          error: `Rebuild failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+        log.error('Container rebuild failed', { approvalId: approval.approval_id, err: e });
+      }
+    }
+  } else {
+    // Rejected
+    writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'error', {
+      error: `Request rejected by admin (${userId})`,
+    });
+    log.info('Approval rejected', { approvalId: approval.approval_id, action: approval.action, userId });
+  }
+
+  deletePendingApproval(approval.approval_id);
+
+  // Wake container so the agent's polling MCP tool picks up the response
+  if (session) {
+    await wakeContainer(session);
+  }
 }
 
 /** Graceful shutdown. */

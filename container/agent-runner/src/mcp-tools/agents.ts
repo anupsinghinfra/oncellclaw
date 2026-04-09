@@ -1,6 +1,7 @@
 /**
- * Agent-to-agent MCP tools: send_to_agent.
+ * Agent-to-agent MCP tools: send_to_agent, create_agent.
  */
+import { findQuestionResponse, markCompleted } from '../db/messages-in.js';
 import { writeMessageOut } from '../db/messages-out.js';
 import type { McpToolDefinition } from './types.js';
 
@@ -18,6 +19,10 @@ function ok(text: string) {
 
 function err(text: string) {
   return { content: [{ type: 'text' as const, text: `Error: ${text}` }], isError: true };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export const sendToAgent: McpToolDefinition = {
@@ -55,4 +60,56 @@ export const sendToAgent: McpToolDefinition = {
   },
 };
 
-export const agentTools: McpToolDefinition[] = [sendToAgent];
+export const createAgent: McpToolDefinition = {
+  tool: {
+    name: 'create_agent',
+    description: 'Create a new agent group dynamically. Returns the new agent group ID.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Agent display name' },
+        instructions: { type: 'string', description: 'CLAUDE.md content (agent instructions/personality)' },
+        folder: { type: 'string', description: 'Folder name (default: auto-generated from name)' },
+      },
+      required: ['name'],
+    },
+  },
+  async handler(args) {
+    const name = args.name as string;
+    if (!name) return err('name is required');
+
+    const requestId = generateId();
+
+    writeMessageOut({
+      id: requestId,
+      kind: 'system',
+      content: JSON.stringify({
+        action: 'create_agent',
+        requestId,
+        name,
+        instructions: (args.instructions as string) || null,
+        folder: (args.folder as string) || null,
+      }),
+    });
+
+    log(`create_agent: ${requestId} → "${name}"`);
+
+    // Poll for host response
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const response = findQuestionResponse(requestId);
+      if (response) {
+        const parsed = JSON.parse(response.content);
+        markCompleted([response.id]);
+        if (parsed.status === 'success') {
+          return ok(`Agent created: ${parsed.result.agentGroupId} (name: ${parsed.result.name}, folder: ${parsed.result.folder})`);
+        }
+        return err(parsed.result?.error || 'Failed to create agent');
+      }
+      await sleep(1000);
+    }
+    return err('Timed out waiting for agent creation response');
+  },
+};
+
+export const agentTools: McpToolDefinition[] = [sendToAgent, createAgent];

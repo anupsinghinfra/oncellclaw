@@ -109,3 +109,14 @@ export function updateMessagingGroupAgent(
 export function deleteMessagingGroupAgent(id: string): void {
   getDb().prepare('DELETE FROM messaging_group_agents WHERE id = ?').run(id);
 }
+
+/** Get all messaging groups wired to an agent group (reverse lookup). */
+export function getMessagingGroupsByAgentGroup(agentGroupId: string): MessagingGroup[] {
+  return getDb()
+    .prepare(
+      `SELECT mg.* FROM messaging_groups mg
+       JOIN messaging_group_agents mga ON mga.messaging_group_id = mg.id
+       WHERE mga.agent_group_id = ?`,
+    )
+    .all(agentGroupId) as MessagingGroup[];
+}
