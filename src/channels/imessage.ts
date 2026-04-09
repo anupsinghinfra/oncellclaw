@@ -15,11 +15,15 @@ registerChannelAdapter('imessage', {
     const isLocal = env.IMESSAGE_LOCAL !== 'false';
     if (isLocal && !env.IMESSAGE_ENABLED) return null;
     if (!isLocal && !env.IMESSAGE_SERVER_URL) return null;
-    const imessageAdapter = createiMessageAdapter({
+    const rawAdapter = createiMessageAdapter({
       local: isLocal,
       serverUrl: env.IMESSAGE_SERVER_URL,
       apiKey: env.IMESSAGE_API_KEY,
     });
-    return createChatSdkBridge({ adapter: imessageAdapter as never, concurrency: 'concurrent' });
+    // Polyfill channelIdFromThreadId (community adapter doesn't implement it)
+    const imessageAdapter = Object.assign(rawAdapter, {
+      channelIdFromThreadId: (threadId: string) => threadId,
+    });
+    return createChatSdkBridge({ adapter: imessageAdapter, concurrency: 'concurrent' });
   },
 });

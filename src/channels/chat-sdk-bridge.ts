@@ -31,7 +31,7 @@ interface GatewayAdapter extends Adapter {
 }
 
 export interface ChatSdkBridgeConfig {
-  adapter: GatewayAdapter;
+  adapter: Adapter;
   concurrency?: ConcurrencyStrategy;
   /** Bot token for authenticating forwarded Gateway events (required for interaction handling). */
   botToken?: string;
@@ -114,17 +114,18 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       await chat.initialize();
 
       // Start Gateway listener for adapters that support it (e.g., Discord)
-      if (adapter.startGatewayListener) {
+      const gatewayAdapter = adapter as GatewayAdapter;
+      if (gatewayAdapter.startGatewayListener) {
         gatewayAbort = new AbortController();
 
         // Start local HTTP server to receive forwarded Gateway events (including interactions)
-        const webhookUrl = await startLocalWebhookServer(adapter, setupConfig, config.botToken);
+        const webhookUrl = await startLocalWebhookServer(gatewayAdapter, setupConfig, config.botToken);
 
         const startGateway = () => {
           if (gatewayAbort?.signal.aborted) return;
           // Capture the long-running listener promise via waitUntil
           let listenerPromise: Promise<unknown> | undefined;
-          adapter.startGatewayListener!(
+          gatewayAdapter.startGatewayListener!(
             {
               waitUntil: (p: Promise<unknown>) => {
                 listenerPromise = p;
