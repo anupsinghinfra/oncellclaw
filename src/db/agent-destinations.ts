@@ -39,28 +39,22 @@ export function getDestinationByTarget(
   targetId: string,
 ): AgentDestination | undefined {
   return getDb()
-    .prepare(
-      'SELECT * FROM agent_destinations WHERE agent_group_id = ? AND target_type = ? AND target_id = ?',
-    )
+    .prepare('SELECT * FROM agent_destinations WHERE agent_group_id = ? AND target_type = ? AND target_id = ?')
     .get(agentGroupId, targetType, targetId) as AgentDestination | undefined;
 }
 
 /** Permission check: can this agent send to this target? */
-export function hasDestination(
-  agentGroupId: string,
-  targetType: 'channel' | 'agent',
-  targetId: string,
-): boolean {
+export function hasDestination(agentGroupId: string, targetType: 'channel' | 'agent', targetId: string): boolean {
   const row = getDb()
-    .prepare(
-      'SELECT 1 FROM agent_destinations WHERE agent_group_id = ? AND target_type = ? AND target_id = ? LIMIT 1',
-    )
+    .prepare('SELECT 1 FROM agent_destinations WHERE agent_group_id = ? AND target_type = ? AND target_id = ? LIMIT 1')
     .get(agentGroupId, targetType, targetId);
   return !!row;
 }
 
 export function deleteDestination(agentGroupId: string, localName: string): void {
-  getDb().prepare('DELETE FROM agent_destinations WHERE agent_group_id = ? AND local_name = ?').run(agentGroupId, localName);
+  getDb()
+    .prepare('DELETE FROM agent_destinations WHERE agent_group_id = ? AND local_name = ?')
+    .run(agentGroupId, localName);
 }
 
 /** Normalize a human-readable name into a lowercase, dash-separated identifier. */

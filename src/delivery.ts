@@ -26,12 +26,7 @@ import {
   updateAgentGroup,
   getAgentGroupByFolder,
 } from './db/agent-groups.js';
-import {
-  createDestination,
-  getDestinationByName,
-  hasDestination,
-  normalizeName,
-} from './db/agent-destinations.js';
+import { createDestination, getDestinationByName, hasDestination, normalizeName } from './db/agent-destinations.js';
 import { getMessagingGroupByPlatform, getMessagingGroupsByAgentGroup } from './db/messaging-groups.js';
 import { log } from './log.js';
 import {
@@ -617,7 +612,10 @@ async function handleSystemAction(
       });
 
       // Fire-and-forget notification back to the creator
-      notifyAgent(session, `Agent "${localName}" created. You can now message it with <message to="${localName}">...</message>.`);
+      notifyAgent(
+        session,
+        `Agent "${localName}" created. You can now message it with <message to="${localName}">...</message>.`,
+      );
       log.info('Agent group created', { agentGroupId, name, localName, folder, parent: sourceGroup.id });
       // Note: requestId is unused — this is fire-and-forget, not request/response.
       void requestId;
@@ -636,12 +634,18 @@ async function handleSystemAction(
         notifyAgent(session, 'add_mcp_server failed: name and command are required.');
         break;
       }
-      await requestApproval(session, agentGroup.name, 'add_mcp_server', {
-        name: serverName,
-        command,
-        args: (content.args as string[]) || [],
-        env: (content.env as Record<string, string>) || {},
-      }, `Agent "${agentGroup.name}" requests a new MCP server:\n${serverName} (${command})`);
+      await requestApproval(
+        session,
+        agentGroup.name,
+        'add_mcp_server',
+        {
+          name: serverName,
+          command,
+          args: (content.args as string[]) || [],
+          env: (content.env as Record<string, string>) || {},
+        },
+        `Agent "${agentGroup.name}" requests a new MCP server:\n${serverName} (${command})`,
+      );
       break;
     }
 
