@@ -11,6 +11,9 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR } from './config.js';
+import { getAgentGroup } from './db/agent-groups.js';
+import { getDestinations } from './db/agent-destinations.js';
+import { getMessagingGroup } from './db/messaging-groups.js';
 import { createSession, findSession, findSessionByAgentGroup, getSession, updateSession } from './db/sessions.js';
 import { log } from './log.js';
 import { INBOUND_SCHEMA, OUTBOUND_SCHEMA } from './db/schema.js';
@@ -126,6 +129,46 @@ export function initSessionFolder(agentGroupId: string, sessionId: string): void
     db.close();
     log.debug('Outbound DB created', { dbPath: outPath });
   }
+}
+
+/**
+ * Write the destination map file into the session folder.
+ * Called before every container wake so admin changes take effect on next start.
+ * The container loads this at startup to know what destinations exist.
+ */
+export function writeDestinationsFile(agentGroupId: string, sessionId: string): void {
+  const dir = sessionDir(agentGroupId, sessionId);
+  if (!fs.existsSync(dir)) return;
+
+  const rows = getDestinations(agentGroupId);
+  const destinations: Array<Record<string, unknown>> = [];
+
+  for (const row of rows) {
+    if (row.target_type === 'channel') {
+      const mg = getMessagingGroup(row.target_id);
+      if (!mg) continue;
+      destinations.push({
+        name: row.local_name,
+        displayName: mg.name ?? row.local_name,
+        type: 'channel',
+        channelType: mg.channel_type,
+        platformId: mg.platform_id,
+      });
+    } else if (row.target_type === 'agent') {
+      const ag = getAgentGroup(row.target_id);
+      if (!ag) continue;
+      destinations.push({
+        name: row.local_name,
+        displayName: ag.name,
+        type: 'agent',
+        agentGroupId: ag.id,
+      });
+    }
+  }
+
+  const filePath = path.join(dir, '.nanoclaw-destinations.json');
+  fs.writeFileSync(filePath, JSON.stringify({ destinations }, null, 2));
+  log.debug('Destination map written', { sessionId, count: destinations.length });
 }
 
 /** Write a message to a session's inbound DB (messages_in). Host-only. */

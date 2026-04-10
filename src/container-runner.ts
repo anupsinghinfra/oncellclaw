@@ -15,7 +15,13 @@ import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { markContainerIdle, markContainerRunning, markContainerStopped, sessionDir } from './session-manager.js';
+import {
+  markContainerIdle,
+  markContainerRunning,
+  markContainerStopped,
+  sessionDir,
+  writeDestinationsFile,
+} from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
@@ -52,6 +58,9 @@ export async function wakeContainer(session: Session): Promise<void> {
     log.error('Agent group not found', { agentGroupId: session.agent_group_id });
     return;
   }
+
+  // Refresh the destination map file so any admin changes take effect on wake
+  writeDestinationsFile(agentGroup.id, session.id);
 
   const mounts = buildMounts(agentGroup, session);
   const containerName = `nanoclaw-v2-${agentGroup.folder}-${Date.now()}`;
@@ -235,6 +244,9 @@ async function buildContainerArgs(
   if (agentGroup.name) {
     args.push('-e', `NANOCLAW_ASSISTANT_NAME=${agentGroup.name}`);
   }
+  args.push('-e', `NANOCLAW_AGENT_GROUP_ID=${agentGroup.id}`);
+  args.push('-e', `NANOCLAW_AGENT_GROUP_NAME=${agentGroup.name}`);
+  args.push('-e', `NANOCLAW_IS_ADMIN=${agentGroup.is_admin ? '1' : '0'}`);
 
   // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
   // are routed through the agent vault for credential injection.

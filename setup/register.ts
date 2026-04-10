@@ -12,6 +12,11 @@ import { initDb } from '../src/db/connection.js';
 import { runMigrations } from '../src/db/migrations/index.js';
 import { createAgentGroup, getAgentGroupByFolder } from '../src/db/agent-groups.js';
 import {
+  createDestination,
+  getDestinationByName,
+  normalizeName,
+} from '../src/db/agent-destinations.js';
+import {
   createMessagingGroup,
   createMessagingGroupAgent,
   getMessagingGroupByPlatform,
@@ -41,6 +46,8 @@ interface RegisterArgs {
   assistantName: string;
   /** Session mode: 'shared' (one session per channel) or 'per-thread' */
   sessionMode: string;
+  /** Optional local name the agent uses for this channel (defaults to normalized messaging group name) */
+  localName: string | null;
 }
 
 function parseArgs(args: string[]): RegisterArgs {
@@ -54,6 +61,7 @@ function parseArgs(args: string[]): RegisterArgs {
     isMain: false,
     assistantName: 'Andy',
     sessionMode: 'shared',
+    localName: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -86,6 +94,9 @@ function parseArgs(args: string[]): RegisterArgs {
         break;
       case '--session-mode':
         result.sessionMode = args[++i] || 'shared';
+        break;
+      case '--local-name':
+        result.localName = args[++i] || null;
         break;
     }
   }
@@ -168,7 +179,7 @@ export async function run(args: string[]): Promise<void> {
     log.info('Created messaging group', { id: mgId, channel: parsed.channel, platformId: parsed.platformId });
   }
 
-  // 3. Wire agent to messaging group
+  // 3. Wire agent to messaging group + create destination row for the agent's map
   let newlyWired = false;
   const existing = getMessagingGroupAgentByPair(messagingGroup.id, agentGroup.id);
   if (!existing) {
@@ -190,7 +201,29 @@ export async function run(args: string[]): Promise<void> {
       priority: parsed.isMain ? 10 : 0,
       created_at: new Date().toISOString(),
     });
-    log.info('Wired agent to messaging group', { mgaId, agentGroup: agentGroup.id, messagingGroup: messagingGroup.id });
+
+    // Create destination row so the agent can address this channel by name.
+    // Auto-suffix on collision within this agent's namespace.
+    const baseLocalName = normalizeName(parsed.localName || parsed.name);
+    let localName = baseLocalName;
+    let suffix = 2;
+    while (getDestinationByName(agentGroup.id, localName)) {
+      localName = `${baseLocalName}-${suffix}`;
+      suffix++;
+    }
+    createDestination({
+      agent_group_id: agentGroup.id,
+      local_name: localName,
+      target_type: 'channel',
+      target_id: messagingGroup.id,
+      created_at: new Date().toISOString(),
+    });
+    log.info('Wired agent to messaging group', {
+      mgaId,
+      agentGroup: agentGroup.id,
+      messagingGroup: messagingGroup.id,
+      localName,
+    });
   }
 
   // 4. Send onboarding message — only on first wiring, not re-registration

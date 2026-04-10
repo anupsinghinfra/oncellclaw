@@ -1,10 +1,16 @@
 /**
  * Core MCP tools: send_message, send_file, edit_message, add_reaction.
+ *
+ * All outbound tools resolve destinations via the local destination map
+ * (see destinations.ts). Agents reference destinations by name; the map
+ * translates name → routing tuple. Permission enforcement happens on
+ * the host side in delivery.ts via the agent_destinations table.
  */
 import fs from 'fs';
 import path from 'path';
 
-import { writeMessageOut, getMessageIdBySeq } from '../db/messages-out.js';
+import { findByName, getAllDestinations } from '../destinations.js';
+import { getMessageIdBySeq, getRoutingBySeq, writeMessageOut } from '../db/messages-out.js';
 import type { McpToolDefinition } from './types.js';
 
 function log(msg: string): void {
@@ -15,14 +21,6 @@ function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function routing() {
-  return {
-    platform_id: process.env.NANOCLAW_PLATFORM_ID || null,
-    channel_type: process.env.NANOCLAW_CHANNEL_TYPE || null,
-    thread_id: process.env.NANOCLAW_THREAD_ID || null,
-  };
-}
-
 function ok(text: string) {
   return { content: [{ type: 'text' as const, text }] };
 }
@@ -31,68 +29,89 @@ function err(text: string) {
   return { content: [{ type: 'text' as const, text: `Error: ${text}` }], isError: true };
 }
 
+function destinationList(): string {
+  const all = getAllDestinations();
+  if (all.length === 0) return '(none)';
+  return all.map((d) => d.name).join(', ');
+}
+
+function resolveRouting(
+  to: string,
+): { channel_type: string; platform_id: string } | { error: string } {
+  const dest = findByName(to);
+  if (!dest) return { error: `Unknown destination "${to}". Known: ${destinationList()}` };
+  if (dest.type === 'channel') {
+    return { channel_type: dest.channelType!, platform_id: dest.platformId! };
+  }
+  return { channel_type: 'agent', platform_id: dest.agentGroupId! };
+}
+
 export const sendMessage: McpToolDefinition = {
   tool: {
     name: 'send_message',
-    description: 'Send a chat message to the current conversation or a specified destination.',
+    description:
+      'Send a message to a named destination. Use destination names from your system prompt (not raw IDs).',
     inputSchema: {
       type: 'object' as const,
       properties: {
+        to: { type: 'string', description: 'Destination name (e.g., "family", "worker-1")' },
         text: { type: 'string', description: 'Message content' },
-        channel: { type: 'string', description: 'Target channel type (default: reply to origin)' },
-        platformId: { type: 'string', description: 'Target platform ID' },
-        threadId: { type: 'string', description: 'Target thread ID' },
       },
-      required: ['text'],
+      required: ['to', 'text'],
     },
   },
   async handler(args) {
+    const to = args.to as string;
     const text = args.text as string;
-    if (!text) return err('text is required');
+    if (!to || !text) return err('to and text are required');
+
+    const routing = resolveRouting(to);
+    if ('error' in routing) return err(routing.error);
 
     const id = generateId();
-    const r = routing();
-
     const seq = writeMessageOut({
       id,
       kind: 'chat',
-      platform_id: (args.platformId as string) || r.platform_id,
-      channel_type: (args.channel as string) || r.channel_type,
-      thread_id: (args.threadId as string) || r.thread_id,
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: null,
       content: JSON.stringify({ text }),
     });
 
-    log(`send_message: #${seq} ${id} → ${r.channel_type || 'default'}/${r.platform_id || 'default'}`);
-    return ok(`Message sent (id: ${seq})`);
+    log(`send_message: #${seq} → ${to}`);
+    return ok(`Message sent to ${to} (id: ${seq})`);
   },
 };
 
 export const sendFile: McpToolDefinition = {
   tool: {
     name: 'send_file',
-    description: 'Send a file to the current conversation.',
+    description: 'Send a file to a named destination.',
     inputSchema: {
       type: 'object' as const,
       properties: {
+        to: { type: 'string', description: 'Destination name' },
         path: { type: 'string', description: 'File path (relative to /workspace/agent/ or absolute)' },
         text: { type: 'string', description: 'Optional accompanying message' },
         filename: { type: 'string', description: 'Display name (default: basename of path)' },
       },
-      required: ['path'],
+      required: ['to', 'path'],
     },
   },
   async handler(args) {
+    const to = args.to as string;
     const filePath = args.path as string;
-    if (!filePath) return err('path is required');
+    if (!to || !filePath) return err('to and path are required');
+
+    const routing = resolveRouting(to);
+    if ('error' in routing) return err(routing.error);
 
     const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve('/workspace/agent', filePath);
     if (!fs.existsSync(resolvedPath)) return err(`File not found: ${filePath}`);
 
     const id = generateId();
     const filename = (args.filename as string) || path.basename(resolvedPath);
-    const r = routing();
 
-    // Copy file to outbox
     const outboxDir = path.join('/workspace/outbox', id);
     fs.mkdirSync(outboxDir, { recursive: true });
     fs.copyFileSync(resolvedPath, path.join(outboxDir, filename));
@@ -100,21 +119,21 @@ export const sendFile: McpToolDefinition = {
     writeMessageOut({
       id,
       kind: 'chat',
-      platform_id: r.platform_id,
-      channel_type: r.channel_type,
-      thread_id: r.thread_id,
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: null,
       content: JSON.stringify({ text: (args.text as string) || '', files: [filename] }),
     });
 
-    log(`send_file: ${id} → ${filename}`);
-    return ok(`File sent (id: ${id}, filename: ${filename})`);
+    log(`send_file: ${id} → ${to} (${filename})`);
+    return ok(`File sent to ${to} (id: ${id}, filename: ${filename})`);
   },
 };
 
 export const editMessage: McpToolDefinition = {
   tool: {
     name: 'edit_message',
-    description: 'Edit a previously sent message.',
+    description: 'Edit a previously sent message. Targets the same destination the original message was sent to.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -132,15 +151,18 @@ export const editMessage: McpToolDefinition = {
     const platformId = getMessageIdBySeq(seq);
     if (!platformId) return err(`Message #${seq} not found`);
 
-    const id = generateId();
-    const r = routing();
+    const routing = getRoutingBySeq(seq);
+    if (!routing || !routing.channel_type || !routing.platform_id) {
+      return err(`Cannot determine destination for message #${seq}`);
+    }
 
+    const id = generateId();
     writeMessageOut({
       id,
       kind: 'chat',
-      platform_id: r.platform_id,
-      channel_type: r.channel_type,
-      thread_id: r.thread_id,
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: routing.thread_id,
       content: JSON.stringify({ operation: 'edit', messageId: platformId, text }),
     });
 
@@ -170,15 +192,18 @@ export const addReaction: McpToolDefinition = {
     const platformId = getMessageIdBySeq(seq);
     if (!platformId) return err(`Message #${seq} not found`);
 
-    const id = generateId();
-    const r = routing();
+    const routing = getRoutingBySeq(seq);
+    if (!routing || !routing.channel_type || !routing.platform_id) {
+      return err(`Cannot determine destination for message #${seq}`);
+    }
 
+    const id = generateId();
     writeMessageOut({
       id,
       kind: 'chat',
-      platform_id: r.platform_id,
-      channel_type: r.channel_type,
-      thread_id: r.thread_id,
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: routing.thread_id,
       content: JSON.stringify({ operation: 'reaction', messageId: platformId, emoji }),
     });
 

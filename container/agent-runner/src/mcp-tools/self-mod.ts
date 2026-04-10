@@ -1,11 +1,13 @@
 /**
  * Self-modification MCP tools: install_packages, add_mcp_server, request_rebuild.
  *
- * These tools request changes to the agent's container configuration.
- * install_packages and request_rebuild require admin approval.
- * add_mcp_server takes effect on next container restart without approval.
+ * All three are fire-and-forget — the tool writes a system action row and
+ * returns immediately. The host processes the request (including admin
+ * approval) and notifies the agent via a chat message when complete.
+ *
+ * Package names are sanitized here at the tool boundary AND re-validated on
+ * the host side (defense in depth).
  */
-import { findQuestionResponse, markCompleted } from '../db/messages-in.js';
 import { writeMessageOut } from '../db/messages-out.js';
 import type { McpToolDefinition } from './types.js';
 
@@ -25,37 +27,20 @@ function err(text: string) {
   return { content: [{ type: 'text' as const, text: `Error: ${text}` }], isError: true };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function pollForResponse(requestId: string, timeoutMs: number) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const response = findQuestionResponse(requestId);
-    if (response) {
-      const parsed = JSON.parse(response.content);
-      markCompleted([response.id]);
-      if (parsed.status === 'success') {
-        return ok(JSON.stringify(parsed.result || 'Success'));
-      }
-      return err(parsed.result?.error || parsed.selectedOption || 'Request denied');
-    }
-    await sleep(2000);
-  }
-  return err(`Request timed out after ${timeoutMs / 1000}s`);
-}
+const APT_RE = /^[a-z0-9][a-z0-9._+-]*$/;
+const NPM_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const MAX_PACKAGES = 20;
 
 export const installPackages: McpToolDefinition = {
   tool: {
     name: 'install_packages',
     description:
-      'Request installation of system (apt) or Node.js (npm) packages in the container. Requires admin approval. Takes effect after container rebuild.',
+      'Request installation of apt or npm packages. Requires admin approval. Fire-and-forget: you will receive a notification when the request is approved or rejected. After approval, call request_rebuild to apply the changes.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        apt: { type: 'array', items: { type: 'string' }, description: 'apt packages to install' },
-        npm: { type: 'array', items: { type: 'string' }, description: 'npm packages to install globally' },
+        apt: { type: 'array', items: { type: 'string' }, description: 'apt packages to install (names only, no version specs or flags)' },
+        npm: { type: 'array', items: { type: 'string' }, description: 'npm packages to install globally (names only, no version specs)' },
         reason: { type: 'string', description: 'Why these packages are needed' },
       },
     },
@@ -64,6 +49,12 @@ export const installPackages: McpToolDefinition = {
     const apt = (args.apt as string[]) || [];
     const npm = (args.npm as string[]) || [];
     if (apt.length === 0 && npm.length === 0) return err('At least one apt or npm package is required');
+    if (apt.length + npm.length > MAX_PACKAGES) return err(`Maximum ${MAX_PACKAGES} packages per request`);
+
+    const invalidApt = apt.find((p) => !APT_RE.test(p));
+    if (invalidApt) return err(`Invalid apt package name: "${invalidApt}". Only lowercase letters, digits, and ._+- allowed.`);
+    const invalidNpm = npm.find((p) => !NPM_RE.test(p));
+    if (invalidNpm) return err(`Invalid npm package name: "${invalidNpm}". No version specs or shell characters.`);
 
     const requestId = generateId();
     writeMessageOut({
@@ -71,7 +62,6 @@ export const installPackages: McpToolDefinition = {
       kind: 'system',
       content: JSON.stringify({
         action: 'install_packages',
-        requestId,
         apt,
         npm,
         reason: (args.reason as string) || '',
@@ -79,7 +69,7 @@ export const installPackages: McpToolDefinition = {
     });
 
     log(`install_packages: ${requestId} → apt=[${apt.join(',')}] npm=[${npm.join(',')}]`);
-    return await pollForResponse(requestId, 300_000);
+    return ok(`Package install request submitted. You will be notified when admin approves or rejects.`);
   },
 };
 
@@ -87,7 +77,7 @@ export const addMcpServer: McpToolDefinition = {
   tool: {
     name: 'add_mcp_server',
     description:
-      "Add an MCP server to this agent's configuration. Takes effect on next container restart (no rebuild needed, no approval required).",
+      "Request adding an MCP server to this agent's configuration. Requires admin approval. Fire-and-forget: you will be notified when approved/rejected. On approval, your container restarts with the new server.",
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -110,7 +100,6 @@ export const addMcpServer: McpToolDefinition = {
       kind: 'system',
       content: JSON.stringify({
         action: 'add_mcp_server',
-        requestId,
         name,
         command,
         args: (args.args as string[]) || [],
@@ -119,7 +108,7 @@ export const addMcpServer: McpToolDefinition = {
     });
 
     log(`add_mcp_server: ${requestId} → "${name}" (${command})`);
-    return await pollForResponse(requestId, 30_000);
+    return ok(`MCP server request submitted. You will be notified when admin approves or rejects.`);
   },
 };
 
@@ -127,7 +116,7 @@ export const requestRebuild: McpToolDefinition = {
   tool: {
     name: 'request_rebuild',
     description:
-      'Request a container rebuild to apply pending package installations. Requires admin approval. The current container will be stopped and restarted with the new image.',
+      'Request a container rebuild to apply pending package installations. Requires admin approval. Fire-and-forget: you will be notified when approved/rejected. On approval, your container restarts with the new image on the next message.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -142,13 +131,12 @@ export const requestRebuild: McpToolDefinition = {
       kind: 'system',
       content: JSON.stringify({
         action: 'request_rebuild',
-        requestId,
         reason: (args.reason as string) || '',
       }),
     });
 
     log(`request_rebuild: ${requestId}`);
-    return await pollForResponse(requestId, 300_000);
+    return ok(`Rebuild request submitted. You will be notified when admin approves or rejects.`);
   },
 };
 

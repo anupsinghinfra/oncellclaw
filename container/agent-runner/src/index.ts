@@ -26,6 +26,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { buildSystemPromptAddendum, loadDestinations } from './destinations.js';
 import { createProvider, type ProviderName } from './providers/factory.js';
 import { runPollLoop } from './poll-loop.js';
 
@@ -44,12 +45,17 @@ async function main(): Promise<void> {
 
   const provider = createProvider(providerName, { assistantName });
 
-  // Load global CLAUDE.md as additional system context
+  // Load destination map (written by host on every wake)
+  loadDestinations();
+
+  // Load global CLAUDE.md as additional system context, then append destinations addendum
   let systemPrompt: string | undefined;
   if (fs.existsSync(GLOBAL_CLAUDE_MD)) {
     systemPrompt = fs.readFileSync(GLOBAL_CLAUDE_MD, 'utf-8');
     log('Loaded global CLAUDE.md');
   }
+  const addendum = buildSystemPromptAddendum();
+  systemPrompt = systemPrompt ? `${systemPrompt}\n\n${addendum}` : addendum;
 
   // Discover additional directories mounted at /workspace/extra/*
   const additionalDirectories: string[] = [];

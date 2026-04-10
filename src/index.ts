@@ -22,8 +22,8 @@ import {
   getSession,
 } from './db/sessions.js';
 import { getAgentGroup, updateAgentGroup } from './db/agent-groups.js';
-import { writeSessionMessage, writeSystemResponse } from './session-manager.js';
-import { wakeContainer, buildAgentGroupImage } from './container-runner.js';
+import { writeSessionMessage } from './session-manager.js';
+import { wakeContainer, buildAgentGroupImage, killContainer } from './container-runner.js';
 import { log } from './log.js';
 
 // Channel barrel — each enabled channel self-registers on import.
@@ -177,7 +177,12 @@ async function handleQuestionResponse(questionId: string, selectedOption: string
   await wakeContainer(session);
 }
 
-/** Handle an admin's response to an approval card. */
+/**
+ * Handle an admin's response to an approval card.
+ * Fire-and-forget model: the agent doesn't poll for this — we write a chat
+ * notification to its session DB, and optionally kill the container so the
+ * next wake picks up new config/images.
+ */
 async function handleApprovalResponse(
   approval: import('./types.js').PendingApproval,
   selectedOption: string,
@@ -189,52 +194,69 @@ async function handleApprovalResponse(
     return;
   }
 
-  if (selectedOption === 'Approve') {
-    const payload = JSON.parse(approval.payload);
-
-    if (approval.action === 'install_packages') {
-      const agentGroup = getAgentGroup(session.agent_group_id);
-      const containerConfig = agentGroup?.container_config ? JSON.parse(agentGroup.container_config) : {};
-      if (!containerConfig.packages) containerConfig.packages = { apt: [], npm: [] };
-      if (payload.apt) containerConfig.packages.apt.push(...payload.apt);
-      if (payload.npm) containerConfig.packages.npm.push(...payload.npm);
-
-      updateAgentGroup(session.agent_group_id, { container_config: JSON.stringify(containerConfig) });
-
-      writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'success', {
-        message: 'Packages approved. Run request_rebuild to apply.',
-        approved: { apt: payload.apt, npm: payload.npm },
-      });
-
-      log.info('Package install approved', { approvalId: approval.approval_id, userId });
-    } else if (approval.action === 'request_rebuild') {
-      try {
-        await buildAgentGroupImage(session.agent_group_id);
-        writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'success', {
-          message: 'Container image rebuilt. Changes will take effect on next container start.',
-        });
-        log.info('Container rebuild approved and completed', { approvalId: approval.approval_id, userId });
-      } catch (e) {
-        writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'error', {
-          error: `Rebuild failed: ${e instanceof Error ? e.message : String(e)}`,
-        });
-        log.error('Container rebuild failed', { approvalId: approval.approval_id, err: e });
-      }
-    }
-  } else {
-    // Rejected
-    writeSystemResponse(session.agent_group_id, session.id, approval.request_id, 'error', {
-      error: `Request rejected by admin (${userId})`,
+  const notify = (text: string): void => {
+    writeSessionMessage(session.agent_group_id, session.id, {
+      id: `appr-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      platformId: session.agent_group_id,
+      channelType: 'agent',
+      threadId: null,
+      content: JSON.stringify({ text, sender: 'system', senderId: 'system' }),
     });
+  };
+
+  if (selectedOption !== 'Approve') {
+    notify(`Your ${approval.action} request was rejected by admin.`);
     log.info('Approval rejected', { approvalId: approval.approval_id, action: approval.action, userId });
+    deletePendingApproval(approval.approval_id);
+    await wakeContainer(session);
+    return;
+  }
+
+  const payload = JSON.parse(approval.payload);
+
+  if (approval.action === 'install_packages') {
+    const agentGroup = getAgentGroup(session.agent_group_id);
+    const containerConfig = agentGroup?.container_config ? JSON.parse(agentGroup.container_config) : {};
+    if (!containerConfig.packages) containerConfig.packages = { apt: [], npm: [] };
+    if (payload.apt) containerConfig.packages.apt.push(...payload.apt);
+    if (payload.npm) containerConfig.packages.npm.push(...payload.npm);
+    updateAgentGroup(session.agent_group_id, { container_config: JSON.stringify(containerConfig) });
+
+    const pkgs = [...(payload.apt || []), ...(payload.npm || [])].join(', ');
+    notify(`Packages approved (${pkgs}). Call request_rebuild to apply them.`);
+    log.info('Package install approved', { approvalId: approval.approval_id, userId });
+  } else if (approval.action === 'request_rebuild') {
+    try {
+      await buildAgentGroupImage(session.agent_group_id);
+      // Kill the container so the next wake uses the new image
+      killContainer(session.id, 'rebuild applied');
+      notify('Container image rebuilt. Your container will restart with the new image on the next message.');
+      log.info('Container rebuild approved and completed', { approvalId: approval.approval_id, userId });
+    } catch (e) {
+      notify(`Rebuild failed: ${e instanceof Error ? e.message : String(e)}`);
+      log.error('Container rebuild failed', { approvalId: approval.approval_id, err: e });
+    }
+  } else if (approval.action === 'add_mcp_server') {
+    const agentGroup = getAgentGroup(session.agent_group_id);
+    const containerConfig = agentGroup?.container_config ? JSON.parse(agentGroup.container_config) : {};
+    if (!containerConfig.mcpServers) containerConfig.mcpServers = {};
+    containerConfig.mcpServers[payload.name] = {
+      command: payload.command,
+      args: payload.args || [],
+      env: payload.env || {},
+    };
+    updateAgentGroup(session.agent_group_id, { container_config: JSON.stringify(containerConfig) });
+
+    // Kill the container so next wake loads the new MCP server config
+    killContainer(session.id, 'mcp server added');
+    notify(`MCP server "${payload.name}" added. Your container will restart with it on the next message.`);
+    log.info('MCP server add approved', { approvalId: approval.approval_id, userId });
   }
 
   deletePendingApproval(approval.approval_id);
-
-  // Wake container so the agent's polling MCP tool picks up the response
-  if (session) {
-    await wakeContainer(session);
-  }
+  await wakeContainer(session);
 }
 
 /** Graceful shutdown. */

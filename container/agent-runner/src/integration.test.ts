@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
+import { setDestinationsForTest } from './destinations.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { getPendingMessages } from './db/messages-in.js';
 import { MockProvider } from './providers/mock.js';
@@ -8,10 +9,21 @@ import { runPollLoop } from './poll-loop.js';
 
 beforeEach(() => {
   initTestSessionDb();
+  // Provide a test destination map so output parsing can resolve "discord-test" → routing
+  setDestinationsForTest([
+    {
+      name: 'discord-test',
+      displayName: 'Discord Test',
+      type: 'channel',
+      channelType: 'discord',
+      platformId: 'chan-1',
+    },
+  ]);
 });
 
 afterEach(() => {
   closeSessionDb();
+  setDestinationsForTest([]);
 });
 
 function insertMessage(id: string, content: object, opts?: { platformId?: string; channelType?: string; threadId?: string }) {
@@ -27,7 +39,7 @@ describe('poll loop integration', () => {
   it('should pick up a message, process it, and write a response', async () => {
     insertMessage('m1', { sender: 'Alice', text: 'What is the meaning of life?' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' });
 
-    const provider = new MockProvider(() => '42');
+    const provider = new MockProvider(() => '<message to="discord-test">42</message>');
 
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
@@ -40,7 +52,6 @@ describe('poll loop integration', () => {
     expect(JSON.parse(out[0].content).text).toBe('42');
     expect(out[0].platform_id).toBe('chan-1');
     expect(out[0].channel_type).toBe('discord');
-    expect(out[0].thread_id).toBe('thread-1');
     expect(out[0].in_reply_to).toBe('m1');
 
     // Input message should be acked (not pending)
@@ -54,7 +65,7 @@ describe('poll loop integration', () => {
     insertMessage('m1', { sender: 'Alice', text: 'Hello' });
     insertMessage('m2', { sender: 'Bob', text: 'World' });
 
-    const provider = new MockProvider(() => 'Got both messages');
+    const provider = new MockProvider(() => '<message to="discord-test">Got both messages</message>');
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
 
@@ -69,7 +80,7 @@ describe('poll loop integration', () => {
   });
 
   it('should process messages arriving after loop starts', async () => {
-    const provider = new MockProvider(() => 'Processed');
+    const provider = new MockProvider(() => '<message to="discord-test">Processed</message>');
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 3000);
 

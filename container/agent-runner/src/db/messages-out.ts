@@ -103,6 +103,25 @@ export function getMessageIdBySeq(seq: number): string | null {
   return outRow.id;
 }
 
+/**
+ * Look up the routing fields for a message by seq (for edit/reaction targeting).
+ * Returns the channel_type, platform_id, thread_id of the referenced message.
+ */
+export function getRoutingBySeq(
+  seq: number,
+): { channel_type: string | null; platform_id: string | null; thread_id: string | null } | null {
+  const inbound = getInboundDb();
+  const inRow = inbound
+    .prepare('SELECT channel_type, platform_id, thread_id FROM messages_in WHERE seq = ?')
+    .get(seq) as { channel_type: string | null; platform_id: string | null; thread_id: string | null } | undefined;
+  if (inRow) return inRow;
+
+  const outRow = getOutboundDb()
+    .prepare('SELECT channel_type, platform_id, thread_id FROM messages_out WHERE seq = ?')
+    .get(seq) as { channel_type: string | null; platform_id: string | null; thread_id: string | null } | undefined;
+  return outRow ?? null;
+}
+
 /** Get undelivered messages (for host polling — reads from outbound.db). */
 export function getUndeliveredMessages(): MessageOutRow[] {
   return getOutboundDb()

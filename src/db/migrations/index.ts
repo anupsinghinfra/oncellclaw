@@ -4,6 +4,7 @@ import { log } from '../../log.js';
 import { migration001 } from './001-initial.js';
 import { migration002 } from './002-chat-sdk-state.js';
 import { migration003 } from './003-pending-approvals.js';
+import { migration004 } from './004-agent-destinations.js';
 
 export interface Migration {
   version: number;
@@ -11,7 +12,7 @@ export interface Migration {
   up: (db: Database.Database) => void;
 }
 
-const migrations: Migration[] = [migration001, migration002, migration003];
+const migrations: Migration[] = [migration001, migration002, migration003, migration004];
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`

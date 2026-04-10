@@ -62,7 +62,7 @@ describe('migrations', () => {
     const db = initTestDb();
     runMigrations(db);
     const row = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
-    expect(row.v).toBe(3);
+    expect(row.v).toBe(4);
   });
 });
 

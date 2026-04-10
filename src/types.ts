@@ -99,3 +99,13 @@ export interface PendingApproval {
   payload: string; // JSON
   created_at: string;
 }
+
+// ── Agent destinations (central DB) ──
+
+export interface AgentDestination {
+  agent_group_id: string;
+  local_name: string;
+  target_type: 'channel' | 'agent';
+  target_id: string;
+  created_at: string;
+}

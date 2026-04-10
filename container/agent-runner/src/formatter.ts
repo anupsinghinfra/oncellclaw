@@ -1,3 +1,4 @@
+import { findByRouting } from './destinations.js';
 import type { MessageInRow } from './db/messages-in.js';
 
 /**
@@ -123,7 +124,19 @@ function formatSingleChat(msg: MessageInRow): string {
   const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
   const replyPrefix = formatReplyContext(content.replyTo);
   const attachmentsSuffix = formatAttachments(content.attachments);
-  return `<message${idAttr} sender="${escapeXml(sender)}" time="${time}">${replyPrefix}${escapeXml(text)}${attachmentsSuffix}</message>`;
+
+  // Look up the destination name for the origin (reverse map lookup).
+  // If not found, fall back to a raw channel:platform_id marker so nothing
+  // gets silently dropped — this should only happen if the destination was
+  // removed between when the message was received and when it's being processed.
+  const fromDest = findByRouting(msg.channel_type, msg.platform_id);
+  const fromAttr = fromDest
+    ? ` from="${escapeXml(fromDest.name)}"`
+    : msg.channel_type || msg.platform_id
+      ? ` from="unknown:${escapeXml(msg.channel_type || '')}:${escapeXml(msg.platform_id || '')}"`
+      : '';
+
+  return `<message${idAttr}${fromAttr} sender="${escapeXml(sender)}" time="${time}">${replyPrefix}${escapeXml(text)}${attachmentsSuffix}</message>`;
 }
 
 function formatTaskMessage(msg: MessageInRow): string {

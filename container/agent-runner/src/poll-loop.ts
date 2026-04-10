@@ -1,3 +1,4 @@
+import { findByName } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
@@ -143,9 +144,6 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     log(`Processing ${normalMessages.length} message(s), kinds: ${[...new Set(normalMessages.map((m) => m.kind))].join(',')}`);
 
-    // Set routing context as env vars for MCP tools
-    setRoutingEnv(routing, config.env);
-
     const query = config.provider.query({
       prompt,
       sessionId,
@@ -247,9 +245,6 @@ async function processQuery(query: AgentQuery, routing: RoutingContext, config: 
       log(`Pushing ${newMessages.length} follow-up message(s) into active query`);
       query.push(prompt);
 
-      const newRouting = extractRouting(newMessages);
-      setRoutingEnv(newRouting, config.env);
-
       markCompleted(newIds);
       lastEventTime = Date.now(); // new input counts as activity
     }
@@ -270,15 +265,7 @@ async function processQuery(query: AgentQuery, routing: RoutingContext, config: 
       if (event.type === 'init') {
         querySessionId = event.sessionId;
       } else if (event.type === 'result' && event.text) {
-        writeMessageOut({
-          id: generateId(),
-          in_reply_to: routing.inReplyTo,
-          kind: routing.channelType ? 'chat' : 'chat',
-          platform_id: routing.platformId,
-          channel_type: routing.channelType,
-          thread_id: routing.threadId,
-          content: JSON.stringify({ text: event.text }),
-        });
+        dispatchResultText(event.text, routing);
       }
     }
   } finally {
@@ -306,10 +293,66 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
   }
 }
 
-function setRoutingEnv(routing: RoutingContext, env: Record<string, string | undefined>): void {
-  env.NANOCLAW_PLATFORM_ID = routing.platformId ?? undefined;
-  env.NANOCLAW_CHANNEL_TYPE = routing.channelType ?? undefined;
-  env.NANOCLAW_THREAD_ID = routing.threadId ?? undefined;
+/**
+ * Parse the agent's final text for <message to="name">...</message> blocks
+ * and dispatch each one to its resolved destination. Text outside of blocks
+ * (including <internal>...</internal>) is scratchpad — logged but not sent.
+ *
+ * If the agent emits zero <message> blocks AND non-empty text, log a warning:
+ * the agent produced output with no recipient. That's usually a bug in the
+ * agent — the system prompt tells it to wrap user-visible text in blocks.
+ */
+function dispatchResultText(text: string, routing: RoutingContext): void {
+  const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
+
+  let match: RegExpExecArray | null;
+  let sent = 0;
+  let lastIndex = 0;
+  const scratchpadParts: string[] = [];
+
+  while ((match = MESSAGE_RE.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      scratchpadParts.push(text.slice(lastIndex, match.index));
+    }
+    const toName = match[1];
+    const body = match[2].trim();
+    lastIndex = MESSAGE_RE.lastIndex;
+
+    const dest = findByName(toName);
+    if (!dest) {
+      log(`Unknown destination in <message to="${toName}">, dropping block`);
+      scratchpadParts.push(`[dropped: unknown destination "${toName}"] ${body}`);
+      continue;
+    }
+
+    const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
+    const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
+    writeMessageOut({
+      id: generateId(),
+      in_reply_to: routing.inReplyTo,
+      kind: 'chat',
+      platform_id: platformId,
+      channel_type: channelType,
+      thread_id: null,
+      content: JSON.stringify({ text: body }),
+    });
+    sent++;
+  }
+  if (lastIndex < text.length) {
+    scratchpadParts.push(text.slice(lastIndex));
+  }
+
+  const scratchpad = scratchpadParts
+    .join('')
+    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+    .trim();
+  if (scratchpad) {
+    log(`[scratchpad] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`);
+  }
+
+  if (sent === 0 && text.trim()) {
+    log(`WARNING: agent output had no <message to="..."> blocks — nothing was sent`);
+  }
 }
 
 function sleep(ms: number): Promise<void> {
