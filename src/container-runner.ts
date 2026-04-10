@@ -20,7 +20,7 @@ import {
   markContainerRunning,
   markContainerStopped,
   sessionDir,
-  writeDestinationsFile,
+  writeDestinations,
 } from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
 
@@ -59,8 +59,8 @@ export async function wakeContainer(session: Session): Promise<void> {
     return;
   }
 
-  // Refresh the destination map file so any admin changes take effect on wake
-  writeDestinationsFile(agentGroup.id, session.id);
+  // Refresh the destination map so any admin changes take effect on wake
+  writeDestinations(agentGroup.id, session.id);
 
   const mounts = buildMounts(agentGroup, session);
   const containerName = `nanoclaw-v2-${agentGroup.folder}-${Date.now()}`;

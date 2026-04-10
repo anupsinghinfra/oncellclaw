@@ -35,6 +35,7 @@ import {
   sessionDir,
   inboundDbPath,
   resolveSession,
+  writeDestinations,
   writeSessionMessage,
   writeSystemResponse,
 } from './session-manager.js';
@@ -610,6 +611,10 @@ async function handleSystemAction(
         target_id: sourceGroup.id,
         created_at: now,
       });
+
+      // Refresh the creator's destination map so the new child appears
+      // immediately on the next query — no restart needed.
+      writeDestinations(session.agent_group_id, session.id);
 
       // Fire-and-forget notification back to the creator
       notifyAgent(

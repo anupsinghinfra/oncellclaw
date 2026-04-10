@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
-import { setDestinationsForTest } from './destinations.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { getPendingMessages } from './db/messages-in.js';
 import { MockProvider } from './providers/mock.js';
@@ -9,21 +8,17 @@ import { runPollLoop } from './poll-loop.js';
 
 beforeEach(() => {
   initTestSessionDb();
-  // Provide a test destination map so output parsing can resolve "discord-test" → routing
-  setDestinationsForTest([
-    {
-      name: 'discord-test',
-      displayName: 'Discord Test',
-      type: 'channel',
-      channelType: 'discord',
-      platformId: 'chan-1',
-    },
-  ]);
+  // Seed a destination so output parsing can resolve "discord-test" → routing
+  getInboundDb()
+    .prepare(
+      `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+       VALUES ('discord-test', 'Discord Test', 'channel', 'discord', 'chan-1', NULL)`,
+    )
+    .run();
 });
 
 afterEach(() => {
   closeSessionDb();
-  setDestinationsForTest([]);
 });
 
 function insertMessage(id: string, content: object, opts?: { platformId?: string; channelType?: string; threadId?: string }) {

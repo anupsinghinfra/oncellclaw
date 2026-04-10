@@ -76,7 +76,7 @@ CREATE TABLE pending_questions (
  *   outbound.db — container writes, host reads (read-only open)
  */
 
-/** Host-owned: inbound messages + delivery tracking. */
+/** Host-owned: inbound messages + delivery tracking + destination map. */
 export const INBOUND_SCHEMA = `
 CREATE TABLE messages_in (
   id             TEXT PRIMARY KEY,
@@ -100,6 +100,19 @@ CREATE TABLE delivered (
   platform_message_id TEXT,
   status              TEXT NOT NULL DEFAULT 'delivered',
   delivered_at        TEXT NOT NULL
+);
+
+-- Destination map for this session's agent.
+-- Host overwrites on every container wake AND on demand (admin rewires, new child agents, etc.).
+-- Container queries this live on every lookup, so admin changes take effect
+-- mid-session without requiring a container restart.
+CREATE TABLE destinations (
+  name            TEXT PRIMARY KEY,
+  display_name    TEXT,
+  type            TEXT NOT NULL,   -- 'channel' | 'agent'
+  channel_type    TEXT,            -- for type='channel'
+  platform_id     TEXT,            -- for type='channel'
+  agent_group_id  TEXT             -- for type='agent'
 );
 `;
 

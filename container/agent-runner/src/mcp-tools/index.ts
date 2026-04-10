@@ -9,7 +9,6 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-import { loadDestinations } from '../destinations.js';
 import type { McpToolDefinition } from './types.js';
 import { coreTools } from './core.js';
 import { schedulingTools } from './scheduling.js';
@@ -20,10 +19,6 @@ import { selfModTools } from './self-mod.js';
 function log(msg: string): void {
   console.error(`[mcp-tools] ${msg}`);
 }
-
-// Load the destination map — this process is spawned fresh for each container
-// wake, so the map file is always fresh (written by the host before spawn).
-loadDestinations();
 
 // Only admin agents get the create_agent tool. Non-admins never see it in the
 // listTools response; the host also re-checks permission on receive as defense

@@ -26,7 +26,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { buildSystemPromptAddendum, loadDestinations } from './destinations.js';
+import { buildSystemPromptAddendum } from './destinations.js';
 import { createProvider, type ProviderName } from './providers/factory.js';
 import { runPollLoop } from './poll-loop.js';
 
@@ -44,9 +44,6 @@ async function main(): Promise<void> {
   log(`Starting v2 agent-runner (provider: ${providerName})`);
 
   const provider = createProvider(providerName, { assistantName });
-
-  // Load destination map (written by host on every wake)
-  loadDestinations();
 
   // Load global CLAUDE.md as additional system context, then append destinations addendum
   let systemPrompt: string | undefined;

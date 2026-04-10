@@ -95,6 +95,14 @@ export function initTestSessionDb(): { inbound: Database.Database; outbound: Dat
       status              TEXT NOT NULL DEFAULT 'delivered',
       delivered_at        TEXT NOT NULL
     );
+    CREATE TABLE destinations (
+      name            TEXT PRIMARY KEY,
+      display_name    TEXT,
+      type            TEXT NOT NULL,
+      channel_type    TEXT,
+      platform_id     TEXT,
+      agent_group_id  TEXT
+    );
   `);
 
   _outbound = new Database(':memory:');

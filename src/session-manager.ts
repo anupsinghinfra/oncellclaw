@@ -132,43 +132,73 @@ export function initSessionFolder(agentGroupId: string, sessionId: string): void
 }
 
 /**
- * Write the destination map file into the session folder.
- * Called before every container wake so admin changes take effect on next start.
- * The container loads this at startup to know what destinations exist.
+ * Write the session's destination map into its inbound.db `destinations` table.
+ *
+ * Called before every container wake so admin changes take effect on next start —
+ * but the container also re-queries on demand, so mid-session admin changes
+ * (e.g. spawning a new child agent) can also call this to push the new map
+ * without restarting the container.
+ *
+ * Uses DELETE + INSERT in a transaction for a clean overwrite.
  */
-export function writeDestinationsFile(agentGroupId: string, sessionId: string): void {
-  const dir = sessionDir(agentGroupId, sessionId);
-  if (!fs.existsSync(dir)) return;
+export function writeDestinations(agentGroupId: string, sessionId: string): void {
+  const dbPath = inboundDbPath(agentGroupId, sessionId);
+  if (!fs.existsSync(dbPath)) return;
 
   const rows = getDestinations(agentGroupId);
-  const destinations: Array<Record<string, unknown>> = [];
+  type DestRow = {
+    name: string;
+    display_name: string | null;
+    type: 'channel' | 'agent';
+    channel_type: string | null;
+    platform_id: string | null;
+    agent_group_id: string | null;
+  };
+  const resolved: DestRow[] = [];
 
   for (const row of rows) {
     if (row.target_type === 'channel') {
       const mg = getMessagingGroup(row.target_id);
       if (!mg) continue;
-      destinations.push({
+      resolved.push({
         name: row.local_name,
-        displayName: mg.name ?? row.local_name,
+        display_name: mg.name ?? row.local_name,
         type: 'channel',
-        channelType: mg.channel_type,
-        platformId: mg.platform_id,
+        channel_type: mg.channel_type,
+        platform_id: mg.platform_id,
+        agent_group_id: null,
       });
     } else if (row.target_type === 'agent') {
       const ag = getAgentGroup(row.target_id);
       if (!ag) continue;
-      destinations.push({
+      resolved.push({
         name: row.local_name,
-        displayName: ag.name,
+        display_name: ag.name,
         type: 'agent',
-        agentGroupId: ag.id,
+        channel_type: null,
+        platform_id: null,
+        agent_group_id: ag.id,
       });
     }
   }
 
-  const filePath = path.join(dir, '.nanoclaw-destinations.json');
-  fs.writeFileSync(filePath, JSON.stringify({ destinations }, null, 2));
-  log.debug('Destination map written', { sessionId, count: destinations.length });
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = DELETE');
+  db.pragma('busy_timeout = 5000');
+  try {
+    const tx = db.transaction((entries: DestRow[]) => {
+      db.prepare('DELETE FROM destinations').run();
+      const stmt = db.prepare(
+        `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+         VALUES (@name, @display_name, @type, @channel_type, @platform_id, @agent_group_id)`,
+      );
+      for (const e of entries) stmt.run(e);
+    });
+    tx(resolved);
+  } finally {
+    db.close();
+  }
+  log.debug('Destination map written', { sessionId, count: resolved.length });
 }
 
 /** Write a message to a session's inbound DB (messages_in). Host-only. */

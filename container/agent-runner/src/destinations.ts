@@ -1,11 +1,16 @@
 /**
- * Destination map loaded at container startup from
- * /workspace/.nanoclaw-destinations.json (written by the host on wake).
+ * Destination map — lives in inbound.db's `destinations` table.
  *
- * The map is BOTH the routing table and the ACL — if a name/target
- * isn't in here, the agent can't reach it.
+ * The host writes this table before every container wake AND on demand
+ * (e.g. when a new child agent is created mid-session). The container
+ * queries the table live on every lookup, so admin changes take effect
+ * immediately — no restart required.
+ *
+ * This table is BOTH the routing map and the container-visible ACL.
+ * The host re-validates on the delivery side against the central DB,
+ * so even if this table is stale the host's enforcement is authoritative.
  */
-import fs from 'fs';
+import { getInboundDb } from './db/connection.js';
 
 export interface DestinationEntry {
   name: string;
@@ -16,36 +21,34 @@ export interface DestinationEntry {
   agentGroupId?: string;
 }
 
-const DEST_FILE = '/workspace/.nanoclaw-destinations.json';
+interface DestRow {
+  name: string;
+  display_name: string | null;
+  type: 'channel' | 'agent';
+  channel_type: string | null;
+  platform_id: string | null;
+  agent_group_id: string | null;
+}
 
-let cache: DestinationEntry[] = [];
-
-export function loadDestinations(): void {
-  try {
-    if (!fs.existsSync(DEST_FILE)) {
-      cache = [];
-      return;
-    }
-    const raw = fs.readFileSync(DEST_FILE, 'utf-8');
-    const parsed = JSON.parse(raw) as { destinations?: DestinationEntry[] };
-    cache = Array.isArray(parsed.destinations) ? parsed.destinations : [];
-  } catch (err) {
-    console.error(`[destinations] Failed to load: ${err instanceof Error ? err.message : String(err)}`);
-    cache = [];
-  }
+function rowToEntry(row: DestRow): DestinationEntry {
+  return {
+    name: row.name,
+    displayName: row.display_name ?? row.name,
+    type: row.type,
+    channelType: row.channel_type ?? undefined,
+    platformId: row.platform_id ?? undefined,
+    agentGroupId: row.agent_group_id ?? undefined,
+  };
 }
 
 export function getAllDestinations(): DestinationEntry[] {
-  return cache;
-}
-
-/** Test-only: inject destinations without touching the filesystem. */
-export function setDestinationsForTest(destinations: DestinationEntry[]): void {
-  cache = destinations;
+  const rows = getInboundDb().prepare('SELECT * FROM destinations ORDER BY name').all() as DestRow[];
+  return rows.map(rowToEntry);
 }
 
 export function findByName(name: string): DestinationEntry | undefined {
-  return cache.find((d) => d.name === name);
+  const row = getInboundDb().prepare('SELECT * FROM destinations WHERE name = ?').get(name) as DestRow | undefined;
+  return row ? rowToEntry(row) : undefined;
 }
 
 /**
@@ -57,15 +60,23 @@ export function findByRouting(
   platformId: string | null | undefined,
 ): DestinationEntry | undefined {
   if (!channelType || !platformId) return undefined;
-  if (channelType === 'agent') {
-    return cache.find((d) => d.type === 'agent' && d.agentGroupId === platformId);
-  }
-  return cache.find((d) => d.type === 'channel' && d.channelType === channelType && d.platformId === platformId);
+  const db = getInboundDb();
+  const row =
+    channelType === 'agent'
+      ? (db
+          .prepare("SELECT * FROM destinations WHERE type = 'agent' AND agent_group_id = ?")
+          .get(platformId) as DestRow | undefined)
+      : (db
+          .prepare("SELECT * FROM destinations WHERE type = 'channel' AND channel_type = ? AND platform_id = ?")
+          .get(channelType, platformId) as DestRow | undefined);
+  return row ? rowToEntry(row) : undefined;
 }
 
 /** Generate the system-prompt addendum describing destinations and syntax. */
 export function buildSystemPromptAddendum(): string {
-  if (cache.length === 0) {
+  const all = getAllDestinations();
+
+  if (all.length === 0) {
     return [
       '## Sending messages',
       '',
@@ -74,9 +85,8 @@ export function buildSystemPromptAddendum(): string {
   }
 
   // Single-destination shortcut: the agent just writes its response normally.
-  // No wrapping needed. This preserves the simple case (one user, one channel).
-  if (cache.length === 1) {
-    const d = cache[0];
+  if (all.length === 1) {
+    const d = all[0];
     const label = d.displayName && d.displayName !== d.name ? ` (${d.displayName})` : '';
     return [
       '## Sending messages',
@@ -90,7 +100,7 @@ export function buildSystemPromptAddendum(): string {
   }
 
   const lines = ['## Sending messages', '', 'You can send messages to the following destinations:', ''];
-  for (const d of cache) {
+  for (const d of all) {
     const label = d.displayName && d.displayName !== d.name ? ` (${d.displayName})` : '';
     lines.push(`- \`${d.name}\`${label}`);
   }
