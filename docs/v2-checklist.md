@@ -61,7 +61,39 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Agent-shared session mode (cross-channel shared sessions, e.g. GitHub + Slack)
 - [x] Auto-onboarding on channel registration (/welcome skill triggered on first wiring)
 - [ ] Setup vs production channel separation
-- [ ] Generate visual diagram of customized instance at end of setup
+
+## Chat-First Setup Flow
+
+**Goal:** get the user out of Claude Code and into their messaging app as quickly as possible, then enable every part of customization, configuration, and setup from inside the chat app. Claude Code is the bootstrap, not the home.
+
+- [ ] Minimum-viable bootstrap in Claude Code: install deps, pick one channel, authenticate it, wire it to a default agent group, hand off — nothing else required before the user can leave Claude Code
+- [ ] Post-handoff welcome message in the chat app guides the user through remaining setup (channels, skills, integrations, memory, scheduling, etc.)
+- [ ] Add more channels from chat (currently requires returning to Claude Code to run `/add-*` skills)
+- [ ] Authenticate channels from chat (OAuth/token entry via cards, no terminal required)
+- [ ] Wire channels to agent groups from chat (today lives in `/manage-channels` Claude Code skill — port to in-chat flow with isolation-level question cards)
+- [ ] Create new agent groups from chat (`create_agent` exists — expose via user-facing flow, not just agent-called tool)
+- [ ] Edit agent group CLAUDE.md / instructions from chat
+- [ ] Install / uninstall / configure skills from chat (see Skills & Marketplace section)
+- [ ] Install / configure MCP servers from chat (see Skills & Marketplace section)
+- [ ] Install packages from chat (today agent can request install_packages — expose a direct user-facing "install X" flow)
+- [ ] Manage scheduled tasks from chat (list, pause, cancel, edit recurrence)
+- [ ] Manage destinations from chat (list, rename, revoke)
+- [ ] Manage permissions from chat (admin list, role assignment, approval policies)
+- [ ] Trigger /setup, /debug, /customize, /migrate-nanoclaw from chat (today all require Claude Code)
+- [ ] View and edit memory from chat
+- [ ] Visualize current setup from chat (ties into Container Skills: installation diagram)
+- [ ] Export / share setup from chat (ties into Container Skills: end-of-setup diagram + share)
+- [ ] Fallback to Claude Code only when a change requires a code edit the agent can't self-apply (and even then, agent should offer to open Claude Code on the user's behalf)
+
+## Product Focus
+
+**North star:** prioritize skills, flows, and custom setups. Platform work (channels, routing, session DBs, approval flows, MCP tools) is plumbing — it should reach a "boring and reliable" state and then stop absorbing attention. The interesting surface area is what users can *build on top* of that plumbing: skills that add capabilities, conversational flows that orchestrate those skills, and custom per-user setups that compose channels/agents/skills/memory into something personal.
+
+- [ ] Every new feature request should be answered first with "is this a skill?" before being answered with "is this a platform change?"
+- [ ] Skills should be the primary extension mechanism users and agents reach for — adding, removing, browsing, editing, debugging
+- [ ] Flows (multi-step interactive sequences: setup, onboarding, migration, customize, debug) should be authorable as skills rather than hardcoded into the platform
+- [ ] Custom setups (diverging from defaults: multiple agents, cross-channel routing, per-group memory, specialist sub-agents) should be composable from existing primitives without touching core platform code
+- [ ] Platform-level work gets budgeted against the question: "does this unblock a class of skills/flows/setups that's otherwise impossible?"
 
 ## Routing
 
@@ -88,16 +120,20 @@ Status: [x] done, [~] partial, [ ] not started
 
 ## MCP Tools (Container)
 
-- [x] send_message (text, optional cross-channel targeting)
+- [x] send_message (routes via named destinations; `to` field resolved against agent's local map)
 - [x] send_file (copy to outbox, write messages_out)
-- [x] edit_message
-- [x] add_reaction
+- [x] edit_message (routed via destinations)
+- [x] add_reaction (routed via destinations)
 - [x] send_card
 - [x] ask_user_question (blocking poll for response)
 - [x] schedule_task (with process_after and recurrence)
 - [x] list_tasks
 - [x] cancel_task / pause_task / resume_task
-- [x] send_to_agent (writes message, routing incomplete)
+- [x] create_agent (admin-only, creates agent group + folder + bidirectional destinations)
+- [x] install_packages (apt/npm, admin approval required, strict name validation)
+- [x] add_mcp_server (admin approval required)
+- [x] request_rebuild (rebuilds per-agent-group Docker image)
+- ~~send_to_agent~~ — deleted; agents are just destinations in the unified `send_message`
 
 ## Scheduling
 
@@ -111,12 +147,19 @@ Status: [x] done, [~] partial, [ ] not started
 
 - [x] Admin user ID per group
 - [x] Admin-only command filtering in container
-- [ ] Approval flow (sensitive action -> card to admin -> approve/reject -> execute)
+- [x] Approval flow (sensitive action -> card to admin -> approve/reject -> execute) — `pending_approvals` table, `requestApproval()` helper, reuses interactive card infra
+- [x] Agent requests dependency/package install (install_packages, admin approval, rebuild on approval)
+- [x] Self-modification — direct tools:
+  - [x] install_packages (apt/npm, admin approval, name validation both sides, max 20 per request)
+  - [x] add_mcp_server (admin approval)
+  - [x] request_rebuild (builds per-agent-group Docker image with approved packages)
+  - [x] Fire-and-forget model (write request, return immediately; chat notification on approval; container killed so next wake picks up new config/image)
 - [ ] Role definitions beyond admin (custom roles, per-group permissions)
-- [ ] Configurable sensitive action list
+- [ ] Configurable sensitive action list (hardcoded today)
 - [ ] Non-main groups requesting sensitive actions
-- [ ] Agent requests dependency/package install (persists via Dockerfile change, requires approval)
-- [ ] Agent self-modification flow:
+- [ ] OneCLI integration for human-loop approvals on credentialed requests (agent touching a credentialed resource → OneCLI gates → approval card to admin → OneCLI releases credential)
+- [ ] Sensitive data access flow (agent requests PII / secrets / private files → approval card → scoped, time-limited access)
+- [ ] Self-modification via builder-agent delegation:
   - [ ] Agent requests code changes by delegating to a builder agent
   - [ ] Builder agent has write access to the requesting agent's code and Dockerfile
   - [ ] Approval modes: approve per-edit as builder works, or approve full diff at the end
@@ -124,14 +167,32 @@ Status: [x] done, [~] partial, [ ] not started
   - [ ] On approval: apply edits, rebuild container image, restart agent
   - [ ] On rejection: discard changes, notify requesting agent
 
+## Named Destinations + ACL
+
+- [x] `agent_destinations` table (agent_group_id, local_name, target_type, target_id) — migration 004
+- [x] Per-agent local-name routing map (channels and peer agents referenced by local names)
+- [x] Destinations stored in inbound.db `destinations` table (moved from JSON file in `b591d7c`) — single source of truth, no separate file
+- [x] Host writes the destination map into inbound.db before every container wake; container queries it live on every lookup so admin changes take effect mid-session
+- [x] Container loads map at startup, appends system-prompt addendum listing destinations + `<message to="name">` syntax
+- [x] Agent main output parsed for `<message to="...">` blocks; `<internal>...</internal>` treated as scratchpad
+- [x] Host re-validates every outbound route via `hasDestination()` — unauthorized drops logged
+- [x] Inbound formatter adds `from="name"` via reverse-lookup (consistent namespace both directions)
+- [x] Single-destination shortcut — agents with one destination don't need `<message>` wrapping
+- [x] Backfill from existing `messaging_group_agents` on migration
+- [x] Removed `NANOCLAW_PLATFORM_ID` / `CHANNEL_TYPE` / `THREAD_ID` env-var routing entirely
+
 ## Agent-to-Agent Communication
 
-- [~] send_to_agent MCP tool (writes message, host-side routing TODO)
-- [ ] Host delivery to target agent's session DB
-- [ ] Agent spawning a new sub-agent
-- [ ] Internal-only agents (no channel attached)
-- [ ] Permission delegation from parent to child agent
+- [x] Host delivery to target agent's session DB (`channel_type='agent'` routing in `src/delivery.ts`)
+- [x] Agent spawning a new sub-agent (`create_agent` MCP tool, admin-only, path-traversal guarded)
+- [x] Dynamic agent group creation (folder + optional CLAUDE.md at runtime)
+- [x] Internal-only agents (agents created without a channel attached)
+- [x] Permission delegation from parent to child (bidirectional destination rows inserted at creation)
+- [x] Bidirectional routing via inherited routing context; sender info enriched on the target side
 - [ ] Specialist sub-agents (browser agent, dev agent — user's agent delegates with request/approval)
+- [ ] Browser agent with per-destination permissions between main agent and browser agent (main requests navigation/interaction; browser agent executes in isolated container)
+- [ ] Sanitization of browser agent responses before handing back to main agent (strip scripts, inline images, untrusted HTML; prevent prompt injection from web content)
+- [ ] Same permission + sanitization model for any sub-agent that accesses sensitive data sources (files, DBs, third-party APIs)
 
 ## In-Chat Agent Management
 
@@ -143,6 +204,32 @@ Status: [x] done, [~] partial, [ ] not started
 - [ ] Smooth session transitions: load context into new sessions, solve cold start problem
 - [ ] MCP/package installation from chat
 - [ ] Browse MCP marketplace / skills repository from chat
+
+## Skills & Marketplace
+
+- [ ] Install skills from chat (agent requests, admin approves, skill dropped into container skills dir)
+- [ ] Scan skills before install (lint SKILL.md, sandbox-check shell commands, require approval for network/FS-heavy skills)
+- [ ] Scan marketplace npm packages before install (supply-chain check, typo-squat detection, known-bad list)
+- [ ] MCP server marketplace — discover, preview, install
+- [ ] Browse skills / MCP marketplace from chat (cards with search, preview, install)
+- [ ] Local voice transcription skill — "just works" install flow: when the user sends a voice message and no transcription backend is installed, the agent asks once ("Install local voice transcription?"), and on approval the skill installs a fully-local speech-to-text model (no cloud calls). Subsequent voice messages transcribe automatically.
+- [ ] Fully local NanoClaw — OpenCode + Gemma 4 as the agent provider instead of Claude Code, so an entire install can run with zero cloud inference. Requires wiring OpenCode as an agent provider (see Agent Providers) and a setup path that picks local models, pulls weights, and verifies everything runs offline.
+
+## Container Skills
+
+Container skills live inside agent containers at runtime (`container/skills/`) and are loaded into every agent session. These are distinct from feature/operational skills that ship with the host.
+
+- [ ] Customize container skill — agent-driven customization flow (add channel, integration, behavior change) usable from inside any agent session, not just the main repo
+- [ ] Debug container skill — inspect logs, session DB, MCP server state, container env, recent errors from inside the agent
+- [ ] Setup container skill — first-time setup flow triggered from inside the agent (ties to host-side /setup)
+- [ ] Build-system container skills:
+  - [ ] Karpathy LLM Wiki builder (agent scaffolds a persistent wiki knowledge base for a group)
+  - [ ] Generic build-system framework for agent-authored sub-systems
+- [ ] NanoClaw installation diagram skill — agent generates a visual diagram of the user's current setup (agent groups, channels, wirings, destinations, sub-agents, installed packages/MCP servers)
+- [ ] Video replay skill — generate Remotion (or similar) videos that replay chat flows and sessions, referencing good UI patterns to produce shareable clips
+- [ ] Excitement trigger skill — detects when the user expresses excitement about the agent's capabilities or their setup, and proactively encourages generating a diagram + sharing it
+- [ ] End-of-migration diagram skill — at the end of `/migrate-nanoclaw` (or any migration flow), agent generates a visual diagram of the resulting setup and suggests sharing
+- [ ] End-of-setup diagram skill — at the end of first-time `/setup`, agent generates a visual diagram and suggests sharing (merges the old "Generate visual diagram of customized instance at end of setup" line from Channel Adapters)
 
 ## Webhook Ingestion
 
@@ -165,6 +252,7 @@ Status: [x] done, [~] partial, [ ] not started
 ## Memory
 
 - [ ] Shared memory with approval flow (write to global memory requires admin approval)
+- [ ] Agent memory system skills — skills for building and managing memory systems for an agent: archive/index large collections of files and data, then expose a memory interface the agent can query and update (e.g. QMD-style systems)
 
 ## Migration
 
