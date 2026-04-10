@@ -2,6 +2,7 @@ import { findByName, getAllDestinations, type DestinationEntry } from './destina
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
+import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
 import { formatMessages, extractRouting, categorizeMessage, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent } from './providers/types.js';
 
@@ -37,8 +38,16 @@ export interface PollLoopConfig {
  * 6. Loop
  */
 export async function runPollLoop(config: PollLoopConfig): Promise<void> {
-  let sessionId: string | undefined;
+  // Resume the SDK session from a prior container run if one was persisted.
+  // The SDK's .jsonl transcripts live in the shared ~/.claude mount, so the
+  // conversation history is already on disk — we just need the session ID
+  // to tell the SDK which one to continue.
+  let sessionId: string | undefined = getStoredSessionId();
   let resumeAt: string | undefined;
+
+  if (sessionId) {
+    log(`Resuming SDK session ${sessionId}`);
+  }
 
   // Clear leftover 'processing' acks from a previous crashed container.
   // This lets the new container re-process those messages.
@@ -104,6 +113,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
           log('Clearing session (resetting sessionId)');
           sessionId = undefined;
           resumeAt = undefined;
+          clearStoredSessionId();
           writeMessageOut({
             id: generateId(),
             kind: 'chat',
@@ -159,10 +169,26 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     const processingIds = ids.filter((id) => !commandIds.includes(id));
     try {
       const result = await processQuery(query, routing, config, processingIds);
-      if (result.sessionId) sessionId = result.sessionId;
+      if (result.sessionId && result.sessionId !== sessionId) {
+        sessionId = result.sessionId;
+        setStoredSessionId(sessionId);
+      }
       if (result.resumeAt) resumeAt = result.resumeAt;
     } catch (err) {
-      log(`Query error: ${err instanceof Error ? err.message : String(err)}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log(`Query error: ${errMsg}`);
+
+      // Stale/corrupt session recovery: if the SDK can't find the session
+      // we asked it to resume, clear the stored ID so the next attempt
+      // starts fresh. The transcript .jsonl can go missing after a crash
+      // mid-write, manual deletion, or disk-full.
+      if (sessionId && /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(errMsg)) {
+        log(`Stale session detected (${sessionId}) — clearing for next retry`);
+        sessionId = undefined;
+        resumeAt = undefined;
+        clearStoredSessionId();
+      }
+
       // Write error response so the user knows something went wrong
       writeMessageOut({
         id: generateId(),
@@ -170,7 +196,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         platform_id: routing.platformId,
         channel_type: routing.channelType,
         thread_id: routing.threadId,
-        content: JSON.stringify({ text: `Error: ${err instanceof Error ? err.message : String(err)}` }),
+        content: JSON.stringify({ text: `Error: ${errMsg}` }),
       });
     }
 

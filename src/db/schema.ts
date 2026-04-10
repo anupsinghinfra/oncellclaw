@@ -140,4 +140,13 @@ CREATE TABLE processing_ack (
   status         TEXT NOT NULL,
   status_changed TEXT NOT NULL
 );
+
+-- Persistent key/value state owned by the container. Used (among other things)
+-- to store the SDK session ID so the agent's conversation resumes across
+-- container restarts. Cleared by /clear.
+CREATE TABLE session_state (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;

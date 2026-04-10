@@ -38,6 +38,16 @@ export function getOutboundDb(): Database.Database {
     _outbound.pragma('journal_mode = DELETE');
     _outbound.pragma('busy_timeout = 5000');
     _outbound.pragma('foreign_keys = ON');
+    // Lightweight forward-compat: session_state was added after the initial
+    // v2 schema, so older session DBs don't have it. Create it on demand
+    // instead of requiring a formal migration pass.
+    _outbound.exec(`
+      CREATE TABLE IF NOT EXISTS session_state (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
   }
   return _outbound;
 }
@@ -125,6 +135,11 @@ export function initTestSessionDb(): { inbound: Database.Database; outbound: Dat
       message_id     TEXT PRIMARY KEY,
       status         TEXT NOT NULL,
       status_changed TEXT NOT NULL
+    );
+    CREATE TABLE session_state (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
   `);
 
