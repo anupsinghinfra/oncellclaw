@@ -18,6 +18,6 @@ registerChannelAdapter('matrix', {
     if (env.MATRIX_USER_ID) process.env.MATRIX_USER_ID = env.MATRIX_USER_ID;
     if (env.MATRIX_BOT_USERNAME) process.env.MATRIX_BOT_USERNAME = env.MATRIX_BOT_USERNAME;
     const matrixAdapter = createMatrixAdapter();
-    return createChatSdkBridge({ adapter: matrixAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: matrixAdapter, concurrency: 'concurrent', supportsThreads: false });
   },
 });

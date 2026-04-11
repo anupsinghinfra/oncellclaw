@@ -12,6 +12,8 @@ import {
   CardText,
   Actions,
   Button,
+  Modal,
+  TextInput,
   type Adapter,
   type ConcurrencyStrategy,
   type Message as ChatMessage,
@@ -47,6 +49,13 @@ export interface ChatSdkBridgeConfig {
   botToken?: string;
   /** Platform-specific reply context extraction. */
   extractReplyContext?: ReplyContextExtractor;
+  /**
+   * Whether this platform uses threads as the primary conversation unit.
+   * See `ChannelAdapter.supportsThreads`. Declared by the calling channel
+   * skill, not inferred, because some platforms (Discord) can be used either
+   * way and the default depends on installation style.
+   */
+  supportsThreads: boolean;
 }
 
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
@@ -116,6 +125,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
   return {
     name: adapter.name,
     channelType: adapter.name,
+    supportsThreads: config.supportsThreads,
 
     async setup(hostConfig: ChannelSetup) {
       setupConfig = hostConfig;
@@ -151,8 +161,75 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         await thread.subscribe();
       });
 
-      // Handle button clicks (ask_user_question responses)
+      // Handle button clicks (ask_user_question, credential card)
       chat.onAction(async (event) => {
+        // Credential card actions: nccr:<credentialId>:<enter|reject>
+        if (event.actionId.startsWith('nccr:')) {
+          const [, credentialId, subAction] = event.actionId.split(':');
+          if (!credentialId || !subAction) return;
+
+          if (subAction === 'reject') {
+            try {
+              await adapter.editMessage(event.threadId, event.messageId, {
+                markdown: `🔑 Credential request\n\n❌ Rejected`,
+              });
+            } catch (err) {
+              log.warn('Failed to update credential card after reject', { err });
+            }
+            setupConfig.onCredentialReject?.(credentialId);
+            return;
+          }
+
+          if (subAction === 'enter') {
+            const pending = setupConfig.getCredentialForModal?.(credentialId);
+            if (!pending) {
+              log.warn('Credential card clicked but row not pending', { credentialId });
+              return;
+            }
+            try {
+              const modalChildren = [
+                CardText(
+                  pending.description ??
+                    `Enter the value for ${pending.name} (host: ${pending.hostPattern}).`,
+                ),
+                TextInput({
+                  id: 'value',
+                  label: pending.name,
+                  placeholder: 'Paste your credential value',
+                }),
+              ];
+              // Modal children include a text element for context; the SDK
+              // accepts TextElement in ModalChild so this is valid.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const modal = Modal({
+                callbackId: `nccm:${credentialId}`,
+                title: 'Enter credential',
+                submitLabel: 'Save',
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                children: modalChildren as any,
+              });
+              const result = await event.openModal(modal);
+              if (!result) {
+                log.warn('openModal returned undefined — channel unsupported', { credentialId });
+                setupConfig.onCredentialChannelUnsupported?.(credentialId);
+                try {
+                  await adapter.editMessage(event.threadId, event.messageId, {
+                    markdown: `🔑 Credential request\n\n⚠️ This channel does not support modals.`,
+                  });
+                } catch {
+                  // best effort
+                }
+              }
+            } catch (err) {
+              log.error('Failed to open credential modal', { credentialId, err });
+              setupConfig.onCredentialChannelUnsupported?.(credentialId);
+            }
+            return;
+          }
+
+          return;
+        }
+
         if (!event.actionId.startsWith('ncq:')) return;
         const parts = event.actionId.split(':');
         if (parts.length < 3) return;
@@ -171,6 +248,18 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         }
 
         setupConfig.onAction(questionId, selectedOption, userId);
+      });
+
+      // Modal submissions for credential collection
+      chat.onModalSubmit(async (event) => {
+        if (!event.callbackId.startsWith('nccm:')) return;
+        const credentialId = event.callbackId.slice('nccm:'.length);
+        const value = event.values?.value ?? '';
+        if (!value) {
+          log.warn('Credential modal submitted with empty value', { credentialId });
+          return;
+        }
+        setupConfig.onCredentialSubmit?.(credentialId, value);
       });
 
       await chat.initialize();
@@ -255,6 +344,26 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const result = await adapter.postMessage(tid, {
           card,
           fallbackText: `${content.question}\nOptions: ${options.join(', ')}`,
+        });
+        return result?.id;
+      }
+
+      // Credential request card — buttons open a modal for secure input
+      if (content.type === 'credential_request' && content.credentialId) {
+        const credentialId = content.credentialId as string;
+        const card = Card({
+          title: '🔑 Credential request',
+          children: [
+            CardText(content.question as string),
+            Actions([
+              Button({ id: `nccr:${credentialId}:enter`, label: 'Enter credential', value: 'enter' }),
+              Button({ id: `nccr:${credentialId}:reject`, label: 'Reject', value: 'reject' }),
+            ]),
+          ],
+        });
+        const result = await adapter.postMessage(tid, {
+          card,
+          fallbackText: `Credential request — open in a channel that supports modals.`,
         });
         return result?.id;
       }

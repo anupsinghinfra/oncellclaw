@@ -15,6 +15,6 @@ registerChannelAdapter('gchat', {
     const gchatAdapter = createGoogleChatAdapter({
       credentials: JSON.parse(env.GCHAT_CREDENTIALS),
     });
-    return createChatSdkBridge({ adapter: gchatAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: gchatAdapter, concurrency: 'concurrent', supportsThreads: true });
   },
 });

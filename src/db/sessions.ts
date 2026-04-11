@@ -93,13 +93,26 @@ export function deletePendingQuestion(questionId: string): void {
 
 // ── Pending Approvals ──
 
-export function createPendingApproval(pa: PendingApproval): void {
+export function createPendingApproval(pa: Partial<PendingApproval> & Pick<PendingApproval, 'approval_id' | 'request_id' | 'action' | 'payload' | 'created_at'>): void {
   getDb()
     .prepare(
-      `INSERT INTO pending_approvals (approval_id, session_id, request_id, action, payload, created_at)
-       VALUES (@approval_id, @session_id, @request_id, @action, @payload, @created_at)`,
+      `INSERT INTO pending_approvals
+         (approval_id, session_id, request_id, action, payload, created_at,
+          agent_group_id, channel_type, platform_id, platform_message_id, expires_at, status)
+       VALUES
+         (@approval_id, @session_id, @request_id, @action, @payload, @created_at,
+          @agent_group_id, @channel_type, @platform_id, @platform_message_id, @expires_at, @status)`,
     )
-    .run(pa);
+    .run({
+      session_id: null,
+      agent_group_id: null,
+      channel_type: null,
+      platform_id: null,
+      platform_message_id: null,
+      expires_at: null,
+      status: 'pending',
+      ...pa,
+    });
 }
 
 export function getPendingApproval(approvalId: string): PendingApproval | undefined {
@@ -108,6 +121,14 @@ export function getPendingApproval(approvalId: string): PendingApproval | undefi
     | undefined;
 }
 
+export function updatePendingApprovalStatus(approvalId: string, status: PendingApproval['status']): void {
+  getDb().prepare('UPDATE pending_approvals SET status = ? WHERE approval_id = ?').run(status, approvalId);
+}
+
 export function deletePendingApproval(approvalId: string): void {
   getDb().prepare('DELETE FROM pending_approvals WHERE approval_id = ?').run(approvalId);
+}
+
+export function getPendingApprovalsByAction(action: string): PendingApproval[] {
+  return getDb().prepare('SELECT * FROM pending_approvals WHERE action = ?').all(action) as PendingApproval[];
 }

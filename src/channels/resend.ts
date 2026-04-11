@@ -18,6 +18,6 @@ registerChannelAdapter('resend', {
       fromName: env.RESEND_FROM_NAME,
       webhookSecret: env.RESEND_WEBHOOK_SECRET,
     });
-    return createChatSdkBridge({ adapter: resendAdapter, concurrency: 'queue' });
+    return createChatSdkBridge({ adapter: resendAdapter, concurrency: 'queue', supportsThreads: false });
   },
 });

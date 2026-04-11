@@ -16,6 +16,6 @@ registerChannelAdapter('slack', {
       botToken: env.SLACK_BOT_TOKEN,
       signingSecret: env.SLACK_SIGNING_SECRET,
     });
-    return createChatSdkBridge({ adapter: slackAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: slackAdapter, concurrency: 'concurrent', supportsThreads: true });
   },
 });

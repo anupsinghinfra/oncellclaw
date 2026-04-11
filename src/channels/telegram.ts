@@ -26,6 +26,11 @@ registerChannelAdapter('telegram', {
       botToken: env.TELEGRAM_BOT_TOKEN,
       mode: 'polling',
     });
-    return createChatSdkBridge({ adapter: telegramAdapter, concurrency: 'concurrent', extractReplyContext });
+    return createChatSdkBridge({
+      adapter: telegramAdapter,
+      concurrency: 'concurrent',
+      extractReplyContext,
+      supportsThreads: false,
+    });
   },
 });

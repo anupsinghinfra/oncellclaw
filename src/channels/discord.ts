@@ -32,6 +32,7 @@ registerChannelAdapter('discord', {
       concurrency: 'concurrent',
       botToken: env.DISCORD_BOT_TOKEN,
       extractReplyContext,
+      supportsThreads: true,
     });
   },
 });

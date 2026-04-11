@@ -141,6 +141,65 @@ export function initSessionFolder(agentGroupId: string, sessionId: string): void
  *
  * Uses DELETE + INSERT in a transaction for a clean overwrite.
  */
+/**
+ * Write the default reply routing for a session into its inbound.db.
+ *
+ * The container reads this as the default (channel_type, platform_id, thread_id)
+ * for outbound messages when the agent doesn't specify an explicit destination.
+ * Derived from session.messaging_group_id → messaging_groups row + session.thread_id.
+ *
+ * Called on every container wake alongside writeDestinations() so the latest
+ * routing is always in place, including after admin rewiring.
+ */
+export function writeSessionRouting(agentGroupId: string, sessionId: string): void {
+  const dbPath = inboundDbPath(agentGroupId, sessionId);
+  if (!fs.existsSync(dbPath)) return;
+
+  const session = getSession(sessionId);
+  if (!session) return;
+
+  let channelType: string | null = null;
+  let platformId: string | null = null;
+  if (session.messaging_group_id) {
+    const mg = getMessagingGroup(session.messaging_group_id);
+    if (mg) {
+      channelType = mg.channel_type;
+      platformId = mg.platform_id;
+    }
+  }
+
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = DELETE');
+  db.pragma('busy_timeout = 5000');
+  try {
+    // Lightweight forward-compat: create the table for older session DBs
+    // that predate this column.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS session_routing (
+        id           INTEGER PRIMARY KEY CHECK (id = 1),
+        channel_type TEXT,
+        platform_id  TEXT,
+        thread_id    TEXT
+      );
+    `);
+    db.prepare(
+      `INSERT INTO session_routing (id, channel_type, platform_id, thread_id)
+       VALUES (1, @channel_type, @platform_id, @thread_id)
+       ON CONFLICT(id) DO UPDATE SET
+         channel_type = excluded.channel_type,
+         platform_id  = excluded.platform_id,
+         thread_id    = excluded.thread_id`,
+    ).run({
+      channel_type: channelType,
+      platform_id: platformId,
+      thread_id: session.thread_id,
+    });
+  } finally {
+    db.close();
+  }
+  log.debug('Session routing written', { sessionId, channelType, platformId, threadId: session.thread_id });
+}
+
 export function writeDestinations(agentGroupId: string, sessionId: string): void {
   const dbPath = inboundDbPath(agentGroupId, sessionId);
   if (!fs.existsSync(dbPath)) return;

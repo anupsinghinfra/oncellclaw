@@ -21,6 +21,7 @@ import {
   markContainerStopped,
   sessionDir,
   writeDestinations,
+  writeSessionRouting,
 } from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
 
@@ -35,6 +36,16 @@ interface VolumeMount {
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
 
+/**
+ * In-flight wake promises, keyed by session id. Deduplicates concurrent
+ * `wakeContainer` calls while the first spawn is still mid-setup (async
+ * buildContainerArgs, OneCLI gateway apply, etc.) — otherwise a second
+ * wake in that window passes the `activeContainers.has` check and spawns
+ * a duplicate container against the same session directory, producing
+ * racy double-replies.
+ */
+const wakePromises = new Map<string, Promise<void>>();
+
 export function getActiveContainerCount(): number {
   return activeContainers.size;
 }
@@ -44,27 +55,47 @@ export function isContainerRunning(sessionId: string): boolean {
 }
 
 /**
- * Wake up a container for a session. If already running, no-op.
+ * Wake up a container for a session. If already running or mid-spawn, no-op
+ * (the in-flight wake promise is reused).
+ *
  * The container runs the v2 agent-runner which polls the session DB.
  */
-export async function wakeContainer(session: Session): Promise<void> {
+export function wakeContainer(session: Session): Promise<void> {
   if (activeContainers.has(session.id)) {
     log.debug('Container already running', { sessionId: session.id });
-    return;
+    return Promise.resolve();
   }
+  const existing = wakePromises.get(session.id);
+  if (existing) {
+    log.debug('Container wake already in-flight — joining existing promise', { sessionId: session.id });
+    return existing;
+  }
+  const promise = spawnContainer(session).finally(() => {
+    wakePromises.delete(session.id);
+  });
+  wakePromises.set(session.id, promise);
+  return promise;
+}
 
+async function spawnContainer(session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) {
     log.error('Agent group not found', { agentGroupId: session.agent_group_id });
     return;
   }
 
-  // Refresh the destination map so any admin changes take effect on wake
+  // Refresh the destination map and default reply routing so any admin
+  // changes take effect on wake.
   writeDestinations(agentGroup.id, session.id);
+  writeSessionRouting(agentGroup.id, session.id);
 
   const mounts = buildMounts(agentGroup, session);
   const containerName = `nanoclaw-v2-${agentGroup.folder}-${Date.now()}`;
-  const agentIdentifier = agentGroup.is_admin ? undefined : agentGroup.folder.toLowerCase().replace(/_/g, '-');
+  // OneCLI agent identifier is the agent group id. The admin group uses OneCLI's
+  // default agent (undefined), so unscoped credentials apply. Non-admin groups
+  // use their stable ag-xxx id, which is reversible via getAgentGroup() for
+  // approval-request routing.
+  const agentIdentifier = agentGroup.is_admin ? undefined : agentGroup.id;
   const args = await buildContainerArgs(mounts, containerName, session, agentGroup, agentIdentifier);
 
   log.info('Spawning container', { sessionId: session.id, agentGroup: agentGroup.name, containerName });

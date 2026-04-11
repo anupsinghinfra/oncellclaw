@@ -4,6 +4,7 @@
  * Channel adapter event → resolve messaging group → resolve agent group
  * → resolve/create session → write messages_in → wake container
  */
+import { getChannelAdapter } from './channels/channel-registry.js';
 import { getMessagingGroupByPlatform, createMessagingGroup, getMessagingGroupAgents } from './db/messaging-groups.js';
 import { triggerTyping } from './delivery.js';
 import { log } from './log.js';
@@ -33,6 +34,15 @@ export interface InboundEvent {
  * Creates messaging group + session if they don't exist yet.
  */
 export async function routeInbound(event: InboundEvent): Promise<void> {
+  // 0. Apply the adapter's thread policy. Non-threaded adapters (Telegram,
+  //    WhatsApp, iMessage, email) collapse threads to the channel — the
+  //    agent always replies to the main channel regardless of where the
+  //    inbound came from.
+  const adapter = getChannelAdapter(event.channelType);
+  if (adapter && !adapter.supportsThreads) {
+    event = { ...event, threadId: null };
+  }
+
   // 1. Resolve messaging group
   let mg = getMessagingGroupByPlatform(event.channelType, event.platformId);
 
@@ -79,8 +89,18 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     return;
   }
 
-  // 3. Resolve or create session
-  const { session, created } = resolveSession(match.agent_group_id, mg.id, event.threadId, match.session_mode);
+  // 3. Resolve or create session.
+  //
+  // Adapter thread policy overrides the wiring's session_mode: if the adapter
+  // is threaded, each thread gets its own session regardless of what the
+  // wiring says, because "thread = session" is the first-class model for
+  // threaded platforms. Agent-shared is preserved because it expresses a
+  // cross-channel intent the adapter can't know about.
+  let effectiveSessionMode = match.session_mode;
+  if (adapter && adapter.supportsThreads && effectiveSessionMode !== 'agent-shared') {
+    effectiveSessionMode = 'per-thread';
+  }
+  const { session, created } = resolveSession(match.agent_group_id, mg.id, event.threadId, effectiveSessionMode);
 
   // 4. Write message to session DB
   writeSessionMessage(session.agent_group_id, session.id, {

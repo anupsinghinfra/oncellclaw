@@ -7,6 +7,7 @@
  */
 import { getInboundDb } from '../db/connection.js';
 import { writeMessageOut } from '../db/messages-out.js';
+import { getSessionRouting } from '../db/session-routing.js';
 import type { McpToolDefinition } from './types.js';
 
 function log(msg: string): void {
@@ -18,11 +19,7 @@ function generateId(): string {
 }
 
 function routing() {
-  return {
-    platform_id: process.env.NANOCLAW_PLATFORM_ID || null,
-    channel_type: process.env.NANOCLAW_CHANNEL_TYPE || null,
-    thread_id: process.env.NANOCLAW_THREAD_ID || null,
-  };
+  return getSessionRouting();
 }
 
 function ok(text: string) {

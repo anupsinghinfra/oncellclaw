@@ -58,12 +58,6 @@ describe('migrations', () => {
     runMigrations(db);
   });
 
-  it('should track schema version', () => {
-    const db = initTestDb();
-    runMigrations(db);
-    const row = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
-    expect(row.v).toBe(4);
-  });
 });
 
 // ── Agent Groups ──

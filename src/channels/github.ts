@@ -17,6 +17,6 @@ registerChannelAdapter('github', {
       token: env.GITHUB_TOKEN,
       webhookSecret: env.GITHUB_WEBHOOK_SECRET,
     });
-    return createChatSdkBridge({ adapter: githubAdapter, concurrency: 'queue' });
+    return createChatSdkBridge({ adapter: githubAdapter, concurrency: 'queue', supportsThreads: true });
   },
 });

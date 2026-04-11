@@ -13,6 +13,19 @@ import { getMessagingGroupsByChannel, getMessagingGroupAgents } from './db/messa
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
+import {
+  ONECLI_ACTION,
+  resolveOneCLIApproval,
+  startOneCLIApprovalHandler,
+  stopOneCLIApprovalHandler,
+} from './onecli-approvals.js';
+import {
+  getCredentialForModal,
+  handleCredentialChannelUnsupported,
+  handleCredentialReject,
+  handleCredentialSubmit,
+  setCredentialDeliveryAdapter,
+} from './credentials.js';
 import { routeInbound } from './router.js';
 import {
   getPendingQuestion,
@@ -79,12 +92,35 @@ async function main(): Promise<void> {
           log.error('Failed to handle question response', { questionId, err });
         });
       },
+      getCredentialForModal,
+      onCredentialReject(credentialId) {
+        handleCredentialReject(credentialId).catch((err) =>
+          log.error('Failed to handle credential reject', { credentialId, err }),
+        );
+      },
+      onCredentialSubmit(credentialId, value) {
+        handleCredentialSubmit(credentialId, value).catch((err) =>
+          log.error('Failed to handle credential submit', { credentialId, err }),
+        );
+      },
+      onCredentialChannelUnsupported(credentialId) {
+        handleCredentialChannelUnsupported(credentialId).catch((err) =>
+          log.error('Failed to handle credential channel-unsupported', { credentialId, err }),
+        );
+      },
     };
   });
 
   // 4. Delivery adapter bridge — dispatches to channel adapters
-  setDeliveryAdapter({
-    async deliver(channelType, platformId, threadId, kind, content, files) {
+  const deliveryAdapter = {
+    async deliver(
+      channelType: string,
+      platformId: string,
+      threadId: string | null,
+      kind: string,
+      content: string,
+      files?: import('./channels/adapter.js').OutboundFile[],
+    ): Promise<string | undefined> {
       const adapter = getChannelAdapter(channelType);
       if (!adapter) {
         log.warn('No adapter for channel type', { channelType });
@@ -92,11 +128,13 @@ async function main(): Promise<void> {
       }
       return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });
     },
-    async setTyping(channelType, platformId, threadId) {
+    async setTyping(channelType: string, platformId: string, threadId: string | null): Promise<void> {
       const adapter = getChannelAdapter(channelType);
       await adapter?.setTyping?.(platformId, threadId);
     },
-  });
+  };
+  setDeliveryAdapter(deliveryAdapter);
+  setCredentialDeliveryAdapter(deliveryAdapter);
 
   // 5. Start delivery polls
   startActiveDeliveryPoll();
@@ -106,6 +144,9 @@ async function main(): Promise<void> {
   // 6. Start host sweep
   startHostSweep();
   log.info('Host sweep started');
+
+  // 7. Start OneCLI manual-approval handler
+  startOneCLIApprovalHandler(deliveryAdapter);
 
   log.info('NanoClaw v2 running');
 }
@@ -134,9 +175,20 @@ function buildConversationConfigs(channelType: string): ConversationConfig[] {
 
 /** Handle a user's response to an ask_user_question card or an approval card. */
 async function handleQuestionResponse(questionId: string, selectedOption: string, userId: string): Promise<void> {
+  // OneCLI credential approvals — resolved via in-memory Promise, not session DB
+  if (resolveOneCLIApproval(questionId, selectedOption)) {
+    return;
+  }
+
   // Check if this is a pending approval (install_packages, request_rebuild)
   const approval = getPendingApproval(questionId);
   if (approval) {
+    if (approval.action === ONECLI_ACTION) {
+      // Row exists but the in-memory resolver is gone (timer fired or process
+      // was in a weird state). Nothing to do — just drop the row.
+      deletePendingApproval(questionId);
+      return;
+    }
     await handleApprovalResponse(approval, selectedOption, userId);
     return;
   }
@@ -188,6 +240,10 @@ async function handleApprovalResponse(
   selectedOption: string,
   userId: string,
 ): Promise<void> {
+  if (!approval.session_id) {
+    deletePendingApproval(approval.approval_id);
+    return;
+  }
   const session = getSession(approval.session_id);
   if (!session) {
     deletePendingApproval(approval.approval_id);
@@ -262,6 +318,7 @@ async function handleApprovalResponse(
 /** Graceful shutdown. */
 async function shutdown(signal: string): Promise<void> {
   log.info('Shutdown signal received', { signal });
+  stopOneCLIApprovalHandler();
   stopDeliveryPolls();
   stopHostSweep();
   await teardownChannelAdapters();

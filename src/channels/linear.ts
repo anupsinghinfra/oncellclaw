@@ -17,6 +17,6 @@ registerChannelAdapter('linear', {
       apiKey: env.LINEAR_API_KEY,
       webhookSecret: env.LINEAR_WEBHOOK_SECRET,
     });
-    return createChatSdkBridge({ adapter: linearAdapter, concurrency: 'queue' });
+    return createChatSdkBridge({ adapter: linearAdapter, concurrency: 'queue', supportsThreads: true });
   },
 });

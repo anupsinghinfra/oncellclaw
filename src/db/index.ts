@@ -36,4 +36,16 @@ export {
   createPendingQuestion,
   getPendingQuestion,
   deletePendingQuestion,
+  createPendingApproval,
+  getPendingApproval,
+  updatePendingApprovalStatus,
+  deletePendingApproval,
+  getPendingApprovalsByAction,
 } from './sessions.js';
+export {
+  createPendingCredential,
+  getPendingCredential,
+  updatePendingCredentialStatus,
+  updatePendingCredentialMessageId,
+  deletePendingCredential,
+} from './credentials.js';

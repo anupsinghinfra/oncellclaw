@@ -11,6 +11,7 @@ import path from 'path';
 
 import { findByName, getAllDestinations } from '../destinations.js';
 import { getMessageIdBySeq, getRoutingBySeq, writeMessageOut } from '../db/messages-out.js';
+import { getSessionRouting } from '../db/session-routing.js';
 import type { McpToolDefinition } from './types.js';
 
 function log(msg: string): void {
@@ -37,14 +38,31 @@ function destinationList(): string {
 
 /**
  * Resolve a destination name to routing fields.
- * If `to` is omitted and the agent has exactly one destination, that one is used.
- * With multiple destinations, omitting `to` is an error.
+ *
+ * If `to` is omitted, use the session's default reply routing (channel +
+ * thread the conversation is in) — the agent replies in place.
+ *
+ * If `to` is specified, look up the named destination; thread_id is null
+ * because a cross-destination send starts a new conversation elsewhere.
  */
 function resolveRouting(
   to: string | undefined,
-): { channel_type: string; platform_id: string; resolvedName: string } | { error: string } {
-  let name = to;
-  if (!name) {
+):
+  | { channel_type: string; platform_id: string; thread_id: string | null; resolvedName: string }
+  | { error: string } {
+  if (!to) {
+    // Default: reply to whatever thread/channel this session is bound to.
+    const session = getSessionRouting();
+    if (session.channel_type && session.platform_id) {
+      return {
+        channel_type: session.channel_type,
+        platform_id: session.platform_id,
+        thread_id: session.thread_id,
+        resolvedName: '(current conversation)',
+      };
+    }
+    // No session routing (e.g., agent-shared or internal-only agent) —
+    // fall back to the legacy single-destination shortcut.
     const all = getAllDestinations();
     if (all.length === 0) return { error: 'No destinations configured.' };
     if (all.length > 1) {
@@ -52,14 +70,19 @@ function resolveRouting(
         error: `You have multiple destinations — specify "to". Options: ${all.map((d) => d.name).join(', ')}`,
       };
     }
-    name = all[0].name;
+    to = all[0].name;
   }
-  const dest = findByName(name);
-  if (!dest) return { error: `Unknown destination "${name}". Known: ${destinationList()}` };
+  const dest = findByName(to);
+  if (!dest) return { error: `Unknown destination "${to}". Known: ${destinationList()}` };
   if (dest.type === 'channel') {
-    return { channel_type: dest.channelType!, platform_id: dest.platformId!, resolvedName: name };
+    return {
+      channel_type: dest.channelType!,
+      platform_id: dest.platformId!,
+      thread_id: null,
+      resolvedName: to,
+    };
   }
-  return { channel_type: 'agent', platform_id: dest.agentGroupId!, resolvedName: name };
+  return { channel_type: 'agent', platform_id: dest.agentGroupId!, thread_id: null, resolvedName: to };
 }
 
 export const sendMessage: McpToolDefinition = {
@@ -89,7 +112,7 @@ export const sendMessage: McpToolDefinition = {
       kind: 'chat',
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
-      thread_id: null,
+      thread_id: routing.thread_id,
       content: JSON.stringify({ text }),
     });
 
@@ -135,7 +158,7 @@ export const sendFile: McpToolDefinition = {
       kind: 'chat',
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
-      thread_id: null,
+      thread_id: routing.thread_id,
       content: JSON.stringify({ text: (args.text as string) || '', files: [filename] }),
     });
 

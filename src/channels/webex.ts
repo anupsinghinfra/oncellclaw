@@ -16,6 +16,6 @@ registerChannelAdapter('webex', {
       botToken: env.WEBEX_BOT_TOKEN,
       webhookSecret: env.WEBEX_WEBHOOK_SECRET,
     });
-    return createChatSdkBridge({ adapter: webexAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: webexAdapter, concurrency: 'concurrent', supportsThreads: true });
   },
 });

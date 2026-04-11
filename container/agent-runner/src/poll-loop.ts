@@ -387,13 +387,16 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
 function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {
   const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
   const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
+  // Inherit thread_id from the inbound routing context so replies land in the
+  // same thread the conversation is in. For non-threaded adapters the router
+  // strips thread_id at ingest, so this will already be null.
   writeMessageOut({
     id: generateId(),
     in_reply_to: routing.inReplyTo,
     kind: 'chat',
     platform_id: platformId,
     channel_type: channelType,
-    thread_id: null,
+    thread_id: routing.threadId,
     content: JSON.stringify({ text: body }),
   });
 }

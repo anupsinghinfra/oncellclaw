@@ -24,6 +24,6 @@ registerChannelAdapter('imessage', {
     const imessageAdapter = Object.assign(rawAdapter, {
       channelIdFromThreadId: (threadId: string) => threadId,
     });
-    return createChatSdkBridge({ adapter: imessageAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: imessageAdapter, concurrency: 'concurrent', supportsThreads: false });
   },
 });

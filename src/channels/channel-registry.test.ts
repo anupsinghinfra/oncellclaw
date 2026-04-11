@@ -39,6 +39,7 @@ function createMockAdapter(
   return {
     name: channelType,
     channelType,
+    supportsThreads: false,
     delivered,
     inbound,
 

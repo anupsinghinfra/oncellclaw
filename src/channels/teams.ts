@@ -16,6 +16,6 @@ registerChannelAdapter('teams', {
       appId: env.TEAMS_APP_ID,
       appPassword: env.TEAMS_APP_PASSWORD,
     });
-    return createChatSdkBridge({ adapter: teamsAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: teamsAdapter, concurrency: 'concurrent', supportsThreads: true });
   },
 });

@@ -24,6 +24,6 @@ registerChannelAdapter('whatsapp-cloud', {
       appSecret: env.WHATSAPP_APP_SECRET,
       verifyToken: env.WHATSAPP_VERIFY_TOKEN,
     });
-    return createChatSdkBridge({ adapter: whatsappAdapter, concurrency: 'concurrent' });
+    return createChatSdkBridge({ adapter: whatsappAdapter, concurrency: 'concurrent', supportsThreads: false });
   },
 });

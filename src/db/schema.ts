@@ -114,6 +114,18 @@ CREATE TABLE destinations (
   platform_id     TEXT,            -- for type='channel'
   agent_group_id  TEXT             -- for type='agent'
 );
+
+-- Default reply routing for this session. Single-row table (id=1).
+-- Host overwrites on every container wake from the session's messaging_group
+-- and thread_id. Container reads it in send_message / ask_user_question /
+-- trigger_credential_collection to default the channel/thread of outbound
+-- messages when the agent doesn't specify an explicit destination.
+CREATE TABLE session_routing (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  channel_type TEXT,
+  platform_id  TEXT,
+  thread_id    TEXT
+);
 `;
 
 /** Container-owned: outbound messages + processing acknowledgments. */
