@@ -42,6 +42,8 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Chat SDK bridge (generic, works with any Chat SDK adapter)
 - [x] Chat SDK SQLite state adapter (KV, subscriptions, locks, lists)
 - [x] Discord via Chat SDK
+  - [ ] First inbound message requires @mention before Chat SDK subscribes the channel/thread. Subsequent messages flow without @. Fix: pre-subscribe known conversations at bridge startup (iterate `setupConfig.conversations` → `thread.subscribe()`), or upstream a "listen to all messages in known channels" mode in Chat SDK.
+  - [ ] @mention in a root Discord channel causes the adapter to materialize a sub-thread as its subscription surface. Either (a) live with it and treat each mention-rooted sub-thread as its own session, or (b) flip Discord to `supportsThreads: false` so replies always land in the root channel, or (c) change the adapter's subscribe behavior so root-channel subscription doesn't spawn a Discord thread.
 - [~] Slack via Chat SDK (adapter + skill written, not tested)
 - [x] Telegram via Chat SDK (E2E verified: inbound, routing, typing, delivery)
 - [~] Microsoft Teams via Chat SDK (adapter + skill written, not tested)
@@ -69,7 +71,9 @@ Status: [x] done, [~] partial, [ ] not started
 - [ ] Minimum-viable bootstrap in Claude Code: install deps, pick one channel, authenticate it, wire it to a default agent group, hand off — nothing else required before the user can leave Claude Code
 - [ ] Post-handoff welcome message in the chat app guides the user through remaining setup (channels, skills, integrations, memory, scheduling, etc.)
 - [ ] Add more channels from chat (currently requires returning to Claude Code to run `/add-*` skills)
+- [ ] Self-register agent into a new chat room from chat: user gives the agent a channel/group name + approval, and the agent joins via the underlying adapter (e.g. Baileys for WhatsApp), wires the room to an agent group, and posts a first "hi, I'm here" message — no manual invite, no `/add-*` skill, no terminal
 - [ ] Authenticate channels from chat (OAuth/token entry via cards, no terminal required)
+- [ ] Add credentials / secrets to the OneCLI vault from chat via rich card (agent collects API keys, OAuth tokens, and other secrets through a card flow and writes them into the vault — no `.env` editing, no terminal)
 - [ ] Wire channels to agent groups from chat (today lives in `/manage-channels` Claude Code skill — port to in-chat flow with isolation-level question cards)
 - [ ] Create new agent groups from chat (`create_agent` exists — expose via user-facing flow, not just agent-called tool)
 - [ ] Edit agent group CLAUDE.md / instructions from chat
@@ -147,6 +151,7 @@ Status: [x] done, [~] partial, [ ] not started
 
 - [x] Admin user ID per group
 - [x] Admin-only command filtering in container
+- [ ] Admin model refactor — instance-level default admin (user + messaging app) for all approval routing, overridable per agent group; deliver approval cards to admin's DM when the platform supports it
 - [x] Approval flow (sensitive action -> card to admin -> approve/reject -> execute) — `pending_approvals` table, `requestApproval()` helper, reuses interactive card infra
 - [x] Agent requests dependency/package install (install_packages, admin approval, rebuild on approval)
 - [x] Self-modification — direct tools:
@@ -157,7 +162,19 @@ Status: [x] done, [~] partial, [ ] not started
 - [ ] Role definitions beyond admin (custom roles, per-group permissions)
 - [ ] Configurable sensitive action list (hardcoded today)
 - [ ] Non-main groups requesting sensitive actions
-- [ ] OneCLI integration for human-loop approvals on credentialed requests (agent touching a credentialed resource → OneCLI gates → approval card to admin → OneCLI releases credential)
+- [~] OneCLI integration for human-loop approvals on credentialed requests (agent touching a credentialed resource → OneCLI gates → approval card to admin → OneCLI releases credential) — SDK 0.3.1 `configureManualApproval` wired into host, routes to admin via existing `pending_approvals` infra
+- [~] Credential collection from chat — `trigger_credential_collection` MCP tool; agent researches API config, card → modal → `onecli secrets create` via internal facade (`src/onecli-secrets.ts`); credential value never enters agent context
+  - [ ] Replace `src/onecli-secrets.ts` shell facade with SDK-native secret management when `@onecli-sh/sdk` adds it
+  - [ ] Per-agent-group secret scoping via OneCLI `agentId` (facade passes it today; CLI ignores it until upstream supports)
+  - [ ] **Chat SDK input support beyond Slack (upstream ask)** — today only Slack's Modal surface works for secure input. The platforms themselves support it, but Chat SDK doesn't expose it:
+    - [ ] **Discord** — native modal (`InteractionResponseType.Modal` with `ActionRow([TextInput])`). Map `event.openModal(Modal(...))` to the Discord REST callback.
+    - [ ] **Microsoft Teams** — Adaptive Card with `Input.Text`, delivered as a regular message (inline, no modal-trigger needed).
+    - [ ] **Google Chat** — Cards v2 `textInput` widget, inline in the conversation.
+    - [ ] **Webex** — Adaptive Card with `Input.Text`, inline.
+    - [ ] **WhatsApp Cloud** — WhatsApp Flows with a text field (requires flow registration with Meta — heavier but doable).
+    - When these land upstream, `trigger_credential_collection` gets secure input on all major channels for free; no NanoClaw-side code change beyond maybe declaring the capability per adapter.
+  - [ ] Tunneled OneCLI dashboard fallback for platforms with no native form input (Telegram Mini Apps aside, iMessage without Apple Business Register, Matrix, email). Signed short-lived URL → browser form served by OneCLI at 10254 → tunnel via ngrok/cloudflared/tailscale-funnel. Value never touches the chat surface.
+  - [ ] OneCLI built-in apps (`onecli apps list`) shadow generic secrets on the same host. `trigger_credential_collection` should check for a matching app first; if one exists, route the user through the app's connect URL instead of creating a secret. Upstream ask: `apps configure --api-key` for api_key apps.
 - [ ] Sensitive data access flow (agent requests PII / secrets / private files → approval card → scoped, time-limited access)
 - [ ] Self-modification via builder-agent delegation:
   - [ ] Agent requests code changes by delegating to a builder agent
@@ -260,6 +277,7 @@ Container skills live inside agent containers at runtime (`container/skills/`) a
 - [ ] Database migration (v1 SQLite -> v2 central DB + session DBs)
 - [ ] Channel credential preservation
 - [ ] Custom skill/code porting
+- [ ] OneCLI migration check — determine if existing installs need OneCLI re-init (credentials re-scoped to new `agent_group.id` identifier, new SDK version, approval handler registered). If needed, add a migration step to `/update-nanoclaw` or a dedicated skill.
 
 ## Testing
 
