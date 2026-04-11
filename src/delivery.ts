@@ -312,9 +312,44 @@ async function deliverMessage(
     return;
   }
 
-  // Agent-to-agent — route to target session (with permission check)
+  // Agent-to-agent — route to target session (with permission check).
+  // Permission is enforced via agent_destinations — the source agent must have
+  // a row for the target. Content is copied verbatim; the target's formatter
+  // will look up the source agent in its own local map to display a name.
   if (msg.channel_type === 'agent') {
-    await routeAgentMessage(msg, session);
+    const targetAgentGroupId = msg.platform_id;
+    if (!targetAgentGroupId) {
+      log.warn('Agent message missing target agent group ID', { id: msg.id });
+      return;
+    }
+    if (!hasDestination(session.agent_group_id, 'agent', targetAgentGroupId)) {
+      log.warn('Unauthorized agent-to-agent message — dropping', {
+        source: session.agent_group_id,
+        target: targetAgentGroupId,
+      });
+      return;
+    }
+    if (!getAgentGroup(targetAgentGroupId)) {
+      log.warn('Target agent group not found', { id: msg.id, targetAgentGroupId });
+      return;
+    }
+    const { session: targetSession } = resolveSession(targetAgentGroupId, null, null, 'agent-shared');
+    writeSessionMessage(targetAgentGroupId, targetSession.id, {
+      id: `a2a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      platformId: session.agent_group_id,
+      channelType: 'agent',
+      threadId: null,
+      content: msg.content,
+    });
+    log.info('Agent message routed', {
+      from: session.agent_group_id,
+      to: targetAgentGroupId,
+      targetSession: targetSession.id,
+    });
+    const fresh = getSession(targetSession.id);
+    if (fresh) await wakeContainer(fresh);
     return;
   }
 
@@ -391,58 +426,6 @@ async function deliverMessage(
   }
 
   return platformMsgId;
-}
-
-/**
- * Route an agent-to-agent message to the target agent's session.
- *
- * Permission is enforced via agent_destinations — the source agent must have
- * a row for the target. Content is copied verbatim; the target's formatter
- * will look up the source agent in its own local map to display a name.
- */
-async function routeAgentMessage(
-  msg: { id: string; platform_id: string | null; content: string },
-  sourceSession: Session,
-): Promise<void> {
-  const targetAgentGroupId = msg.platform_id;
-  if (!targetAgentGroupId) {
-    log.warn('Agent message missing target agent group ID', { id: msg.id });
-    return;
-  }
-
-  if (!hasDestination(sourceSession.agent_group_id, 'agent', targetAgentGroupId)) {
-    log.warn('Unauthorized agent-to-agent message — dropping', {
-      source: sourceSession.agent_group_id,
-      target: targetAgentGroupId,
-    });
-    return;
-  }
-
-  if (!getAgentGroup(targetAgentGroupId)) {
-    log.warn('Target agent group not found', { id: msg.id, targetAgentGroupId });
-    return;
-  }
-
-  const { session: targetSession } = resolveSession(targetAgentGroupId, null, null, 'agent-shared');
-
-  writeSessionMessage(targetAgentGroupId, targetSession.id, {
-    id: `a2a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    kind: 'chat',
-    timestamp: new Date().toISOString(),
-    platformId: sourceSession.agent_group_id,
-    channelType: 'agent',
-    threadId: null,
-    content: msg.content,
-  });
-
-  log.info('Agent message routed', {
-    from: sourceSession.agent_group_id,
-    to: targetAgentGroupId,
-    targetSession: targetSession.id,
-  });
-
-  const fresh = getSession(targetSession.id);
-  if (fresh) await wakeContainer(fresh);
 }
 
 /** Ensure the delivered table has new columns (migration for existing sessions). */

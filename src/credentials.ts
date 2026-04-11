@@ -34,10 +34,7 @@ export function setCredentialDeliveryAdapter(adapter: ChannelDeliveryAdapter): v
 }
 
 /** Handle a `request_credential` system action from a container. */
-export async function handleCredentialRequest(
-  content: Record<string, unknown>,
-  session: Session,
-): Promise<void> {
+export async function handleCredentialRequest(content: Record<string, unknown>, session: Session): Promise<void> {
   if (!adapterRef) {
     notifyAgentCredentialResult(session, content.credentialId as string, 'failed', 'delivery adapter not ready');
     return;
@@ -53,12 +50,7 @@ export async function handleCredentialRequest(
   const description = (content.description as string) || null;
 
   if (!credentialId || !name || !hostPattern) {
-    notifyAgentCredentialResult(
-      session,
-      credentialId,
-      'failed',
-      'name and hostPattern are required',
-    );
+    notifyAgentCredentialResult(session, credentialId, 'failed', 'name and hostPattern are required');
     return;
   }
 
@@ -299,11 +291,7 @@ function buildCardText(opts: {
   valueFormat: string | null;
   description: string | null;
 }): string {
-  const lines = [
-    `🔑 Credential request: ${opts.name}`,
-    '',
-    `Host: \`${opts.hostPattern}\``,
-  ];
+  const lines = [`🔑 Credential request: ${opts.name}`, '', `Host: \`${opts.hostPattern}\``];
   if (opts.headerName) lines.push(`Header: \`${opts.headerName}\``);
   if (opts.valueFormat) lines.push(`Format: \`${opts.valueFormat}\``);
   if (opts.description) lines.push('', opts.description);

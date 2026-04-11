@@ -8,6 +8,14 @@
  *   outbound.db — container writes responses + acks here; host opens read-only
  *
  * Each file has exactly one writer, so no cross-process lock contention.
+ *
+ * ⚠ Cross-mount visibility: inbound.db MUST be journal_mode=DELETE (set by
+ * the host when the file is created). WAL's `-shm` is memory-mapped and
+ * VirtioFS does not propagate mmap coherency from host to guest, so a
+ * WAL-mode inbound.db would leave this reader frozen on an early snapshot
+ * and it would silently never see new host messages. See
+ * src/session-manager.ts for the full set of cross-mount invariants and
+ * scripts/sanity-live-poll.ts for the empirical validation.
  */
 import Database from 'better-sqlite3';
 import fs from 'fs';

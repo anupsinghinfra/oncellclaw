@@ -34,8 +34,13 @@ export interface WriteMessageOut {
 
 /**
  * Write a new outbound message, auto-assigning an odd seq number.
- * Container uses odd seq (1, 3, 5...), host uses even (2, 4, 6...) —
- * this prevents seq collisions without cross-DB coordination.
+ * Container uses odd seq (1, 3, 5...), host uses even (2, 4, 6...).
+ *
+ * The disjoint namespace is load-bearing, not just collision avoidance:
+ * seq is the agent-facing message ID returned by send_message and accepted
+ * by edit_message / add_reaction, and getMessageIdBySeq() below looks up
+ * by seq across BOTH tables. If inbound and outbound could share a seq,
+ * the agent's "edit message #5" could resolve to the wrong row.
  */
 export function writeMessageOut(msg: WriteMessageOut): number {
   const outbound = getOutboundDb();

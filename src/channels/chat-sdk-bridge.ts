@@ -188,10 +188,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
             }
             try {
               const modalChildren = [
-                CardText(
-                  pending.description ??
-                    `Enter the value for ${pending.name} (host: ${pending.hostPattern}).`,
-                ),
+                CardText(pending.description ?? `Enter the value for ${pending.name} (host: ${pending.hostPattern}).`),
                 TextInput({
                   id: 'value',
                   label: pending.name,

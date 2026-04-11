@@ -57,7 +57,6 @@ describe('migrations', () => {
     // Running again should not throw
     runMigrations(db);
   });
-
 });
 
 // ── Agent Groups ──

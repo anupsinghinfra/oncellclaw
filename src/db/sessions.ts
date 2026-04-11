@@ -93,7 +93,10 @@ export function deletePendingQuestion(questionId: string): void {
 
 // ── Pending Approvals ──
 
-export function createPendingApproval(pa: Partial<PendingApproval> & Pick<PendingApproval, 'approval_id' | 'request_id' | 'action' | 'payload' | 'created_at'>): void {
+export function createPendingApproval(
+  pa: Partial<PendingApproval> &
+    Pick<PendingApproval, 'approval_id' | 'request_id' | 'action' | 'payload' | 'created_at'>,
+): void {
   getDb()
     .prepare(
       `INSERT INTO pending_approvals

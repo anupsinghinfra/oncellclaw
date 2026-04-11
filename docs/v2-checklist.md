@@ -8,6 +8,8 @@ Status: [x] done, [~] partial, [ ] not started
 
 - [x] Session DB replaces IPC (messages_in / messages_out as sole IO)
 - [x] Two-DB split: inbound.db (host-owned) + outbound.db (container-owned) — zero cross-process write contention
+  - **Cross-mount invariants (empirically validated, see `scripts/sanity-live-poll.ts`):** (1) `journal_mode=DELETE` on every session DB — WAL's `-shm` is memory-mapped and VirtioFS does not propagate mmap coherency host→guest, so WAL leaves the container's poll loop frozen on an early snapshot with no error; (2) host opens-writes-closes per operation — the close is what invalidates the container's VirtioFS page cache; (3) one writer per file — DELETE-mode with two writers corrupts because journal-unlink doesn't propagate atomically. Each invariant was individually confirmed by flipping it and observing silent message loss or corruption. Do not "simplify" by unifying the DBs, switching to WAL, or keeping a long-lived host connection.
+  - **Seq parity is load-bearing, not cleanup:** host writes even seqs, container writes odd seqs. The seq is the agent-facing message ID returned by `send_message` and consumed by `edit_message` / `add_reaction`, and `getMessageIdBySeq()` looks up by seq across both tables. Removing parity would let a single ID resolve to the wrong row.
 - [x] Central DB (agent groups, messaging groups, sessions, routing)
 - [x] Host sweep (stale detection via heartbeat file, retry with backoff, recurrence scheduling)
 - [x] Active delivery polling (1s for running sessions)
@@ -166,6 +168,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [~] Credential collection from chat — `trigger_credential_collection` MCP tool; agent researches API config, card → modal → `onecli secrets create` via internal facade (`src/onecli-secrets.ts`); credential value never enters agent context
   - [ ] Replace `src/onecli-secrets.ts` shell facade with SDK-native secret management when `@onecli-sh/sdk` adds it
   - [ ] Per-agent-group secret scoping via OneCLI `agentId` (facade passes it today; CLI ignores it until upstream supports)
+  - [ ] **Attach newly created secrets to the calling agent** — `trigger_credential_collection` today runs `onecli secrets create` but leaves the secret unassigned, so the agent that requested the credential still gets zero injections. Fix options: (a) follow-up `onecli agents set-secrets` call in `src/onecli-secrets.ts` after create, (b) set the agent to `mode=all`, or (c) upstream ask — `onecli secrets create --assign-to-agent-ids <id,...>` so it's a one-shot and orphaned secrets are impossible. Prefer (c); use (a) as the interim.
   - [ ] **Chat SDK input support beyond Slack (upstream ask)** — today only Slack's Modal surface works for secure input. The platforms themselves support it, but Chat SDK doesn't expose it:
     - [ ] **Discord** — native modal (`InteractionResponseType.Modal` with `ActionRow([TextInput])`). Map `event.openModal(Modal(...))` to the Discord REST callback.
     - [ ] **Microsoft Teams** — Adaptive Card with `Input.Text`, delivered as a regular message (inline, no modal-trigger needed).

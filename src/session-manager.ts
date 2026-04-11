@@ -1,10 +1,14 @@
 /**
- * Session lifecycle management.
- * Creates session folders + DBs, writes messages, manages container status.
+ * Session lifecycle: folders, DBs, messages, container status.
  *
- * Two-DB architecture: each session has inbound.db (host-owned) and outbound.db
- * (container-owned). This eliminates SQLite write contention across the
- * host-container mount boundary — each file has exactly one writer.
+ * Two-DB split — inbound.db (host writes) + outbound.db (container writes).
+ * Three cross-mount invariants are load-bearing:
+ *   1. journal_mode=DELETE — WAL's mmapped -shm doesn't refresh host→guest;
+ *      the container would silently miss every new message.
+ *   2. Host opens-writes-CLOSES per op — close invalidates the container's
+ *      page cache; a long-lived connection freezes its view at first read.
+ *   3. One writer per file — DELETE-mode journal-unlink isn't atomic across
+ *      the mount; concurrent writers corrupt the DB.
  */
 import Database from 'better-sqlite3';
 import fs from 'fs';
@@ -260,7 +264,13 @@ export function writeDestinations(agentGroupId: string, sessionId: string): void
   log.debug('Destination map written', { sessionId, count: resolved.length });
 }
 
-/** Write a message to a session's inbound DB (messages_in). Host-only. */
+/**
+ * Write a message to a session's inbound DB (messages_in). Host-only.
+ *
+ * ⚠ Opens and closes the DB on every call. Do not refactor to reuse a
+ * long-lived connection — see the "Cross-mount visibility invariants" note
+ * at the top of this file.
+ */
 export function writeSessionMessage(
   agentGroupId: string,
   sessionId: string,
@@ -285,8 +295,13 @@ export function writeSessionMessage(
   db.pragma('busy_timeout = 5000');
 
   try {
-    // Host uses even seq numbers, container uses odd — prevents collisions
-    // across the two-DB boundary without cross-DB coordination.
+    // Host uses even seq, container uses odd. This is not just collision
+    // avoidance between the two DB files — the seq is the agent-facing
+    // message ID returned by send_message and accepted by edit_message /
+    // add_reaction, and those tools look up by seq across BOTH tables
+    // (see container/agent-runner/src/db/messages-out.ts:getMessageIdBySeq).
+    // So the {messages_in.seq, messages_out.seq} namespace MUST be disjoint,
+    // or the agent's "edit message #5" could resolve to the wrong row.
     const maxSeq = (db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }).m;
     const nextSeq = maxSeq < 2 ? 2 : maxSeq + 2 - (maxSeq % 2); // next even
 
