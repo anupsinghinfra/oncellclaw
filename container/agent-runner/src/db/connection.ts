@@ -40,7 +40,9 @@ export function getOutboundDb(): Database.Database {
     _outbound.pragma('foreign_keys = ON');
     // Lightweight forward-compat: session_state was added after the initial
     // v2 schema, so older session DBs don't have it. Create it on demand
-    // instead of requiring a formal migration pass.
+    // instead of requiring a formal migration pass. Also handle the case
+    // where an earlier revision of this table existed without updated_at —
+    // ALTER TABLE to add any missing columns.
     _outbound.exec(`
       CREATE TABLE IF NOT EXISTS session_state (
         key        TEXT PRIMARY KEY,
@@ -48,6 +50,12 @@ export function getOutboundDb(): Database.Database {
         updated_at TEXT NOT NULL
       );
     `);
+    const cols = new Set(
+      (_outbound.prepare("PRAGMA table_info('session_state')").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has('updated_at')) {
+      _outbound.exec(`ALTER TABLE session_state ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`);
+    }
   }
   return _outbound;
 }
