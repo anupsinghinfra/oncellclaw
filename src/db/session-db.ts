@@ -197,7 +197,17 @@ export function insertRecurrence(
   db.prepare(
     `INSERT INTO messages_in (id, seq, kind, timestamp, status, process_after, recurrence, platform_id, channel_type, thread_id, content)
      VALUES (?, ?, ?, datetime('now'), 'pending', ?, ?, ?, ?, ?, ?)`,
-  ).run(newId, nextEvenSeq(db), msg.kind, nextRun, msg.recurrence, msg.platform_id, msg.channel_type, msg.thread_id, msg.content);
+  ).run(
+    newId,
+    nextEvenSeq(db),
+    msg.kind,
+    nextRun,
+    msg.recurrence,
+    msg.platform_id,
+    msg.channel_type,
+    msg.thread_id,
+    msg.content,
+  );
 }
 
 export function clearRecurrence(db: Database.Database, messageId: string): void {

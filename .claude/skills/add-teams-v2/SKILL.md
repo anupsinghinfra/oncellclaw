@@ -64,6 +64,8 @@ Sync to container: `mkdir -p data/env && cp .env data/env/env`
 
 The Chat SDK bridge automatically starts a shared webhook server on port 3000 (configurable via `WEBHOOK_PORT` env var). The server handles `/api/webhooks/teams` for Teams and other webhook-based adapters. This port must be publicly reachable from the internet for Azure Bot Service to deliver activities.
 
+If running locally, discuss options for exposing the server — e.g. ngrok (`ngrok http 3000`), Cloudflare Tunnel, or a reverse proxy on a VPS. The resulting public URL becomes the base for `https://your-domain/api/webhooks/teams`.
+
 ## Next Steps
 
 If you're in the middle of `/setup`, return to the setup flow now.
