@@ -38,7 +38,7 @@ npm run build
 3. After creation, go to **Configuration**:
    - Copy the **Microsoft App ID**
    - Note the **App Tenant ID** (shown for Single Tenant)
-   - Set **Messaging endpoint** to `https://your-domain/api/webhooks/teams`
+   - Set **Messaging endpoint** to `https://your-domain/webhook/teams`
 4. Click **Manage Password** > **Certificates & secrets** > **New client secret** — copy the Value immediately (shown only once)
 5. Go to **Channels** > add **Microsoft Teams** > Accept terms > Apply
 
@@ -62,9 +62,9 @@ Sync to container: `mkdir -p data/env && cp .env data/env/env`
 
 ### Webhook server
 
-The Chat SDK bridge automatically starts a shared webhook server on port 3000 (configurable via `WEBHOOK_PORT` env var). The server handles `/api/webhooks/teams` for Teams and other webhook-based adapters. This port must be publicly reachable from the internet for Azure Bot Service to deliver activities.
+The Chat SDK bridge automatically starts a shared webhook server on port 3000 (configurable via `WEBHOOK_PORT` env var). The server handles `/webhook/teams` for Teams and other webhook-based adapters. This port must be publicly reachable from the internet for Azure Bot Service to deliver activities.
 
-If running locally, discuss options for exposing the server — e.g. ngrok (`ngrok http 3000`), Cloudflare Tunnel, or a reverse proxy on a VPS. The resulting public URL becomes the base for `https://your-domain/api/webhooks/teams`.
+If running locally, discuss options for exposing the server — e.g. ngrok (`ngrok http 3000`), Cloudflare Tunnel, or a reverse proxy on a VPS. The resulting public URL becomes the base for `https://your-domain/webhook/teams`.
 
 ## Next Steps
 

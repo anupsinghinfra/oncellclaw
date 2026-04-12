@@ -20,6 +20,7 @@ import {
 } from 'chat';
 import { log } from '../log.js';
 import { SqliteStateAdapter } from '../state-sqlite.js';
+import { registerWebhookAdapter } from '../webhook-server.js';
 import type { ChannelAdapter, ChannelSetup, ConversationConfig, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -306,9 +307,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         log.info('Gateway listener started', { adapter: adapter.name });
       } else {
         // Non-gateway adapters (Slack, Teams, GitHub, etc.) — register on the shared webhook server
-        const webhookPath = `/api/webhooks/${adapter.name}`;
-        registerWebhookAdapter(webhookPath, chat, adapter.name);
-        log.info('Webhook adapter registered', { adapter: adapter.name, path: webhookPath });
+        registerWebhookAdapter(chat, adapter.name);
       }
 
       log.info('Chat SDK bridge initialized', { adapter: adapter.name });
@@ -533,89 +532,4 @@ async function handleForwardedEvent(
     body,
   });
   await adapter.handleWebhook(fakeRequest, {});
-}
-
-/**
- * Shared webhook server for all webhook-based adapters.
- * Each adapter registers a path (e.g. /api/webhooks/slack, /api/webhooks/teams).
- * Listens on a single port (default 3000, configurable via WEBHOOK_PORT env var).
- *
- * Routes incoming requests to the Chat SDK's `chat.webhooks[name]()` handler,
- * which auto-initializes the adapter and handles signature verification.
- */
-interface WebhookEntry {
-  chat: Chat;
-  adapterName: string;
-}
-const webhookRoutes = new Map<string, WebhookEntry>();
-let sharedWebhookServer: http.Server | null = null;
-/** Placeholder base for URL parsing — Node's http.IncomingMessage only has a path, not a full URL. */
-const URL_BASE = 'http://0.0.0.0';
-
-/** Convert a Node http.IncomingMessage into a Web API Request. */
-function nodeToWebRequest(req: http.IncomingMessage): Promise<Request> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('error', reject);
-    req.on('end', () => {
-      const body = Buffer.concat(chunks);
-      const headers = new Headers();
-      for (const [key, val] of Object.entries(req.headers)) {
-        if (typeof val === 'string') headers.set(key, val);
-        else if (Array.isArray(val)) for (const v of val) headers.append(key, v);
-      }
-      const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-      resolve(
-        new Request(`${URL_BASE}${req.url}`, {
-          method: req.method,
-          headers,
-          body: hasBody ? body : undefined,
-        }),
-      );
-    });
-  });
-}
-
-/** Write a Web API Response back to a Node http.ServerResponse. */
-async function writeWebResponse(webRes: Response, nodeRes: http.ServerResponse): Promise<void> {
-  const responseHeaders: Record<string, string> = {};
-  webRes.headers.forEach((v, k) => {
-    responseHeaders[k] = v;
-  });
-  nodeRes.writeHead(webRes.status, responseHeaders);
-  nodeRes.end(await webRes.text());
-}
-
-function registerWebhookAdapter(urlPath: string, chat: Chat, adapterName: string): void {
-  webhookRoutes.set(urlPath, { chat, adapterName });
-  if (!sharedWebhookServer) {
-    const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
-    sharedWebhookServer = http.createServer(async (req, res) => {
-      const pathname = new URL(req.url || '/', URL_BASE).pathname;
-      const entry = webhookRoutes.get(pathname);
-      if (!entry) {
-        res.writeHead(404);
-        res.end('Not found');
-        return;
-      }
-      try {
-        const webReq = await nodeToWebRequest(req);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const webhooks = entry.chat.webhooks as Record<string, (req: Request, opts?: any) => Promise<Response>>;
-        const handler = webhooks[entry.adapterName];
-        const webRes = await handler(webReq, {
-          waitUntil: (p: Promise<unknown>) => { p.catch(() => {}); },
-        });
-        await writeWebResponse(webRes, res);
-      } catch (err) {
-        log.error('Webhook handler error', { url: req.url, err });
-        res.writeHead(500);
-        res.end('{"error":"internal"}');
-      }
-    });
-    sharedWebhookServer.listen(port, '0.0.0.0', () => {
-      log.info('Shared webhook server started', { port, paths: [...webhookRoutes.keys()] });
-    });
-  }
 }
