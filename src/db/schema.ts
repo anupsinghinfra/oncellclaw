@@ -78,7 +78,7 @@ CREATE TABLE pending_questions (
 
 /** Host-owned: inbound messages + delivery tracking + destination map. */
 export const INBOUND_SCHEMA = `
-CREATE TABLE messages_in (
+CREATE TABLE IF NOT EXISTS messages_in (
   id             TEXT PRIMARY KEY,
   seq            INTEGER UNIQUE,
   kind           TEXT NOT NULL,
@@ -95,7 +95,7 @@ CREATE TABLE messages_in (
 
 -- Host tracks delivery outcomes for messages_out IDs.
 -- Avoids writing to outbound.db (container-owned).
-CREATE TABLE delivered (
+CREATE TABLE IF NOT EXISTS delivered (
   message_out_id      TEXT PRIMARY KEY,
   platform_message_id TEXT,
   status              TEXT NOT NULL DEFAULT 'delivered',
@@ -106,7 +106,7 @@ CREATE TABLE delivered (
 -- Host overwrites on every container wake AND on demand (admin rewires, new child agents, etc.).
 -- Container queries this live on every lookup, so admin changes take effect
 -- mid-session without requiring a container restart.
-CREATE TABLE destinations (
+CREATE TABLE IF NOT EXISTS destinations (
   name            TEXT PRIMARY KEY,
   display_name    TEXT,
   type            TEXT NOT NULL,   -- 'channel' | 'agent'
@@ -120,7 +120,7 @@ CREATE TABLE destinations (
 -- and thread_id. Container reads it in send_message / ask_user_question /
 -- trigger_credential_collection to default the channel/thread of outbound
 -- messages when the agent doesn't specify an explicit destination.
-CREATE TABLE session_routing (
+CREATE TABLE IF NOT EXISTS session_routing (
   id           INTEGER PRIMARY KEY CHECK (id = 1),
   channel_type TEXT,
   platform_id  TEXT,
@@ -130,7 +130,7 @@ CREATE TABLE session_routing (
 
 /** Container-owned: outbound messages + processing acknowledgments. */
 export const OUTBOUND_SCHEMA = `
-CREATE TABLE messages_out (
+CREATE TABLE IF NOT EXISTS messages_out (
   id             TEXT PRIMARY KEY,
   seq            INTEGER UNIQUE,
   in_reply_to    TEXT,
@@ -147,7 +147,7 @@ CREATE TABLE messages_out (
 -- Container tracks processing status here instead of updating messages_in.
 -- Host reads this to know which messages have been processed.
 -- On container startup, stale 'processing' entries are cleared (crash recovery).
-CREATE TABLE processing_ack (
+CREATE TABLE IF NOT EXISTS processing_ack (
   message_id     TEXT PRIMARY KEY,
   status         TEXT NOT NULL,
   status_changed TEXT NOT NULL
@@ -156,7 +156,7 @@ CREATE TABLE processing_ack (
 -- Persistent key/value state owned by the container. Used (among other things)
 -- to store the SDK session ID so the agent's conversation resumes across
 -- container restarts. Cleared by /clear.
-CREATE TABLE session_state (
+CREATE TABLE IF NOT EXISTS session_state (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL

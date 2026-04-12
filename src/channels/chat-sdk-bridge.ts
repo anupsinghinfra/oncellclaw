@@ -14,12 +14,10 @@ import {
   Button,
   Modal,
   TextInput,
-  markdownToPlainText,
   type Adapter,
   type ConcurrencyStrategy,
   type Message as ChatMessage,
 } from 'chat';
-import { ValidationError } from '@chat-adapter/shared';
 import { log } from '../log.js';
 import { SqliteStateAdapter } from '../state-sqlite.js';
 import type { ChannelAdapter, ChannelSetup, ConversationConfig, InboundMessage } from './adapter.js';
@@ -380,30 +378,12 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           data: f.data,
           filename: f.filename,
         }));
-        try {
-          if (fileUploads && fileUploads.length > 0) {
-            const result = await adapter.postMessage(tid, { markdown: text, files: fileUploads });
-            return result?.id;
-          } else {
-            const result = await adapter.postMessage(tid, { markdown: text });
-            return result?.id;
-          }
-        } catch (err) {
-          // Permanent formatting failure (e.g. Telegram MarkdownV2 entity parse error):
-          // retry once as plain text so the queue isn't blocked forever.
-          if (err instanceof ValidationError) {
-            log.warn('Markdown rejected by adapter, retrying as plain text', {
-              adapter: adapter.name,
-              err: err.message,
-            });
-            const plain = markdownToPlainText(text);
-            const result = await adapter.postMessage(tid, plain);
-            if (fileUploads && fileUploads.length > 0) {
-              await adapter.postMessage(tid, { markdown: '', files: fileUploads });
-            }
-            return result?.id;
-          }
-          throw err;
+        if (fileUploads && fileUploads.length > 0) {
+          const result = await adapter.postMessage(tid, { markdown: text, files: fileUploads });
+          return result?.id;
+        } else {
+          const result = await adapter.postMessage(tid, { markdown: text });
+          return result?.id;
         }
       } else if (message.files && message.files.length > 0) {
         // Files only, no text

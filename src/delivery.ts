@@ -7,7 +7,7 @@
  *   - Tracks delivery in inbound.db's `delivered` table (host-owned)
  *   - Never writes to outbound.db — preserves single-writer-per-file invariant
  */
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
@@ -28,6 +28,17 @@ import {
 } from './db/agent-groups.js';
 import { createDestination, getDestinationByName, hasDestination, normalizeName } from './db/agent-destinations.js';
 import { getMessagingGroupByPlatform, getMessagingGroupsByAgentGroup } from './db/messaging-groups.js';
+import {
+  getDueOutboundMessages,
+  getDeliveredIds,
+  markDelivered,
+  markDeliveryFailed,
+  migrateDeliveredTable,
+  insertTask,
+  cancelTask,
+  pauseTask,
+  resumeTask,
+} from './db/session-db.js';
 import { log } from './log.js';
 import {
   openInboundDb,
@@ -215,30 +226,12 @@ async function deliverSessionMessages(session: Session): Promise<void> {
 
   try {
     // Read all due messages from outbound.db (read-only)
-    const allDue = outDb
-      .prepare(
-        `SELECT * FROM messages_out
-         WHERE (deliver_after IS NULL OR deliver_after <= datetime('now'))
-         ORDER BY timestamp ASC`,
-      )
-      .all() as Array<{
-      id: string;
-      kind: string;
-      platform_id: string | null;
-      channel_type: string | null;
-      thread_id: string | null;
-      content: string;
-    }>;
-
+    const allDue = getDueOutboundMessages(outDb);
     if (allDue.length === 0) return;
 
     // Filter out already-delivered messages using inbound.db's delivered table
-    const deliveredIds = new Set(
-      (inDb.prepare('SELECT message_out_id FROM delivered').all() as Array<{ message_out_id: string }>).map(
-        (r) => r.message_out_id,
-      ),
-    );
-    const undelivered = allDue.filter((m) => !deliveredIds.has(m.id));
+    const delivered = getDeliveredIds(inDb);
+    const undelivered = allDue.filter((m) => !delivered.has(m.id));
     if (undelivered.length === 0) return;
 
     // Ensure platform_message_id column exists (migration for existing sessions)
@@ -247,11 +240,7 @@ async function deliverSessionMessages(session: Session): Promise<void> {
     for (const msg of undelivered) {
       try {
         const platformMsgId = await deliverMessage(msg, session, inDb);
-        inDb
-          .prepare(
-            "INSERT OR IGNORE INTO delivered (message_out_id, platform_message_id, status, delivered_at) VALUES (?, ?, 'delivered', datetime('now'))",
-          )
-          .run(msg.id, platformMsgId ?? null);
+        markDelivered(inDb, msg.id, platformMsgId ?? null);
         deliveryAttempts.delete(msg.id);
         resetContainerIdleTimer(session.id);
       } catch (err) {
@@ -264,11 +253,7 @@ async function deliverSessionMessages(session: Session): Promise<void> {
             attempts,
             err,
           });
-          inDb
-            .prepare(
-              "INSERT OR IGNORE INTO delivered (message_out_id, platform_message_id, status, delivered_at) VALUES (?, NULL, 'failed', datetime('now'))",
-            )
-            .run(msg.id);
+          markDeliveryFailed(inDb, msg.id);
           deliveryAttempts.delete(msg.id);
         } else {
           log.warn('Message delivery failed, will retry', {
@@ -428,19 +413,6 @@ async function deliverMessage(
   return platformMsgId;
 }
 
-/** Ensure the delivered table has new columns (migration for existing sessions). */
-function migrateDeliveredTable(db: Database.Database): void {
-  const cols = new Set(
-    (db.prepare("PRAGMA table_info('delivered')").all() as Array<{ name: string }>).map((c) => c.name),
-  );
-  if (!cols.has('platform_message_id')) {
-    db.prepare('ALTER TABLE delivered ADD COLUMN platform_message_id TEXT').run();
-  }
-  if (!cols.has('status')) {
-    db.prepare("ALTER TABLE delivered ADD COLUMN status TEXT NOT NULL DEFAULT 'delivered'").run();
-  }
-}
-
 /**
  * Handle system actions from the container agent.
  * These are written to messages_out because the container can't write to inbound.db.
@@ -462,54 +434,36 @@ async function handleSystemAction(
       const processAfter = content.processAfter as string;
       const recurrence = (content.recurrence as string) || null;
 
-      // Compute next even seq for host-owned inbound.db
-      const maxSeq = (inDb.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_in').get() as { m: number }).m;
-      const nextSeq = maxSeq < 2 ? 2 : maxSeq + 2 - (maxSeq % 2);
-
-      inDb
-        .prepare(
-          `INSERT INTO messages_in (id, seq, timestamp, status, tries, process_after, recurrence, kind, platform_id, channel_type, thread_id, content)
-           VALUES (@id, @seq, datetime('now'), 'pending', 0, @process_after, @recurrence, 'task', @platform_id, @channel_type, @thread_id, @content)`,
-        )
-        .run({
-          id: taskId,
-          seq: nextSeq,
-          process_after: processAfter,
-          recurrence,
-          platform_id: content.platformId ?? null,
-          channel_type: content.channelType ?? null,
-          thread_id: content.threadId ?? null,
-          content: JSON.stringify({ prompt, script }),
-        });
+      insertTask(inDb, {
+        id: taskId,
+        processAfter,
+        recurrence,
+        platformId: (content.platformId as string) ?? null,
+        channelType: (content.channelType as string) ?? null,
+        threadId: (content.threadId as string) ?? null,
+        content: JSON.stringify({ prompt, script }),
+      });
       log.info('Scheduled task created', { taskId, processAfter, recurrence });
       break;
     }
 
     case 'cancel_task': {
       const taskId = content.taskId as string;
-      inDb
-        .prepare(
-          "UPDATE messages_in SET status = 'completed' WHERE id = ? AND kind = 'task' AND status IN ('pending', 'paused')",
-        )
-        .run(taskId);
+      cancelTask(inDb, taskId);
       log.info('Task cancelled', { taskId });
       break;
     }
 
     case 'pause_task': {
       const taskId = content.taskId as string;
-      inDb
-        .prepare("UPDATE messages_in SET status = 'paused' WHERE id = ? AND kind = 'task' AND status = 'pending'")
-        .run(taskId);
+      pauseTask(inDb, taskId);
       log.info('Task paused', { taskId });
       break;
     }
 
     case 'resume_task': {
       const taskId = content.taskId as string;
-      inDb
-        .prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND kind = 'task' AND status = 'paused'")
-        .run(taskId);
+      resumeTask(inDb, taskId);
       log.info('Task resumed', { taskId });
       break;
     }
