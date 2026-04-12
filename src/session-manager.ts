@@ -176,16 +176,6 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
   db.pragma('journal_mode = DELETE');
   db.pragma('busy_timeout = 5000');
   try {
-    // Lightweight forward-compat: create the table for older session DBs
-    // that predate this column.
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS session_routing (
-        id           INTEGER PRIMARY KEY CHECK (id = 1),
-        channel_type TEXT,
-        platform_id  TEXT,
-        thread_id    TEXT
-      );
-    `);
     db.prepare(
       `INSERT INTO session_routing (id, channel_type, platform_id, thread_id)
        VALUES (1, @channel_type, @platform_id, @thread_id)
