@@ -306,6 +306,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         };
         startGateway();
         log.info('Gateway listener started', { adapter: adapter.name });
+      } else {
+        // Non-gateway adapters (Slack, Teams, GitHub, etc.) — register on the shared webhook server
+        const webhookPath = `/api/webhooks/${adapter.name}`;
+        registerWebhookAdapter(webhookPath, adapter);
+        log.info('Webhook adapter registered', { adapter: adapter.name, path: webhookPath });
       }
 
       log.info('Chat SDK bridge initialized', { adapter: adapter.name });
@@ -548,4 +553,58 @@ async function handleForwardedEvent(
     body,
   });
   await adapter.handleWebhook(fakeRequest, {});
+}
+
+/**
+ * Shared public webhook server for all webhook-based adapters.
+ * Each adapter registers a path (e.g. /api/webhooks/slack, /api/webhooks/teams).
+ * The server listens on a single port (default 3000, configurable via WEBHOOK_PORT env var).
+ */
+const webhookAdapters = new Map<string, Adapter>();
+let sharedWebhookServer: http.Server | null = null;
+
+function registerWebhookAdapter(path: string, adapter: Adapter): void {
+  webhookAdapters.set(path, adapter);
+  if (!sharedWebhookServer) {
+    const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
+    sharedWebhookServer = http.createServer((req, res) => {
+      const matchedAdapter = req.url ? webhookAdapters.get(req.url) : undefined;
+      if (req.method === 'POST' && matchedAdapter) {
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', async () => {
+          try {
+            const body = Buffer.concat(chunks).toString();
+            const headers: Record<string, string> = {};
+            for (const [key, val] of Object.entries(req.headers)) {
+              if (typeof val === 'string') headers[key] = val;
+            }
+            const request = new Request(`http://localhost${req.url}`, {
+              method: 'POST',
+              headers,
+              body,
+            });
+            const response = await matchedAdapter.handleWebhook!(request, {
+              waitUntil: (p: Promise<unknown>) => { p.catch(() => {}); },
+            });
+            const responseBody = await response.text();
+            const responseHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+            response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+            res.writeHead(response.status, responseHeaders);
+            res.end(responseBody);
+          } catch (err) {
+            log.error('Webhook handler error', { url: req.url, err });
+            res.writeHead(500);
+            res.end('{"error":"internal"}');
+          }
+        });
+      } else {
+        res.writeHead(404);
+        res.end('Not found');
+      }
+    });
+    sharedWebhookServer.listen(port, '0.0.0.0', () => {
+      log.info('Shared webhook server started', { port, paths: [...webhookAdapters.keys()] });
+    });
+  }
 }
