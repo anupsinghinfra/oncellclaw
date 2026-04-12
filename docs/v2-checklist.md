@@ -262,6 +262,7 @@ Container skills live inside agent containers at runtime (`container/skills/`) a
 
 - [ ] register_group from inside agent
 - [ ] reset_session from inside agent
+- [ ] Delivery failures should round-trip back to the agent as system messages so it can decide how to recover (retry as plain text, simplify, give up), with a hard retry cap + poison-pill backstop in delivery.ts to keep the queue healthy
 
 ## Integrations
 
