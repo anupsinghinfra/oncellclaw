@@ -42,8 +42,10 @@ function destinationList(): string {
  * If `to` is omitted, use the session's default reply routing (channel +
  * thread the conversation is in) — the agent replies in place.
  *
- * If `to` is specified, look up the named destination; thread_id is null
- * because a cross-destination send starts a new conversation elsewhere.
+ * If `to` is specified, look up the named destination. If it resolves to
+ * the same channel the session is bound to, the session's thread_id is
+ * preserved so replies land in the correct thread. Otherwise thread_id
+ * is null (a cross-destination send starts a new conversation).
  */
 function resolveRouting(
   to: string | undefined,
@@ -75,10 +77,17 @@ function resolveRouting(
   const dest = findByName(to);
   if (!dest) return { error: `Unknown destination "${to}". Known: ${destinationList()}` };
   if (dest.type === 'channel') {
+    // If the destination is the same channel the session is bound to,
+    // preserve the thread_id so replies land in the correct thread.
+    const session = getSessionRouting();
+    const threadId =
+      session.channel_type === dest.channelType && session.platform_id === dest.platformId
+        ? session.thread_id
+        : null;
     return {
       channel_type: dest.channelType!,
       platform_id: dest.platformId!,
-      thread_id: null,
+      thread_id: threadId,
       resolvedName: to,
     };
   }
