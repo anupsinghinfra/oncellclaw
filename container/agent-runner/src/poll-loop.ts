@@ -365,9 +365,23 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
     .replace(/<internal>[\s\S]*?<\/internal>/g, '')
     .trim();
 
-  // Single-destination shortcut: the agent wrote plain text and has exactly
-  // one destination. Send the entire cleaned text to it.
+  // Single-destination shortcut: the agent wrote plain text — send to
+  // the session's originating channel (from session_routing) if available,
+  // otherwise fall back to the single destination.
   if (sent === 0 && scratchpad) {
+    if (routing.channelType && routing.platformId) {
+      // Reply to the channel/thread the message came from
+      writeMessageOut({
+        id: generateId(),
+        in_reply_to: routing.inReplyTo,
+        kind: 'chat',
+        platform_id: routing.platformId,
+        channel_type: routing.channelType,
+        thread_id: routing.threadId,
+        content: JSON.stringify({ text: scratchpad }),
+      });
+      return;
+    }
     const all = getAllDestinations();
     if (all.length === 1) {
       sendToDestination(all[0], scratchpad, routing);
