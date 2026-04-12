@@ -4,8 +4,13 @@
  * Channels self-register on import. The host calls initChannelAdapters() at startup
  * to instantiate and set up all registered adapters.
  */
+import { NetworkError } from '@chat-adapter/shared';
 import type { ChannelAdapter, ChannelRegistration, ChannelSetup } from './adapter.js';
 import { log } from '../log.js';
+
+const SETUP_RETRY_DELAYS_MS = [2000, 5000, 10000];
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const registry = new Map<string, ChannelRegistration>();
 const activeAdapters = new Map<string, ChannelAdapter>();
@@ -49,7 +54,31 @@ export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => 
       }
 
       const setup = setupFn(adapter);
-      await adapter.setup(setup);
+      // Transient network failures during adapter init (e.g. Telegram deleteWebhook
+      // hitting a DNS hiccup at boot) would otherwise leave the channel permanently
+      // dead until manual restart. Retry only on NetworkError so misconfigs (bad
+      // tokens, etc.) still fail fast.
+      let attempt = 0;
+      while (true) {
+        try {
+          await adapter.setup(setup);
+          break;
+        } catch (err) {
+          if (err instanceof NetworkError && attempt < SETUP_RETRY_DELAYS_MS.length) {
+            const delay = SETUP_RETRY_DELAYS_MS[attempt]!;
+            log.warn('Channel adapter setup failed with network error, retrying', {
+              channel: name,
+              attempt: attempt + 1,
+              delayMs: delay,
+              err: err.message,
+            });
+            await sleep(delay);
+            attempt += 1;
+            continue;
+          }
+          throw err;
+        }
+      }
       activeAdapters.set(adapter.channelType, adapter);
       log.info('Channel adapter started', { channel: name, type: adapter.channelType });
     } catch (err) {
