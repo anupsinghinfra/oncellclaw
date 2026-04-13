@@ -51,8 +51,9 @@ import {
   writeSystemResponse,
 } from './session-manager.js';
 import { resetContainerIdleTimer, wakeContainer } from './container-runner.js';
+import { initGroupFilesystem } from './group-init.js';
 import type { OutboundFile } from './channels/adapter.js';
-import type { Session } from './types.js';
+import type { AgentGroup, Session } from './types.js';
 
 const ACTIVE_POLL_MS = 1000;
 const SWEEP_POLL_MS = 60_000;
@@ -509,7 +510,7 @@ async function handleSystemAction(
       const agentGroupId = `ag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const now = new Date().toISOString();
 
-      createAgentGroup({
+      const newGroup: AgentGroup = {
         id: agentGroupId,
         name,
         folder,
@@ -517,12 +518,9 @@ async function handleSystemAction(
         agent_provider: null,
         container_config: null,
         created_at: now,
-      });
-
-      fs.mkdirSync(groupPath, { recursive: true });
-      if (instructions) {
-        fs.writeFileSync(path.join(groupPath, 'CLAUDE.md'), instructions);
-      }
+      };
+      createAgentGroup(newGroup);
+      initGroupFilesystem(newGroup, { instructions: instructions ?? undefined });
 
       // Insert bidirectional destination rows (= ACL grants).
       // Creator refers to child by the name it chose; child refers to creator as "parent".

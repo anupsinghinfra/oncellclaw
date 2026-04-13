@@ -35,7 +35,6 @@ function log(msg: string): void {
 }
 
 const CWD = '/workspace/agent';
-const GLOBAL_CLAUDE_MD = '/workspace/global/CLAUDE.md';
 
 async function main(): Promise<void> {
   const providerName = (process.env.AGENT_PROVIDER || 'claude') as ProviderName;
@@ -44,14 +43,11 @@ async function main(): Promise<void> {
 
   log(`Starting v2 agent-runner (provider: ${providerName})`);
 
-  // Load global CLAUDE.md as additional system context, then append destinations addendum
-  let instructions: string | undefined;
-  if (fs.existsSync(GLOBAL_CLAUDE_MD)) {
-    instructions = fs.readFileSync(GLOBAL_CLAUDE_MD, 'utf-8');
-    log('Loaded global CLAUDE.md');
-  }
-  const addendum = buildSystemPromptAddendum();
-  instructions = instructions ? `${instructions}\n\n${addendum}` : addendum;
+  // Destinations addendum is the only runtime-generated context we inject.
+  // Global CLAUDE.md is loaded by Claude Code from /workspace/agent/CLAUDE.md
+  // (which imports /workspace/global/CLAUDE.md via @-syntax) — no need to
+  // read it manually anymore.
+  const instructions = buildSystemPromptAddendum();
 
   // Discover additional directories mounted at /workspace/extra/*
   const additionalDirectories: string[] = [];

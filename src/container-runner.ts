@@ -13,6 +13,7 @@ import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZO
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
+import { initGroupFilesystem } from './group-init.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import {
@@ -164,6 +165,13 @@ export function killContainer(sessionId: string, reason: string): void {
 }
 
 function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
+  // Per-group filesystem state lives forever after first creation. Init is
+  // idempotent: it only writes paths that don't already exist, so this call
+  // is a no-op for groups that have spawned before. Pulling in upstream
+  // built-in skill or agent-runner source updates is an explicit operation
+  // (host-mediated tools), not something the spawn path does silently.
+  initGroupFilesystem(agentGroup);
+
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
   const sessDir = sessionDir(agentGroup.id, session.id);
@@ -173,59 +181,24 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   mounts.push({ hostPath: sessDir, containerPath: '/workspace', readonly: false });
 
   // Agent group folder at /workspace/agent
-  fs.mkdirSync(groupDir, { recursive: true });
   mounts.push({ hostPath: groupDir, containerPath: '/workspace/agent', readonly: false });
 
-  // Global memory directory
+  // Global memory directory — read-only for non-admin so the @import
+  // in each group's CLAUDE.md can resolve it without risk of being
+  // overwritten by an agent in some other group.
   const globalDir = path.join(GROUPS_DIR, 'global');
   if (fs.existsSync(globalDir)) {
     mounts.push({ hostPath: globalDir, containerPath: '/workspace/global', readonly: !agentGroup.is_admin });
   }
 
-  // Claude sessions directory (per agent group, shared across sessions)
+  // Per-group .claude-shared at /home/node/.claude (Claude state, settings,
+  // skills — initialized once at group creation, persistent thereafter)
   const claudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
-  fs.mkdirSync(claudeDir, { recursive: true });
-  const settingsFile = path.join(claudeDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          env: {
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
-  }
-
-  // Sync container skills
-  const skillsSrc = path.join(projectRoot, 'container', 'skills');
-  const skillsDst = path.join(claudeDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (fs.statSync(srcDir).isDirectory()) {
-        fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
-      }
-    }
-  }
   mounts.push({ hostPath: claudeDir, containerPath: '/home/node/.claude', readonly: false });
 
-  // Agent-runner source (per agent group, recompiled on container startup).
-  // Clear the destination before copying so files deleted or renamed
-  // upstream don't linger — tsc picks them up via `include: ["src/**/*"]`
-  // and a single stale file will fail the compile.
-  const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
+  // Per-group agent-runner source at /app/src (initialized once at group
+  // creation, persistent thereafter — agents can modify their runner)
   const groupRunnerDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, 'agent-runner-src');
-  if (fs.existsSync(agentRunnerSrc)) {
-    fs.rmSync(groupRunnerDir, { recursive: true, force: true });
-    fs.cpSync(agentRunnerSrc, groupRunnerDir, { recursive: true });
-  }
   mounts.push({ hostPath: groupRunnerDir, containerPath: '/app/src', readonly: false });
 
   // Admin: mount project root read-only
