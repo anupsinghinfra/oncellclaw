@@ -216,11 +216,14 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   }
   mounts.push({ hostPath: claudeDir, containerPath: '/home/node/.claude', readonly: false });
 
-  // Agent-runner source (per agent group, recompiled on container startup)
+  // Agent-runner source (per agent group, recompiled on container startup).
+  // Clear the destination before copying so files deleted or renamed
+  // upstream don't linger — tsc picks them up via `include: ["src/**/*"]`
+  // and a single stale file will fail the compile.
   const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
   const groupRunnerDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, 'agent-runner-src');
   if (fs.existsSync(agentRunnerSrc)) {
-    // Always copy — source files may have changed beyond just the index
+    fs.rmSync(groupRunnerDir, { recursive: true, force: true });
     fs.cpSync(agentRunnerSrc, groupRunnerDir, { recursive: true });
   }
   mounts.push({ hostPath: groupRunnerDir, containerPath: '/app/src', readonly: false });
