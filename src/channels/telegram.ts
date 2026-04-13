@@ -13,6 +13,28 @@ import { registerChannelAdapter } from './channel-registry.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
 
+/**
+ * Retry a one-shot operation that can fail on transient network errors at
+ * cold-start (DNS hiccups, brief upstream outages). Exponential backoff capped
+ * at 5 attempts — if the network is truly down we surface it instead of
+ * hanging the service indefinitely.
+ */
+async function withRetry<T>(fn: () => Promise<T>, label: string, maxAttempts = 5): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxAttempts) break;
+      const delay = Math.min(16000, 1000 * 2 ** (attempt - 1));
+      log.warn('Telegram setup failed, retrying', { label, attempt, delayMs: delay, err });
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractReplyContext(raw: Record<string, any>): ReplyContext | null {
   if (!raw.reply_to_message) return null;
@@ -144,7 +166,7 @@ registerChannelAdapter('telegram', {
           ...hostConfig,
           onInbound: createPairingInterceptor(botUsernamePromise, hostConfig.onInbound),
         };
-        return bridge.setup(intercepted);
+        return withRetry(() => bridge.setup(intercepted), 'bridge.setup');
       },
     };
     return wrapped;
