@@ -288,17 +288,6 @@ npm install && npm run build
 
 If the build fails, read the error output and fix it (usually a missing dependency). Then continue to step 5a.
 
-## 5a. Wire Channels to Agent Groups
-
-Invoke `/manage-channels` to wire the installed channels to agent groups. This step:
-1. Creates the agent group(s) and assigns a name to the assistant
-2. Asks for each channel's platform-specific ID (guided by channel-specific instructions)
-3. Decides the isolation level — whether channels share an agent, session, or are fully separate
-
-The `/manage-channels` skill reads each channel's `## Channel Info` section from its SKILL.md for platform-specific guidance (terminology, how to find IDs, recommended isolation).
-
-**This step is required.** Without it, channels are installed but not wired — messages will be silently dropped because the router has no agent group to route to.
-
 ## 6. Mount Allowlist
 
 AskUserQuestion: Agent access to external directories?
@@ -336,6 +325,19 @@ Replace `USERNAME` with the actual username (from `whoami`). Run the two `sudo` 
 - Linux: check `systemctl --user status nanoclaw`.
 - Re-run the service step after fixing.
 
+## 7a. Wire Channels to Agent Groups
+
+The service is now running, so polling-based adapters (Telegram) can observe inbound messages — required for pairing.
+
+Invoke `/manage-channels` to wire the installed channels to agent groups. This step:
+1. Creates the agent group(s) and assigns a name to the assistant
+2. Resolves each channel's platform-specific ID (Telegram via pairing code; other channels via the platform's own ID lookup)
+3. Decides the isolation level — whether channels share an agent, session, or are fully separate
+
+The `/manage-channels` skill reads each channel's `## Channel Info` section from its SKILL.md for platform-specific guidance (terminology, how to find IDs, recommended isolation).
+
+**This step is required.** Without it, channels are installed but not wired — messages will be silently dropped because the router has no agent group to route to.
+
 ## 8. Verify
 
 Run `npx tsx setup/index.ts --step verify` and parse the status block.
@@ -345,7 +347,7 @@ Run `npx tsx setup/index.ts --step verify` and parse the status block.
 - SERVICE=not_found → re-run step 7
 - CREDENTIALS=missing → re-run step 4 (Docker: check `onecli secrets list`; Apple Container: check `.env` for credentials)
 - CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
-- REGISTERED_GROUPS=0 → re-invoke `/manage-channels` from step 5a
+- REGISTERED_GROUPS=0 → re-invoke `/manage-channels` from step 7a
 - MOUNT_ALLOWLIST=missing → `npx tsx setup/index.ts --step mounts -- --empty`
 
 Tell user to test: send a message in their registered chat. Show: `tail -f logs/nanoclaw.log`

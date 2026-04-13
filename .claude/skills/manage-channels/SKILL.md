@@ -17,8 +17,8 @@ Categorize channels as: **wired** (has DB entities), **configured but unwired** 
 
 1. Ask the assistant name (default: project name or "Andy")
 2. Ask which channel is the primary/admin channel
-3. Ask for the platform ID — read the channel's SKILL.md `## Channel Info` > `how-to-find-id` to guide them
-4. Register:
+3. **Telegram special case:** if the chosen channel is `telegram`, do not ask for an ID. Run `npx tsx setup/index.ts --step pair-telegram -- --intent main`, show the user the 4-digit CODE from the `PAIR_TELEGRAM_ISSUED` block, and tell them to DM the bot with `@<botname> CODE` from the chat they want as their main. Wait for the `PAIR_TELEGRAM` block — `PLATFORM_ID`, `IS_GROUP`, `ADMIN_USER_ID` come back from there. Skip step 4 of this list (the messaging group is already created with admin binding); instead run only the agent-group + wiring portion via `setup --step register` with the returned `PLATFORM_ID`.
+4. Otherwise (non-Telegram), ask for the platform ID — read the channel's SKILL.md `## Channel Info` > `how-to-find-id` to guide them, then register:
 
 ```bash
 npx tsx setup/index.ts --step register -- \
@@ -64,10 +64,8 @@ For separate agents, also ask for a folder name and optionally a different assis
 
 When adding another group/chat on an already-configured platform (e.g. a second Telegram group):
 
-1. Read the channel's SKILL.md `## Channel Info` for terminology and how-to-find-id
-2. Ask for the new group/chat ID
-3. Ask the isolation question
-4. Register — no package or credential changes needed
+1. **Telegram:** ask the isolation question first to determine intent (`wire-to:<folder>` for an existing agent, `new-agent:<folder>` for a fresh one). Run `npx tsx setup/index.ts --step pair-telegram -- --intent <intent>`, show the CODE, and tell the user to post `@<botname> CODE` in the target group (or DM the bot for a private chat). Wait for the `PAIR_TELEGRAM` block, then run `setup --step register` with the returned `PLATFORM_ID` and the chosen folder/session-mode. The messaging group row is already created with `admin_user_id` set — `register` only needs to add the wiring.
+2. **Other channels:** read the channel's SKILL.md `## Channel Info` for terminology and how-to-find-id. Ask for the new group/chat ID, ask the isolation question, then register. No package or credential changes needed.
 
 ## Change Wiring
 
