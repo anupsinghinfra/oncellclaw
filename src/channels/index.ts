@@ -39,4 +39,5 @@ import './telegram.js';
 
 // gmail (native, no Chat SDK)
 
-// whatsapp baileys (native, no Chat SDK)
+// whatsapp (native, no Chat SDK)
+import './whatsapp.js';
