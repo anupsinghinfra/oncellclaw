@@ -5,7 +5,17 @@ import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { log } from './log.js';
 import type { AgentGroup } from './types.js';
 
-const GLOBAL_CLAUDE_IMPORT = '@/workspace/global/CLAUDE.md';
+// Container path where groups/global is mounted. The symlink we drop
+// into each group's dir resolves to this target inside the container.
+// It's a dangling symlink on the host — that's fine, host tools don't
+// follow it and the container mount makes it valid at read time.
+const GLOBAL_MEMORY_CONTAINER_PATH = '/workspace/global/CLAUDE.md';
+
+// Symlink name inside the group's dir. Claude Code's @-import only
+// follows paths inside cwd, so we can't reference /workspace/global
+// directly — we symlink into the group dir and import the symlink.
+export const GLOBAL_MEMORY_LINK_NAME = '.claude-global.md';
+export const GLOBAL_CLAUDE_IMPORT = `@./${GLOBAL_MEMORY_LINK_NAME}`;
 
 const DEFAULT_SETTINGS_JSON =
   JSON.stringify(
@@ -39,6 +49,23 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
   if (!fs.existsSync(groupDir)) {
     fs.mkdirSync(groupDir, { recursive: true });
     initialized.push('groupDir');
+  }
+
+  // groups/<folder>/.claude-global.md — symlink into the group dir so
+  // Claude Code's @-import can follow it. Uses lstat to avoid tripping
+  // existsSync on a dangling symlink (target only resolves inside the
+  // container).
+  const globalLinkPath = path.join(groupDir, GLOBAL_MEMORY_LINK_NAME);
+  let linkExists = false;
+  try {
+    fs.lstatSync(globalLinkPath);
+    linkExists = true;
+  } catch {
+    /* missing — recreate */
+  }
+  if (!linkExists) {
+    fs.symlinkSync(GLOBAL_MEMORY_CONTAINER_PATH, globalLinkPath);
+    initialized.push('.claude-global.md');
   }
 
   // groups/<folder>/CLAUDE.md — written once, then owned by the group
