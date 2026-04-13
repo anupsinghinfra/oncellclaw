@@ -30,6 +30,13 @@ export interface ConsumedDetails {
   consumedAt: string;
 }
 
+export interface PairingAttempt {
+  candidate: string;
+  platformId: string;
+  at: string;
+  matched: boolean;
+}
+
 export interface PairingRecord {
   code: string;
   intent: PairingIntent;
@@ -37,6 +44,15 @@ export interface PairingRecord {
   expiresAt: string;
   status: Exclude<PairingStatus, 'unknown'>;
   consumed?: ConsumedDetails;
+  /** Recent pairing attempts observed while this record was pending. Capped. */
+  attempts?: PairingAttempt[];
+}
+
+const MAX_ATTEMPTS_PER_RECORD = 10;
+
+function intentEquals(a: PairingIntent, b: PairingIntent): boolean {
+  if (a === 'main' || b === 'main') return a === b;
+  return a.kind === b.kind && a.folder === b.folder;
 }
 
 interface Store {
@@ -112,6 +128,15 @@ export async function createPairing(intent: PairingIntent, opts: CreatePairingOp
   return withLock(() => {
     const store = readStore();
     sweep(store, Date.now());
+    // Replace-by-default: a new pairing for an intent supersedes any existing
+    // pending pairing for the same intent. Old waitForPairing calls observe
+    // `expired` and exit on their own.
+    for (const r of store.pairings) {
+      if (r.status === 'pending' && intentEquals(r.intent, intent)) {
+        r.status = 'expired';
+        log.info('Pairing superseded by new request', { code: r.code, intent });
+      }
+    }
     const active = new Set(store.pairings.filter((r) => r.status === 'pending').map((r) => r.code));
     const now = new Date();
     const record: PairingRecord = {
@@ -172,7 +197,28 @@ export async function tryConsume(input: ConsumeInput): Promise<PairingRecord | n
     sweep(store, now);
     const record = store.pairings.find((r) => r.code === code && r.status === 'pending');
     if (!record) {
+      // Miss: record the attempt on every currently-pending record so each
+      // waitForPairing caller can surface it as user feedback.
+      const attempt: PairingAttempt = {
+        candidate: code,
+        platformId: input.platformId,
+        at: new Date(now).toISOString(),
+        matched: false,
+      };
+      let recorded = false;
+      for (const r of store.pairings) {
+        if (r.status !== 'pending') continue;
+        r.attempts = [...(r.attempts ?? []), attempt].slice(-MAX_ATTEMPTS_PER_RECORD);
+        // One attempt per code. A wrong guess invalidates the pairing
+        // immediately — pair-telegram observes the `expired` signal and
+        // auto-issues a fresh code (up to a retry cap).
+        r.status = 'expired';
+        recorded = true;
+      }
       writeStore(store);
+      if (recorded) {
+        log.info('Pairing invalidated by wrong attempt', { candidate: code, platformId: input.platformId });
+      }
       return null;
     }
     record.status = 'consumed';
@@ -183,6 +229,10 @@ export async function tryConsume(input: ConsumeInput): Promise<PairingRecord | n
       adminUserId: input.adminUserId ?? null,
       consumedAt: new Date(now).toISOString(),
     };
+    record.attempts = [
+      ...(record.attempts ?? []),
+      { candidate: code, platformId: input.platformId, at: new Date(now).toISOString(), matched: true },
+    ].slice(-MAX_ATTEMPTS_PER_RECORD);
     writeStore(store);
     log.info('Pairing consumed', { code, platformId: input.platformId, intent: record.intent });
     return record;
@@ -208,6 +258,8 @@ export interface WaitForPairingOptions {
   timeoutMs?: number;
   /** Polling interval as a fallback when fs.watch misses an event. */
   pollMs?: number;
+  /** Fires once per new attempt recorded against this pairing (misses only). */
+  onAttempt?: (attempt: PairingAttempt) => void;
 }
 
 /**
@@ -238,6 +290,7 @@ export async function waitForPairing(code: string, opts: WaitForPairingOptions =
       if (interval) clearInterval(interval);
     };
 
+    let seenAttempts = 0;
     const check = () => {
       if (settled) return;
       const r = getPairing(code);
@@ -246,6 +299,21 @@ export async function waitForPairing(code: string, opts: WaitForPairingOptions =
         reject(new Error(`Pairing ${code} disappeared`));
         return;
       }
+      // Surface any new miss attempts since the last tick. Only fire for
+      // misses — matches are signaled by `status === 'consumed'` below.
+      if (opts.onAttempt && r.attempts) {
+        for (let i = seenAttempts; i < r.attempts.length; i++) {
+          const a = r.attempts[i];
+          if (!a.matched) {
+            try {
+              opts.onAttempt(a);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        seenAttempts = r.attempts.length;
+      }
       if (r.status === 'consumed') {
         cleanup();
         resolve(r);
@@ -253,7 +321,14 @@ export async function waitForPairing(code: string, opts: WaitForPairingOptions =
       }
       if (r.status === 'expired' || Date.now() >= deadline) {
         cleanup();
-        reject(new Error(`Pairing ${code} expired`));
+        const lastMiss = r.attempts
+          ?.slice()
+          .reverse()
+          .find((a) => !a.matched);
+        const reason = lastMiss
+          ? `Pairing ${code} invalidated by wrong code (${lastMiss.candidate})`
+          : `Pairing ${code} expired`;
+        reject(new Error(reason));
         return;
       }
     };

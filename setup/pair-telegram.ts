@@ -65,33 +65,58 @@ export async function run(args: string[]): Promise<void> {
   const db = initDb(path.join(DATA_DIR, 'v2.db'));
   runMigrations(db);
 
-  const record = await createPairing(intent, { ttlMs });
-
-  // Tell the user what to do. The skill prints this as user-facing text.
+  const MAX_REGENERATIONS = 5;
+  let record = await createPairing(intent, { ttlMs });
   emitStatus('PAIR_TELEGRAM_ISSUED', {
     CODE: record.code,
     INTENT: intentToString(intent),
     EXPIRES_AT: record.expiresAt,
-    INSTRUCTIONS: `Send "@<botname> ${record.code}" from the Telegram chat you want to register.`,
+    INSTRUCTIONS: `Send "${record.code}" from the Telegram chat you want to register (or "@<botname> ${record.code}" in a group with privacy on).`,
   });
 
-  try {
-    const consumed = await waitForPairing(record.code, { timeoutMs: ttlMs });
-    emitStatus('PAIR_TELEGRAM', {
-      STATUS: 'success',
-      CODE: record.code,
-      INTENT: intentToString(consumed.intent),
-      PLATFORM_ID: consumed.consumed!.platformId,
-      IS_GROUP: consumed.consumed!.isGroup,
-      ADMIN_USER_ID: consumed.consumed!.adminUserId ?? '',
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    emitStatus('PAIR_TELEGRAM', {
-      STATUS: 'failed',
-      CODE: record.code,
-      ERROR: message,
-    });
-    process.exit(2);
+  for (let regen = 0; regen <= MAX_REGENERATIONS; regen++) {
+    try {
+      const consumed = await waitForPairing(record.code, {
+        timeoutMs: ttlMs,
+        onAttempt: (a) => {
+          emitStatus('PAIR_TELEGRAM_ATTEMPT', {
+            EXPECTED_CODE: record.code,
+            RECEIVED_CODE: a.candidate,
+            PLATFORM_ID: a.platformId,
+            AT: a.at,
+          });
+        },
+      });
+      emitStatus('PAIR_TELEGRAM', {
+        STATUS: 'success',
+        CODE: record.code,
+        INTENT: intentToString(consumed.intent),
+        PLATFORM_ID: consumed.consumed!.platformId,
+        IS_GROUP: consumed.consumed!.isGroup,
+        ADMIN_USER_ID: consumed.consumed!.adminUserId ?? '',
+      });
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const invalidated = /invalidated by wrong code/.test(message);
+      if (invalidated && regen < MAX_REGENERATIONS) {
+        record = await createPairing(intent, { ttlMs });
+        emitStatus('PAIR_TELEGRAM_NEW_CODE', {
+          CODE: record.code,
+          INTENT: intentToString(intent),
+          EXPIRES_AT: record.expiresAt,
+          REASON: 'previous code invalidated by wrong attempt',
+          REGENERATIONS_LEFT: MAX_REGENERATIONS - regen - 1,
+          INSTRUCTIONS: `Send "${record.code}" from the Telegram chat you want to register.`,
+        });
+        continue;
+      }
+      emitStatus('PAIR_TELEGRAM', {
+        STATUS: 'failed',
+        CODE: record.code,
+        ERROR: invalidated ? 'max-regenerations-exceeded' : message,
+      });
+      process.exit(2);
+    }
   }
 }
