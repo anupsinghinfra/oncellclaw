@@ -30,10 +30,7 @@ const DEFAULT_SETTINGS_JSON =
  * host never overwrites any of these paths automatically — agents own them.
  * To pull in upstream changes, use the host-mediated reset/refresh tools.
  */
-export function initGroupFilesystem(
-  group: AgentGroup,
-  opts?: { instructions?: string },
-): void {
+export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: string }): void {
   const projectRoot = process.cwd();
   const initialized: string[] = [];
 
