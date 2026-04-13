@@ -47,7 +47,7 @@ export function getChannelContainerConfig(name: string): ChannelRegistration['co
 export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => ChannelSetup): Promise<void> {
   for (const [name, registration] of registry) {
     try {
-      const adapter = registration.factory();
+      const adapter = await registration.factory();
       if (!adapter) {
         log.warn('Channel credentials missing, skipping', { channel: name });
         continue;
