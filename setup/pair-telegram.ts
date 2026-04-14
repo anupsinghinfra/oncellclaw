@@ -2,8 +2,10 @@
  * Step: pair-telegram — issue a one-time pairing code and wait for the
  * operator to send `@botname CODE` from the chat they want to register.
  *
- * On success, prints platformId / isGroup / adminUserId / intent. The caller
- * (skill) then runs `setup --step register` with those values.
+ * On success, prints platformId / isGroup / pairedUserId / intent. The caller
+ * (skill) can then wire the chat to an agent group (e.g. via /init-first-agent
+ * or setup --step register). telegram.ts's inbound interceptor has already
+ * upserted the paired user and granted owner if no owner existed yet.
  *
  * The service must already be running so the telegram adapter is polling.
  */
@@ -93,7 +95,9 @@ export async function run(args: string[]): Promise<void> {
         INTENT: intentToString(consumed.intent),
         PLATFORM_ID: consumed.consumed!.platformId,
         IS_GROUP: consumed.consumed!.isGroup,
-        ADMIN_USER_ID: consumed.consumed!.adminUserId ?? '',
+        PAIRED_USER_ID: consumed.consumed!.adminUserId
+          ? `telegram:${consumed.consumed!.adminUserId}`
+          : '',
       });
       return;
     } catch (err) {

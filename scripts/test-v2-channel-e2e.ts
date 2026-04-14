@@ -35,7 +35,6 @@ createAgentGroup({
   id: 'ag-chan',
   name: 'Channel E2E Agent',
   folder: 'test-channel-e2e',
-  is_admin: 1, // admin so OneCLI uses default agent for auth
   agent_provider: 'claude',
   container_config: null,
   created_at: new Date().toISOString(),
@@ -47,7 +46,7 @@ createMessagingGroup({
   platform_id: 'mock-channel-1',
   name: 'Mock Channel',
   is_group: 0,
-  admin_user_id: null,
+  unknown_sender_policy: 'public',
   created_at: new Date().toISOString(),
 });
 

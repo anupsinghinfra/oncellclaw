@@ -7,8 +7,9 @@
  * register. The message must be exactly the 4 digits (optionally prefixed by
  * `@botname ` for groups with privacy ON) — arbitrary messages that happen to
  * contain a 4-digit number do NOT match. The inbound interceptor in
- * telegram.ts matches the code and records the chat (with admin_user_id)
- * before it ever reaches the router.
+ * telegram.ts matches the code, records the chat, upserts the paired user,
+ * and (if no owner exists yet) promotes them to owner — all before the
+ * message ever reaches the router.
  *
  * Storage is a JSON file at data/telegram-pairings.json — single-process,
  * read-modify-write under an in-process mutex.

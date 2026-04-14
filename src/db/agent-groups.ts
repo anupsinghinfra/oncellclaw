@@ -4,8 +4,8 @@ import { getDb } from './connection.js';
 export function createAgentGroup(group: AgentGroup): void {
   getDb()
     .prepare(
-      `INSERT INTO agent_groups (id, name, folder, is_admin, agent_provider, container_config, created_at)
-       VALUES (@id, @name, @folder, @is_admin, @agent_provider, @container_config, @created_at)`,
+      `INSERT INTO agent_groups (id, name, folder, agent_provider, container_config, created_at)
+       VALUES (@id, @name, @folder, @agent_provider, @container_config, @created_at)`,
     )
     .run(group);
 }
@@ -20,10 +20,6 @@ export function getAgentGroupByFolder(folder: string): AgentGroup | undefined {
 
 export function getAllAgentGroups(): AgentGroup[] {
   return getDb().prepare('SELECT * FROM agent_groups ORDER BY name').all() as AgentGroup[];
-}
-
-export function getAdminAgentGroup(): AgentGroup | undefined {
-  return getDb().prepare('SELECT * FROM agent_groups WHERE is_admin = 1 LIMIT 1').get() as AgentGroup | undefined;
 }
 
 export function updateAgentGroup(

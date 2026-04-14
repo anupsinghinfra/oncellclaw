@@ -69,7 +69,6 @@ describe('session manager', () => {
       id: 'ag-1',
       name: 'Test Agent',
       folder: 'test-agent',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),
@@ -80,7 +79,7 @@ describe('session manager', () => {
       platform_id: 'chan-123',
       name: 'General',
       is_group: 1,
-      admin_user_id: null,
+      unknown_sender_policy: 'strict',
       created_at: now(),
     });
   });
@@ -185,18 +184,19 @@ describe('router', () => {
       id: 'ag-1',
       name: 'Test Agent',
       folder: 'test-agent',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),
     });
+    // Use 'public' policy so the router tests exercise routing, not the
+    // access gate. Dedicated access-gate tests live with the access module.
     createMessagingGroup({
       id: 'mg-1',
       channel_type: 'discord',
       platform_id: 'chan-123',
       name: 'General',
       is_group: 1,
-      admin_user_id: null,
+      unknown_sender_policy: 'public',
       created_at: now(),
     });
     createMessagingGroupAgent({
@@ -307,7 +307,6 @@ describe('delivery', () => {
       id: 'ag-1',
       name: 'Agent',
       folder: 'agent',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),
@@ -318,7 +317,7 @@ describe('delivery', () => {
       platform_id: 'chan-test',
       name: 'Test',
       is_group: 0,
-      admin_user_id: null,
+      unknown_sender_policy: 'strict',
       created_at: now(),
     });
 

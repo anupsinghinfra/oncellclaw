@@ -12,17 +12,13 @@ import { initDb } from '../src/db/connection.js';
 import { runMigrations } from '../src/db/migrations/index.js';
 import { createAgentGroup, getAgentGroupByFolder } from '../src/db/agent-groups.js';
 import {
-  createDestination,
-  getDestinationByName,
-  normalizeName,
-} from '../src/db/agent-destinations.js';
-import {
   createMessagingGroup,
   createMessagingGroupAgent,
   getMessagingGroupByPlatform,
   getMessagingGroupAgentByPair,
 } from '../src/db/messaging-groups.js';
 import { isValidGroupFolder } from '../src/group-folder.js';
+import { initGroupFilesystem } from '../src/group-init.js';
 import { log } from '../src/log.js';
 import { resolveSession, writeSessionMessage } from '../src/session-manager.js';
 import { emitStatus } from './status.js';
@@ -40,14 +36,10 @@ interface RegisterArgs {
   channel: string;
   /** Whether messages require the trigger pattern to activate */
   requiresTrigger: boolean;
-  /** Whether this is the admin/main agent group */
-  isMain: boolean;
   /** Display name for the assistant */
   assistantName: string;
   /** Session mode: 'shared' (one session per channel) or 'per-thread' */
   sessionMode: string;
-  /** Optional local name the agent uses for this channel (defaults to normalized messaging group name) */
-  localName: string | null;
 }
 
 function parseArgs(args: string[]): RegisterArgs {
@@ -58,16 +50,12 @@ function parseArgs(args: string[]): RegisterArgs {
     folder: '',
     channel: 'discord',
     requiresTrigger: true,
-    isMain: false,
     assistantName: 'Andy',
     sessionMode: 'shared',
-    localName: null,
   };
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      // Accept both --jid (v1 compat) and --platform-id (v2)
-      case '--jid':
       case '--platform-id':
         result.platformId = args[++i] || '';
         break;
@@ -86,17 +74,11 @@ function parseArgs(args: string[]): RegisterArgs {
       case '--no-trigger-required':
         result.requiresTrigger = false;
         break;
-      case '--is-main':
-        result.isMain = true;
-        break;
       case '--assistant-name':
         result.assistantName = args[++i] || 'Andy';
         break;
       case '--session-mode':
         result.sessionMode = args[++i] || 'shared';
-        break;
-      case '--local-name':
-        result.localName = args[++i] || null;
         break;
     }
   }
@@ -153,7 +135,6 @@ export async function run(args: string[]): Promise<void> {
       id: agId,
       name: parsed.assistantName,
       folder: parsed.folder,
-      is_admin: parsed.isMain ? 1 : 0,
       agent_provider: null,
       container_config: null,
       created_at: new Date().toISOString(),
@@ -161,6 +142,7 @@ export async function run(args: string[]): Promise<void> {
     agentGroup = getAgentGroupByFolder(parsed.folder)!;
     log.info('Created agent group', { id: agId, folder: parsed.folder });
   }
+  initGroupFilesystem(agentGroup);
 
   // 2. Create or find messaging group
   let messagingGroup = getMessagingGroupByPlatform(parsed.channel, parsed.platformId);
@@ -172,14 +154,15 @@ export async function run(args: string[]): Promise<void> {
       platform_id: parsed.platformId,
       name: parsed.name,
       is_group: 1,
-      admin_user_id: null,
+      unknown_sender_policy: 'strict',
       created_at: new Date().toISOString(),
     });
     messagingGroup = getMessagingGroupByPlatform(parsed.channel, parsed.platformId)!;
     log.info('Created messaging group', { id: mgId, channel: parsed.channel, platformId: parsed.platformId });
   }
 
-  // 3. Wire agent to messaging group + create destination row for the agent's map
+  // 3. Wire agent to messaging group — createMessagingGroupAgent auto-creates
+  // the companion agent_destinations row so delivery's ACL admits this target.
   let newlyWired = false;
   const existing = getMessagingGroupAgentByPair(messagingGroup.id, agentGroup.id);
   if (!existing) {
@@ -198,31 +181,13 @@ export async function run(args: string[]): Promise<void> {
       trigger_rules: triggerRules,
       response_scope: 'all',
       session_mode: parsed.sessionMode,
-      priority: parsed.isMain ? 10 : 0,
-      created_at: new Date().toISOString(),
-    });
-
-    // Create destination row so the agent can address this channel by name.
-    // Auto-suffix on collision within this agent's namespace.
-    const baseLocalName = normalizeName(parsed.localName || parsed.name);
-    let localName = baseLocalName;
-    let suffix = 2;
-    while (getDestinationByName(agentGroup.id, localName)) {
-      localName = `${baseLocalName}-${suffix}`;
-      suffix++;
-    }
-    createDestination({
-      agent_group_id: agentGroup.id,
-      local_name: localName,
-      target_type: 'channel',
-      target_id: messagingGroup.id,
+      priority: 0,
       created_at: new Date().toISOString(),
     });
     log.info('Wired agent to messaging group', {
       mgaId,
       agentGroup: agentGroup.id,
       messagingGroup: messagingGroup.id,
-      localName,
     });
   }
 
@@ -242,22 +207,7 @@ export async function run(args: string[]): Promise<void> {
     log.info('Onboarding message written', { sessionId: session.id, channel: parsed.channel });
   }
 
-  // 5. Create group folders
-  fs.mkdirSync(path.join(projectRoot, 'groups', parsed.folder, 'logs'), { recursive: true });
-
-  // Create CLAUDE.md from template if it doesn't exist
-  const groupClaudeMdPath = path.join(projectRoot, 'groups', parsed.folder, 'CLAUDE.md');
-  if (!fs.existsSync(groupClaudeMdPath)) {
-    const templatePath = parsed.isMain
-      ? path.join(projectRoot, 'groups', 'main', 'CLAUDE.md')
-      : path.join(projectRoot, 'groups', 'global', 'CLAUDE.md');
-    if (fs.existsSync(templatePath)) {
-      fs.copyFileSync(templatePath, groupClaudeMdPath);
-      log.info('Created CLAUDE.md from template', { file: groupClaudeMdPath, template: templatePath });
-    }
-  }
-
-  // 6. Update assistant name in CLAUDE.md files if different from default
+  // 5. Update assistant name in CLAUDE.md files if different from default
   let nameUpdated = false;
   if (parsed.assistantName !== 'Andy') {
     log.info('Updating assistant name', { from: 'Andy', to: parsed.assistantName });

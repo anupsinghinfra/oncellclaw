@@ -24,8 +24,12 @@ export interface PollLoopConfig {
   systemContext?: {
     instructions?: string;
   };
-  /** Admin user ID for permission checks on admin commands (e.g. /clear). */
-  adminUserId?: string;
+  /**
+   * Set of user IDs allowed to run admin commands (e.g. /clear) in this
+   * agent group. Host populates from owners + global admins + scoped admins
+   * at container wake time, so role changes take effect on next spawn.
+   */
+  adminUserIds?: Set<string>;
 }
 
 /**
@@ -75,7 +79,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     const routing = extractRouting(messages);
 
     // Handle commands: categorize chat messages
-    const adminUserId = config.adminUserId;
+    const adminUserIds = config.adminUserIds ?? new Set<string>();
     const normalMessages = [];
     const commandIds: string[] = [];
 
@@ -95,7 +99,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       }
 
       if (cmdInfo.category === 'admin') {
-        if (!adminUserId || cmdInfo.senderId !== adminUserId) {
+        if (!cmdInfo.senderId || !adminUserIds.has(cmdInfo.senderId)) {
           log(`Admin command denied: ${cmdInfo.command} from ${cmdInfo.senderId} (msg: ${msg.id})`);
           writeMessageOut({
             id: generateId(),

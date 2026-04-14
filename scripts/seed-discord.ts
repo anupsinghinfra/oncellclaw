@@ -28,7 +28,6 @@ if (!getAgentGroup(AGENT_GROUP_ID)) {
     id: AGENT_GROUP_ID,
     name: 'Main',
     folder: 'main',
-    is_admin: 1,
     agent_provider: 'claude',
     container_config: null,
     created_at: new Date().toISOString(),
@@ -46,7 +45,7 @@ if (!getMessagingGroup(MESSAGING_GROUP_ID)) {
     platform_id: CHANNEL_ID,
     name: 'Discord Test',
     is_group: 1,
-    admin_user_id: null,
+    unknown_sender_policy: 'strict',
     created_at: new Date().toISOString(),
   });
   console.log('Created messaging group:', MESSAGING_GROUP_ID);

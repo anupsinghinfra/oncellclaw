@@ -21,17 +21,11 @@ function log(msg: string): void {
   console.error(`[mcp-tools] ${msg}`);
 }
 
-// Only admin agents get the create_agent tool. Non-admins never see it in the
-// listTools response; the host also re-checks permission on receive as defense
-// in depth (see delivery.ts create_agent handler).
-const isAdmin = process.env.NANOCLAW_IS_ADMIN === '1';
-const conditionalAgentTools = isAdmin ? agentTools : [];
-
 const allTools: McpToolDefinition[] = [
   ...coreTools,
   ...schedulingTools,
   ...interactiveTools,
-  ...conditionalAgentTools,
+  ...agentTools,
   ...selfModTools,
   ...credentialTools,
 ];

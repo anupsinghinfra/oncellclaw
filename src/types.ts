@@ -4,11 +4,12 @@ export interface AgentGroup {
   id: string;
   name: string;
   folder: string;
-  is_admin: number; // 0 | 1
   agent_provider: string | null;
   container_config: string | null; // JSON: { additionalMounts, timeout }
   created_at: string;
 }
+
+export type UnknownSenderPolicy = 'strict' | 'request_approval' | 'public';
 
 export interface MessagingGroup {
   id: string;
@@ -16,8 +17,55 @@ export interface MessagingGroup {
   platform_id: string;
   name: string | null;
   is_group: number; // 0 | 1
-  admin_user_id: string | null;
+  unknown_sender_policy: UnknownSenderPolicy;
   created_at: string;
+}
+
+// ── Identity & privilege ──
+
+/**
+ * User = a messaging-platform identifier. Namespaced so distinct channels
+ * with numeric IDs don't collide: "phone:+1555...", "tg:123", "discord:456",
+ * "email:a@x.com". A single human with a phone AND a telegram handle has
+ * two separate users — no cross-channel linking (yet).
+ */
+export interface User {
+  id: string;
+  kind: string; // 'phone' | 'email' | 'discord' | 'telegram' | 'matrix' | ...
+  display_name: string | null;
+  created_at: string;
+}
+
+export type UserRoleKind = 'owner' | 'admin';
+
+/**
+ * Role grant. Owner is always global. Admin is either global
+ * (agent_group_id = null) or scoped to a specific agent group.
+ * Admin @ A implicitly makes the user a member of A — we do not require
+ * a separate agent_group_members row for admins.
+ */
+export interface UserRole {
+  user_id: string;
+  role: UserRoleKind;
+  agent_group_id: string | null;
+  granted_by: string | null;
+  granted_at: string;
+}
+
+/** "Known" membership in an agent group — required for unprivileged users. */
+export interface AgentGroupMember {
+  user_id: string;
+  agent_group_id: string;
+  added_by: string | null;
+  added_at: string;
+}
+
+/** Cached DM channel for a user on a specific channel_type. */
+export interface UserDm {
+  user_id: string;
+  channel_type: string;
+  messaging_group_id: string;
+  resolved_at: string;
 }
 
 export interface MessagingGroupAgent {

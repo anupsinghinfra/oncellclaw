@@ -5,26 +5,27 @@
  */
 
 export const SCHEMA = `
--- Agent workspaces: folder, skills, CLAUDE.md, container config
+-- Agent workspaces: folder, skills, CLAUDE.md, container config.
+-- All workspaces are equal; privilege lives on users, not groups.
 CREATE TABLE agent_groups (
   id               TEXT PRIMARY KEY,
   name             TEXT NOT NULL,
   folder           TEXT NOT NULL UNIQUE,
-  is_admin         INTEGER DEFAULT 0,
   agent_provider   TEXT,
   container_config TEXT,
   created_at       TEXT NOT NULL
 );
 
--- Platform groups/channels
+-- Platform groups/channels. unknown_sender_policy governs what happens
+-- when a sender we've never seen before posts in this chat.
 CREATE TABLE messaging_groups (
-  id               TEXT PRIMARY KEY,
-  channel_type     TEXT NOT NULL,
-  platform_id      TEXT NOT NULL,
-  name             TEXT,
-  is_group         INTEGER DEFAULT 0,
-  admin_user_id    TEXT,
-  created_at       TEXT NOT NULL,
+  id                    TEXT PRIMARY KEY,
+  channel_type          TEXT NOT NULL,
+  platform_id           TEXT NOT NULL,
+  name                  TEXT,
+  is_group              INTEGER DEFAULT 0,
+  unknown_sender_policy TEXT NOT NULL DEFAULT 'strict', -- 'strict' | 'request_approval' | 'public'
+  created_at            TEXT NOT NULL,
   UNIQUE(channel_type, platform_id)
 );
 
@@ -39,6 +40,52 @@ CREATE TABLE messaging_group_agents (
   priority           INTEGER DEFAULT 0,
   created_at         TEXT NOT NULL,
   UNIQUE(messaging_group_id, agent_group_id)
+);
+
+-- Users are messaging-platform identifiers, namespaced: "phone:+1555...",
+-- "tg:123", "discord:456", "email:a@x.com". A single human can own multiple
+-- user rows if they have identifiers on unrelated channels (no linking yet).
+CREATE TABLE users (
+  id           TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL,
+  display_name TEXT,
+  created_at   TEXT NOT NULL
+);
+
+-- Role grants on users. Privilege is user-level, not group-level.
+--   role ∈ {owner, admin}
+--   owner: always global (agent_group_id IS NULL)
+--   admin: agent_group_id NULL = global, else scoped to that agent group
+-- Invariant: admin @ A implies membership in A (no row needed).
+CREATE TABLE user_roles (
+  user_id        TEXT NOT NULL REFERENCES users(id),
+  role           TEXT NOT NULL,
+  agent_group_id TEXT REFERENCES agent_groups(id),
+  granted_by     TEXT REFERENCES users(id),
+  granted_at     TEXT NOT NULL,
+  PRIMARY KEY (user_id, role, agent_group_id)
+);
+CREATE INDEX idx_user_roles_scope ON user_roles(agent_group_id, role);
+
+-- "Known" membership in an agent group. Required for an unprivileged user
+-- to interact with a workspace. Admin @ A is implicitly a member of A.
+CREATE TABLE agent_group_members (
+  user_id        TEXT NOT NULL REFERENCES users(id),
+  agent_group_id TEXT NOT NULL REFERENCES agent_groups(id),
+  added_by       TEXT REFERENCES users(id),
+  added_at       TEXT NOT NULL,
+  PRIMARY KEY (user_id, agent_group_id)
+);
+
+-- Cached mapping from (user, channel) to the DM messaging group. Lets the
+-- host initiate cold DMs (pairing, approvals) without reprobing the
+-- platform API on every send. Populated lazily by ensureUserDm().
+CREATE TABLE user_dms (
+  user_id            TEXT NOT NULL REFERENCES users(id),
+  channel_type       TEXT NOT NULL,
+  messaging_group_id TEXT NOT NULL REFERENCES messaging_groups(id),
+  resolved_at        TEXT NOT NULL,
+  PRIMARY KEY (user_id, channel_type)
 );
 
 -- Sessions: one folder = one session = one container when running
@@ -105,9 +152,9 @@ CREATE TABLE IF NOT EXISTS delivered (
 );
 
 -- Destination map for this session's agent.
--- Host overwrites on every container wake AND on demand (admin rewires, new child agents, etc.).
--- Container queries this live on every lookup, so admin changes take effect
--- mid-session without requiring a container restart.
+-- Host overwrites on every container wake AND on demand (rewires, new child
+-- agents, etc.). Container queries this live on every lookup, so changes
+-- take effect mid-session without requiring a container restart.
 CREATE TABLE IF NOT EXISTS destinations (
   name            TEXT PRIMARY KEY,
   display_name    TEXT,

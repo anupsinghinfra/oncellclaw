@@ -7,27 +7,19 @@ description: Wire channels to agent groups, manage isolation levels, add new cha
 
 Wire messaging channels to agent groups. See `docs/v2-isolation-model.md` for the full isolation model.
 
+Privilege is a **user-level** concept, not a channel-level one (see `src/db/user-roles.ts`, `src/access.ts`). There is no "main channel" / "main group" — any user can be granted `owner` or `admin` (global or scoped to an agent group) via `grantRole()`, and messages from unknown senders are gated per-messaging-group by `unknown_sender_policy` (`strict` | `request_approval` | `public`).
+
 ## Assess Current State
 
-Read the v2 central DB (`data/v2.db`) — query `agent_groups`, `messaging_groups`, and `messaging_group_agents` tables. Also check `.env` for channel tokens and `src/channels/index.ts` for uncommented imports.
+Read the v2 central DB (`data/v2.db`) — query `agent_groups`, `messaging_groups`, `messaging_group_agents`, `users`, and `user_roles` tables. Also check `.env` for channel tokens and `src/channels/index.ts` for uncommented imports.
 
-Categorize channels as: **wired** (has DB entities), **configured but unwired** (has credentials + barrel import, no DB entities), or **not configured**.
+Categorize channels as: **wired** (has DB entities + messaging_group_agents row), **configured but unwired** (has credentials + barrel import, no DB entities), or **not configured**.
+
+If the instance has no owner yet (`SELECT COUNT(*) FROM user_roles WHERE role='owner' AND agent_group_id IS NULL` returns 0), tell the user they should run `/init-first-agent` first — it stands up the first agent group, promotes the operator to owner, and verifies delivery end-to-end by having the agent DM them. Then return here for any additional channels/groups.
 
 ## First Channel (No Agent Groups Exist)
 
-1. Ask the assistant name (default: project name or "Andy")
-2. Ask which channel is the primary/admin channel
-3. **Telegram special case:** if the chosen channel is `telegram`, do not ask for an ID. Run `npx tsx setup/index.ts --step pair-telegram -- --intent main`, show the user the 4-digit CODE from the `PAIR_TELEGRAM_ISSUED` block, and tell them to DM the bot with `@<botname> CODE` from the chat they want as their main. Wait for the `PAIR_TELEGRAM` block — `PLATFORM_ID`, `IS_GROUP`, `ADMIN_USER_ID` come back from there. Skip step 4 of this list (the messaging group is already created with admin binding); instead run only the agent-group + wiring portion via `setup --step register` with the returned `PLATFORM_ID`.
-4. Otherwise (non-Telegram), ask for the platform ID — read the channel's SKILL.md `## Channel Info` > `how-to-find-id` to guide them, then register:
-
-```bash
-npx tsx setup/index.ts --step register -- \
-  --platform-id "<id>" --name "<name>" --folder "main" \
-  --channel "<type>" --is-main --no-trigger-required \
-  --assistant-name "<name>" --session-mode "shared"
-```
-
-5. Continue to "Wire New Channel" for any remaining configured channels.
+**Delegate to `/init-first-agent`.** It handles: channel choice, operator identity lookup, DM platform id resolution (with cold-DM or pair-code fallback), agent group creation, wiring, and the welcome DM. Return here afterward for any additional channels.
 
 ## Wire New Channel
 
@@ -54,9 +46,11 @@ Use the channel's `typical-use` and `default-isolation` fields to pick the recom
 npx tsx setup/index.ts --step register -- \
   --platform-id "<id>" --name "<name>" \
   --folder "<folder>" --channel "<type>" \
-  --session-mode "<shared|agent-shared>" \
+  --session-mode "<shared|agent-shared|per-thread>" \
   --assistant-name "<name>"
 ```
+
+The `register` step creates the agent group (reusing it if the folder already exists), the messaging group, and the wiring row. `createMessagingGroupAgent` auto-creates the companion `agent_destinations` row so the agent can address the channel by name — no separate destination step needed.
 
 For separate agents, also ask for a folder name and optionally a different assistant name.
 
@@ -64,16 +58,30 @@ For separate agents, also ask for a folder name and optionally a different assis
 
 When adding another group/chat on an already-configured platform (e.g. a second Telegram group):
 
-1. **Telegram:** ask the isolation question first to determine intent (`wire-to:<folder>` for an existing agent, `new-agent:<folder>` for a fresh one). Run `npx tsx setup/index.ts --step pair-telegram -- --intent <intent>`, show the CODE, and tell the user to post `@<botname> CODE` in the target group (or DM the bot for a private chat). Wait for the `PAIR_TELEGRAM` block, then run `setup --step register` with the returned `PLATFORM_ID` and the chosen folder/session-mode. The messaging group row is already created with `admin_user_id` set — `register` only needs to add the wiring.
+1. **Telegram:** ask the isolation question first to determine intent (`wire-to:<folder>` for an existing agent, `new-agent:<folder>` for a fresh one). Run `npx tsx setup/index.ts --step pair-telegram -- --intent <intent>`, show the CODE, and tell the user to post `@<botname> CODE` in the target group (or DM the bot for a private chat). Wait for the `PAIR_TELEGRAM` block. The inbound interceptor has already created the `messaging_groups` row with `unknown_sender_policy = 'strict'` and upserted the paired user — `register` only needs to add the wiring:
+
+   ```bash
+   npx tsx setup/index.ts --step register -- \
+     --platform-id "<PLATFORM_ID>" --name "<group-name>" \
+     --folder "<folder>" --channel "telegram" \
+     --session-mode "<shared|agent-shared|per-thread>" \
+     --assistant-name "<name>"
+   ```
+
 2. **Other channels:** read the channel's SKILL.md `## Channel Info` for terminology and how-to-find-id. Ask for the new group/chat ID, ask the isolation question, then register. No package or credential changes needed.
 
 ## Change Wiring
 
-1. Show current wiring
+1. Show current wiring (agent_groups × messaging_group_agents)
 2. Ask which channel to move and to which agent group
 3. Delete the old `messaging_group_agents` entry, create a new one
-4. Note: existing sessions stay with the old agent group; new messages route to the new one
+4. Note: existing sessions stay with the old agent group; new messages route to the new one. The `agent_destinations` row created for the old wiring is NOT automatically removed — if you want the old agent to stop seeing the channel as a named target, delete it from `agent_destinations` manually.
 
 ## Show Configuration
 
-Display a readable summary showing agent groups with their wired channels, configured-but-unwired channels, and unconfigured channels.
+Display a readable summary showing:
+
+- **Agent groups** with their wired channels (from `messaging_group_agents`)
+- **Configured-but-unwired** channels (credentials present, no DB entities)
+- **Unconfigured** channels
+- **Privileged users**: `SELECT user_id, role, agent_group_id FROM user_roles ORDER BY role='owner' DESC`

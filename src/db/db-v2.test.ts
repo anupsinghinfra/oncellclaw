@@ -8,7 +8,6 @@ import {
   getAgentGroup,
   getAgentGroupByFolder,
   getAllAgentGroups,
-  getAdminAgentGroup,
   updateAgentGroup,
   deleteAgentGroup,
   createMessagingGroup,
@@ -66,7 +65,6 @@ describe('agent groups', () => {
     id: 'ag-1',
     name: 'Test Agent',
     folder: 'test-agent',
-    is_admin: 0,
     agent_provider: null,
     container_config: null,
     created_at: now(),
@@ -91,14 +89,6 @@ describe('agent groups', () => {
     createAgentGroup(ag());
     createAgentGroup({ ...ag(), id: 'ag-2', name: 'Another', folder: 'another' });
     expect(getAllAgentGroups()).toHaveLength(2);
-  });
-
-  it('should find admin group', () => {
-    createAgentGroup(ag());
-    createAgentGroup({ ...ag(), id: 'ag-admin', name: 'Admin', folder: 'admin', is_admin: 1 });
-    const admin = getAdminAgentGroup();
-    expect(admin).toBeDefined();
-    expect(admin!.id).toBe('ag-admin');
   });
 
   it('should update', () => {
@@ -128,7 +118,7 @@ describe('messaging groups', () => {
     platform_id: 'chan-123',
     name: 'General',
     is_group: 1,
-    admin_user_id: 'user-1',
+    unknown_sender_policy: 'strict' as const,
     created_at: now(),
   });
 
@@ -172,7 +162,6 @@ describe('messaging group agents', () => {
       id: 'ag-1',
       name: 'Agent',
       folder: 'agent',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),
@@ -183,7 +172,7 @@ describe('messaging group agents', () => {
       platform_id: 'chan-1',
       name: 'Gen',
       is_group: 1,
-      admin_user_id: null,
+      unknown_sender_policy: 'strict',
       created_at: now(),
     });
   });
@@ -212,7 +201,6 @@ describe('messaging group agents', () => {
       id: 'ag-2',
       name: 'Agent2',
       folder: 'agent2',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),
@@ -243,6 +231,47 @@ describe('messaging group agents', () => {
   it('should enforce foreign key on agent_group_id', () => {
     expect(() => createMessagingGroupAgent({ ...mga(), agent_group_id: 'nonexistent' })).toThrow();
   });
+
+  it('auto-creates an agent_destinations row for the wiring', async () => {
+    const { getDestinationByTarget, getDestinations } = await import('./agent-destinations.js');
+    createMessagingGroupAgent(mga());
+
+    const dest = getDestinationByTarget('ag-1', 'channel', 'mg-1');
+    expect(dest).toBeDefined();
+    expect(dest!.local_name).toBe('gen'); // normalized from mg.name='Gen'
+    expect(getDestinations('ag-1')).toHaveLength(1);
+  });
+
+  it('does not duplicate destination row on re-wiring', async () => {
+    const { getDestinations } = await import('./agent-destinations.js');
+    createMessagingGroupAgent(mga());
+    // Re-create the same wiring throws (PK unique), but even if we got the
+    // row in some other way (e.g. via createDestination directly followed
+    // by createMessagingGroupAgent), we should not end up with two rows.
+    deleteMessagingGroupAgent('mga-1');
+    createMessagingGroupAgent(mga());
+    expect(getDestinations('ag-1')).toHaveLength(1);
+  });
+
+  it('breaks local_name collisions within an agent group', async () => {
+    const { getDestinations } = await import('./agent-destinations.js');
+    // Two messaging groups with the same `name` wired to the same agent
+    // should get distinct local_names (gen, gen-2).
+    createMessagingGroupAgent(mga());
+    createMessagingGroup({
+      id: 'mg-2',
+      channel_type: 'discord',
+      platform_id: 'chan-2',
+      name: 'Gen',
+      is_group: 1,
+      unknown_sender_policy: 'strict',
+      created_at: now(),
+    });
+    createMessagingGroupAgent({ ...mga(), id: 'mga-2', messaging_group_id: 'mg-2' });
+
+    const dests = getDestinations('ag-1').map((d) => d.local_name).sort();
+    expect(dests).toEqual(['gen', 'gen-2']);
+  });
 });
 
 // ── Sessions ──
@@ -253,7 +282,6 @@ describe('sessions', () => {
       id: 'ag-1',
       name: 'Agent',
       folder: 'agent',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),
@@ -264,7 +292,7 @@ describe('sessions', () => {
       platform_id: 'chan-1',
       name: 'Gen',
       is_group: 1,
-      admin_user_id: null,
+      unknown_sender_policy: 'strict',
       created_at: now(),
     });
   });
@@ -349,7 +377,6 @@ describe('pending questions', () => {
       id: 'ag-1',
       name: 'Agent',
       folder: 'agent',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),

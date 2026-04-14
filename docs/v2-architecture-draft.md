@@ -331,9 +331,7 @@ Two patterns, both handled at the host level:
 
 In both cases, the approval and action execution happen on the host side, not the agent side.
 
-**Approval routing:** Each messaging group has a designated admin stored in the central DB (`messaging_groups.admin_user_id`). Default is whoever set up the group, can be reassigned. When an action requires approval, the host sends an approval card to the admin's DM conversation (not the channel the agent is operating in). The admin responds there, and the host relays the result back to the agent's session. Approval cards are host-generated (not agent-initiated) — they have a standardized format.
-
-> **TODO: flesh out** — How does the host find the admin's DM conversation? What happens if the admin hasn't set up a DM channel? Is the approval list configurable per agent group or global?
+**Approval routing:** Privilege is a user-level concept. `user_roles` records `owner` (global only — first user to pair becomes owner) and `admin` (global or scoped to a specific `agent_group_id`). When an action requires approval, `pickApprover(agentGroupId)` returns candidates in order: scoped admins for that agent group → global admins → owners (deduplicated). `pickApprovalDelivery` then takes the first candidate reachable via `ensureUserDm` (with a same-channel-kind tie-break so a Discord approval request prefers a Discord-using approver). The approval card lands in the approver's DM messaging group, not the origin chat. Delivery is resolved through the Chat SDK's `openDM` for resolution-required channels (Discord/Slack/…) or the user's handle directly for direct-addressable channels (Telegram/WhatsApp/…), and the mapping is cached in `user_dms` for subsequent requests. See `src/access.ts`, `src/user-dm.ts`.
 
 **Editing a sent message:**
 
@@ -671,7 +669,6 @@ CREATE TABLE agent_groups (
   id               TEXT PRIMARY KEY,
   name             TEXT NOT NULL,
   folder           TEXT NOT NULL UNIQUE,
-  is_admin         INTEGER DEFAULT 0,
   agent_provider   TEXT,              -- default for sessions (null = system default)
   container_config TEXT,              -- JSON: { additionalMounts, timeout }
   created_at       TEXT NOT NULL
@@ -679,14 +676,51 @@ CREATE TABLE agent_groups (
 
 -- Platform groups/channels (WhatsApp group, Slack channel, Discord channel, email thread, etc.)
 CREATE TABLE messaging_groups (
-  id               TEXT PRIMARY KEY,
-  channel_type     TEXT NOT NULL,     -- 'whatsapp', 'slack', 'discord', 'telegram', 'email'
-  platform_id      TEXT NOT NULL,     -- platform-specific ID (JID, channel ID, etc.)
-  name             TEXT,
-  is_group         INTEGER DEFAULT 0,
-  admin_user_id    TEXT,              -- platform user ID of the group admin (default: whoever set it up)
-  created_at       TEXT NOT NULL,
+  id                     TEXT PRIMARY KEY,
+  channel_type           TEXT NOT NULL,     -- 'whatsapp', 'slack', 'discord', 'telegram', 'email'
+  platform_id            TEXT NOT NULL,     -- platform-specific ID (JID, channel ID, etc.)
+  name                   TEXT,
+  is_group               INTEGER DEFAULT 0,
+  unknown_sender_policy  TEXT NOT NULL DEFAULT 'strict',  -- 'strict' | 'request_approval' | 'public'
+  created_at             TEXT NOT NULL,
   UNIQUE(channel_type, platform_id)
+);
+
+-- Users (messaging platform identities, namespaced "<channel_type>:<handle>")
+CREATE TABLE users (
+  id           TEXT PRIMARY KEY,   -- e.g. 'telegram:123456', 'discord:1470...'
+  kind         TEXT NOT NULL,      -- mirrors the channel_type prefix
+  display_name TEXT,
+  created_at   TEXT NOT NULL
+);
+
+-- Roles (owner is global only; admin can be global or scoped to an agent_group)
+CREATE TABLE user_roles (
+  user_id         TEXT NOT NULL REFERENCES users(id),
+  role            TEXT NOT NULL,   -- 'owner' | 'admin'
+  agent_group_id  TEXT REFERENCES agent_groups(id),  -- NULL for global
+  granted_by      TEXT,
+  granted_at      TEXT NOT NULL,
+  PRIMARY KEY (user_id, role, agent_group_id)
+);
+-- owner rows must have agent_group_id = NULL (enforced in db/user-roles.ts)
+
+-- Membership (explicit non-privileged access; admin/owner imply membership)
+CREATE TABLE agent_group_members (
+  user_id         TEXT NOT NULL REFERENCES users(id),
+  agent_group_id  TEXT NOT NULL REFERENCES agent_groups(id),
+  added_by        TEXT,
+  added_at        TEXT NOT NULL,
+  PRIMARY KEY (user_id, agent_group_id)
+);
+
+-- DM resolution cache (so cold DMs aren't re-resolved every time)
+CREATE TABLE user_dms (
+  user_id            TEXT NOT NULL REFERENCES users(id),
+  channel_type       TEXT NOT NULL,
+  messaging_group_id TEXT NOT NULL REFERENCES messaging_groups(id),
+  resolved_at        TEXT NOT NULL,
+  PRIMARY KEY (user_id, channel_type)
 );
 
 -- Which agent groups handle which messaging groups, with what rules
@@ -864,7 +898,7 @@ Messages starting with `/` are checked against three lists:
 - Commands that don't make sense in the NanoClaw context or could cause issues
 - Silently dropped — no error, no forwarding
 
-The command lists are hardcoded in the agent-runner. Admin verification: the agent-runner checks the `senderId` in the message content against the messaging group's `admin_user_id` (passed to the container as config).
+The command lists are hardcoded in the agent-runner. Admin verification: the host passes `NANOCLAW_ADMIN_USER_IDS` (a comma-separated list of owner + global-admin + scoped-admin user ids for the current agent group, see `src/container-runner.ts`) to the container. The agent-runner membership-tests the inbound `senderId` against that set before forwarding admin commands.
 
 ### Recurring Tasks
 

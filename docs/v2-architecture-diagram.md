@@ -142,7 +142,6 @@ erDiagram
     int id
     string name
     string folder
-    bool is_admin
     string agent_provider
     json container_config
   }
@@ -152,7 +151,26 @@ erDiagram
     string platform_id
     string name
     bool is_group
-    string admin_user_id
+    string unknown_sender_policy "strict | request_approval | public"
+  }
+  users {
+    string id PK "namespaced <channel>:<handle>"
+    string kind
+    string display_name
+  }
+  user_roles {
+    string user_id FK
+    string role "owner | admin"
+    string agent_group_id FK "null = global"
+  }
+  agent_group_members {
+    string user_id FK
+    string agent_group_id FK
+  }
+  user_dms {
+    string user_id FK
+    string channel_type
+    string messaging_group_id FK
   }
   messaging_group_agents {
     int messaging_group_id

@@ -151,13 +151,12 @@ Status: [x] done, [~] partial, [ ] not started
 
 ## Permissions and Approval Flows
 
-- [x] Admin user ID per group
-- [x] Admin-only command filtering in container
-- [ ] Admin model refactor — instance-level default admin (user + messaging app) for all approval routing, overridable per agent group; deliver approval cards to admin's DM when the platform supports it
-- [ ] `/remote-control` and `/remote-control-end` are v1 host-level commands not ported to v2 — listed in `ADMIN_COMMANDS` (formatter.ts:13) but unhandled in poll-loop, so they fall through to the Claude SDK which replies "Unknown skill". Found when `/remote-control` failed in a Telegram DM after the admin check passed.
-- [ ] `messaging_groups.admin_user_id` is hardcoded `null` at registration (`setup/register.ts:175`), so privileged commands like `/remote-control` always deny access until the column is manually backfilled in SQLite. Found when `/remote-control` failed in a freshly-registered Telegram DM.
-- [ ] Self-approval UX: when the user requesting a sensitive action IS the recorded admin/owner of the agent group, the agent still posts an Approve button back to that same person and narrates "waiting on admin approval" — confusing, redundant, and the "waiting" line stays visible even after the user immediately clicks approve.
-- [ ] Replace the `is_admin`/main vs. non-main distinction on agent groups with an explicit owner/admin model — every agent group has a recorded owner (the platform user who created or installed it) and an admin (who receives approvals and can change wiring); the two default to the same identity but can diverge (e.g. handoff). Drops the "main group = admin group" coupling. Downstream consequence: non-main group registration on Telegram must use the same pairing-code flow as main (`setup --step pair-telegram` with a `wire-to:<folder>` or `new-agent:<folder>` intent), since there's no longer a privileged "main" chat whose identity is trusted transitively — every group binds its own admin at registration time.
+- [x] User-level privilege model — `users` + `user_roles` (owner / admin, global or scoped to an agent group). Replaces the old `agent_groups.is_admin` / `messaging_groups.admin_user_id` coupling. See `src/db/users.ts`, `src/db/user-roles.ts`, `src/access.ts`.
+- [x] Admin-only command filtering in container — host passes `NANOCLAW_ADMIN_USER_IDS` (owners + global admins + scoped admins for the agent group) to the agent-runner; `poll-loop.ts` gates slash commands against that set.
+- [x] Approval routing — `pickApprover` (scoped admin → global admin → owner, dedup) + `pickApprovalDelivery` (first reachable, same-channel-kind tie-break); delivery lands in the approver's DM via `ensureUserDm` / `user_dms` cache. See `src/access.ts`, `src/onecli-approvals.ts`.
+- [x] Per-messaging-group unknown-sender gating — `messaging_groups.unknown_sender_policy` (`strict` | `request_approval` | `public`), enforced in `src/router.ts`.
+- [ ] `/remote-control` and `/remote-control-end` are v1 host-level commands not ported to v2 — listed in `ADMIN_COMMANDS` (formatter.ts:13) but unhandled in poll-loop, so they fall through to the Claude SDK which replies "Unknown skill".
+- [ ] Self-approval UX: when the user requesting a sensitive action IS an owner/admin, the agent still posts an Approve button back to that same person and narrates "waiting on admin approval" — confusing and redundant.
 - [x] Approval flow (sensitive action -> card to admin -> approve/reject -> execute) — `pending_approvals` table, `requestApproval()` helper, reuses interactive card infra
 - [x] Agent requests dependency/package install (install_packages, admin approval, rebuild on approval)
 - [x] Self-modification — direct tools:
@@ -167,7 +166,6 @@ Status: [x] done, [~] partial, [ ] not started
   - [x] Fire-and-forget model (write request, return immediately; chat notification on approval; container killed so next wake picks up new config/image)
 - [ ] Role definitions beyond admin (custom roles, per-group permissions)
 - [ ] Configurable sensitive action list (hardcoded today)
-- [ ] Non-main groups requesting sensitive actions
 - [~] OneCLI integration for human-loop approvals on credentialed requests (agent touching a credentialed resource → OneCLI gates → approval card to admin → OneCLI releases credential) — SDK 0.3.1 `configureManualApproval` wired into host, routes to admin via existing `pending_approvals` infra
 - [~] Credential collection from chat — `trigger_credential_collection` MCP tool; agent researches API config, card → modal → `onecli secrets create` via internal facade (`src/onecli-secrets.ts`); credential value never enters agent context
   - [ ] Replace `src/onecli-secrets.ts` shell facade with SDK-native secret management when `@onecli-sh/sdk` adds it

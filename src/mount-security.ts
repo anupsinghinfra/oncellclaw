@@ -21,7 +21,6 @@ export interface AdditionalMount {
 export interface MountAllowlist {
   allowedRoots: AllowedRoot[];
   blockedPatterns: string[];
-  nonMainReadOnly: boolean;
 }
 
 export interface AllowedRoot {
@@ -93,10 +92,6 @@ export function loadMountAllowlist(): MountAllowlist | null {
 
     if (!Array.isArray(allowlist.blockedPatterns)) {
       throw new Error('blockedPatterns must be an array');
-    }
-
-    if (typeof allowlist.nonMainReadOnly !== 'boolean') {
-      throw new Error('nonMainReadOnly must be a boolean');
     }
 
     // Merge with default blocked patterns
@@ -232,7 +227,7 @@ export interface MountValidationResult {
  * Validate a single additional mount against the allowlist.
  * Returns validation result with reason.
  */
-export function validateMount(mount: AdditionalMount, isMain: boolean): MountValidationResult {
+export function validateMount(mount: AdditionalMount): MountValidationResult {
   const allowlist = loadMountAllowlist();
 
   // If no allowlist, block all additional mounts
@@ -285,24 +280,19 @@ export function validateMount(mount: AdditionalMount, isMain: boolean): MountVal
     };
   }
 
-  // Determine effective readonly status
+  // Determine effective readonly status.
+  // RW is only granted if the mount explicitly requests it AND the allowed
+  // root permits it. Otherwise it's forced read-only.
   const requestedReadWrite = mount.readonly === false;
-  let effectiveReadonly = true; // Default to readonly
+  let effectiveReadonly = true;
 
   if (requestedReadWrite) {
-    if (!isMain && allowlist.nonMainReadOnly) {
-      // Non-main groups forced to read-only
-      effectiveReadonly = true;
-      log.info('Mount forced to read-only for non-main group', { mount: mount.hostPath });
-    } else if (!allowedRoot.allowReadWrite) {
-      // Root doesn't allow read-write
-      effectiveReadonly = true;
+    if (!allowedRoot.allowReadWrite) {
       log.info('Mount forced to read-only - root does not allow read-write', {
         mount: mount.hostPath,
         root: allowedRoot.path,
       });
     } else {
-      // Read-write allowed
       effectiveReadonly = false;
     }
   }
@@ -324,7 +314,6 @@ export function validateMount(mount: AdditionalMount, isMain: boolean): MountVal
 export function validateAdditionalMounts(
   mounts: AdditionalMount[],
   groupName: string,
-  isMain: boolean,
 ): Array<{
   hostPath: string;
   containerPath: string;
@@ -337,7 +326,7 @@ export function validateAdditionalMounts(
   }> = [];
 
   for (const mount of mounts) {
-    const result = validateMount(mount, isMain);
+    const result = validateMount(mount);
 
     if (result.allowed) {
       validatedMounts.push({
@@ -394,7 +383,6 @@ export function generateAllowlistTemplate(): string {
       'secret',
       'token',
     ],
-    nonMainReadOnly: true,
   };
 
   return JSON.stringify(template, null, 2);

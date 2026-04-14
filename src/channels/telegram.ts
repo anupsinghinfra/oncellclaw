@@ -8,6 +8,8 @@ import { createTelegramAdapter } from '@chat-adapter/telegram';
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { createMessagingGroup, getMessagingGroupByPlatform, updateMessagingGroup } from '../db/messaging-groups.js';
+import { grantRole, hasAnyOwner } from '../db/user-roles.js';
+import { upsertUser } from '../db/users.js';
 import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
 import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js';
 import { registerChannelAdapter } from './channel-registry.js';
@@ -79,8 +81,9 @@ function readInboundFields(message: InboundMessage): InboundFields {
 
 /**
  * Build an onInbound interceptor that consumes pairing codes before they
- * reach the router. On match: upserts messaging_groups with admin_user_id
- * and short-circuits. On miss: forwards to the host.
+ * reach the router. On match: records the chat + its paired user, promotes
+ * the user to owner if the instance has no owner yet, and short-circuits.
+ * On miss: forwards to the host.
  */
 function createPairingInterceptor(
   botUsernamePromise: Promise<string | null>,
@@ -109,13 +112,13 @@ function createPairingInterceptor(
         hostOnInbound(platformId, threadId, message);
         return;
       }
-      // Pairing matched — upsert the messaging_group with admin binding and
-      // short-circuit. Skip the router entirely so this code-bearing message
-      // never reaches an agent.
+      // Pairing matched — record the chat and short-circuit so the
+      // code-bearing message never reaches an agent. Privilege is now a
+      // property of the paired user, not the chat: upsert the user, and if
+      // this instance has no owner yet, promote them to owner.
       const existing = getMessagingGroupByPlatform('telegram', platformId);
       if (existing) {
         updateMessagingGroup(existing.id, {
-          admin_user_id: consumed.consumed!.adminUserId,
           is_group: consumed.consumed!.isGroup ? 1 : 0,
         });
       } else {
@@ -125,13 +128,35 @@ function createPairingInterceptor(
           platform_id: platformId,
           name: consumed.consumed!.name,
           is_group: consumed.consumed!.isGroup ? 1 : 0,
-          admin_user_id: consumed.consumed!.adminUserId,
+          unknown_sender_policy: 'strict',
           created_at: new Date().toISOString(),
         });
       }
+
+      const pairedUserId = `telegram:${consumed.consumed!.adminUserId}`;
+      upsertUser({
+        id: pairedUserId,
+        kind: 'telegram',
+        display_name: null,
+        created_at: new Date().toISOString(),
+      });
+
+      let promotedToOwner = false;
+      if (!hasAnyOwner()) {
+        grantRole({
+          user_id: pairedUserId,
+          role: 'owner',
+          agent_group_id: null,
+          granted_by: null,
+          granted_at: new Date().toISOString(),
+        });
+        promotedToOwner = true;
+      }
+
       log.info('Telegram pairing accepted — chat registered', {
         platformId,
-        adminUserId: consumed.consumed!.adminUserId,
+        pairedUser: pairedUserId,
+        promotedToOwner,
         intent: consumed.intent,
       });
     })().catch((err) => {

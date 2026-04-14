@@ -1,4 +1,10 @@
 import type { MessagingGroup, MessagingGroupAgent } from '../types.js';
+import {
+  createDestination,
+  getDestinationByName,
+  getDestinationByTarget,
+  normalizeName,
+} from './agent-destinations.js';
 import { getDb } from './connection.js';
 
 // ── Messaging Groups ──
@@ -6,8 +12,8 @@ import { getDb } from './connection.js';
 export function createMessagingGroup(group: MessagingGroup): void {
   getDb()
     .prepare(
-      `INSERT INTO messaging_groups (id, channel_type, platform_id, name, is_group, admin_user_id, created_at)
-       VALUES (@id, @channel_type, @platform_id, @name, @is_group, @admin_user_id, @created_at)`,
+      `INSERT INTO messaging_groups (id, channel_type, platform_id, name, is_group, unknown_sender_policy, created_at)
+       VALUES (@id, @channel_type, @platform_id, @name, @is_group, @unknown_sender_policy, @created_at)`,
     )
     .run(group);
 }
@@ -32,7 +38,7 @@ export function getMessagingGroupsByChannel(channelType: string): MessagingGroup
 
 export function updateMessagingGroup(
   id: string,
-  updates: Partial<Pick<MessagingGroup, 'name' | 'is_group' | 'admin_user_id'>>,
+  updates: Partial<Pick<MessagingGroup, 'name' | 'is_group' | 'unknown_sender_policy'>>,
 ): void {
   const fields: string[] = [];
   const values: Record<string, unknown> = { id };
@@ -56,6 +62,19 @@ export function deleteMessagingGroup(id: string): void {
 
 // ── Messaging Group Agents ──
 
+/**
+ * Wire a messaging group to an agent group. Also auto-creates the matching
+ * `agent_destinations` row so the agent can deliver to this chat as a
+ * target, not just reply to the origin. Without this, routing to chats that
+ * aren't the session's origin (agent-shared sessions, cross-channel sends)
+ * would require an operator to hand-insert destination rows every time.
+ *
+ * The destination row is skipped if one already exists for the same target,
+ * so re-wiring is a no-op. The local_name uses the messaging group's `name`
+ * field when set, falling back to `${channel_type}-${mg_id prefix}`, with
+ * a numeric suffix to break collisions within the agent's namespace. This
+ * mirrors the backfill logic in migration 004.
+ */
 export function createMessagingGroupAgent(mga: MessagingGroupAgent): void {
   getDb()
     .prepare(
@@ -63,6 +82,30 @@ export function createMessagingGroupAgent(mga: MessagingGroupAgent): void {
        VALUES (@id, @messaging_group_id, @agent_group_id, @trigger_rules, @response_scope, @session_mode, @priority, @created_at)`,
     )
     .run(mga);
+
+  // Auto-create an agent_destinations row so delivery's ACL doesn't block
+  // outbound messages that target this chat.
+  const existing = getDestinationByTarget(mga.agent_group_id, 'channel', mga.messaging_group_id);
+  if (existing) return;
+
+  const mg = getMessagingGroup(mga.messaging_group_id);
+  if (!mg) return;
+
+  const base = normalizeName(mg.name || `${mg.channel_type}-${mga.messaging_group_id.slice(0, 8)}`);
+  let localName = base;
+  let suffix = 2;
+  while (getDestinationByName(mga.agent_group_id, localName)) {
+    localName = `${base}-${suffix}`;
+    suffix++;
+  }
+
+  createDestination({
+    agent_group_id: mga.agent_group_id,
+    local_name: localName,
+    target_type: 'channel',
+    target_id: mga.messaging_group_id,
+    created_at: mga.created_at,
+  });
 }
 
 export function getMessagingGroupAgents(messagingGroupId: string): MessagingGroupAgent[] {

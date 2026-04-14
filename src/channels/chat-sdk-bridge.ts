@@ -426,6 +426,22 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       await adapter.startTyping(tid);
     },
 
+    /**
+     * Open (or fetch) a DM with a user via Chat SDK's chat.openDM. The
+     * returned Thread's id is encoded platform-specifically (e.g. Discord
+     * encodes @me:channelId:threadId), so we unwrap with
+     * channelIdFromThreadId to get the plain DM channel id — that's what
+     * the rest of NanoClaw uses as `platform_id`.
+     *
+     * Throws if Chat SDK's underlying adapter doesn't implement openDM.
+     * Channels without DM support (Telegram, WhatsApp native) don't go
+     * through chat-sdk-bridge at all, so this path isn't invoked for them.
+     */
+    async openDM(userHandle: string): Promise<string> {
+      const thread = await chat.openDM(userHandle);
+      return adapter.channelIdFromThreadId(thread.id);
+    },
+
     async teardown() {
       gatewayAbort?.abort();
       await chat.shutdown();

@@ -10,7 +10,7 @@
  *   - SESSION_HEARTBEAT_PATH:   heartbeat file path (default: /workspace/.heartbeat)
  *   - AGENT_PROVIDER: 'claude' | 'mock' (default: claude)
  *   - NANOCLAW_ASSISTANT_NAME: assistant name for transcript archiving
- *   - NANOCLAW_ADMIN_USER_ID: admin user ID for permission checks
+ *   - NANOCLAW_ADMIN_USER_IDS: comma-separated user IDs allowed to run admin commands
  *
  * Mount structure:
  *   /workspace/
@@ -39,7 +39,12 @@ const CWD = '/workspace/agent';
 async function main(): Promise<void> {
   const providerName = (process.env.AGENT_PROVIDER || 'claude') as ProviderName;
   const assistantName = process.env.NANOCLAW_ASSISTANT_NAME;
-  const adminUserId = process.env.NANOCLAW_ADMIN_USER_ID;
+  const adminUserIds = new Set(
+    (process.env.NANOCLAW_ADMIN_USER_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
 
   log(`Starting v2 agent-runner (provider: ${providerName})`);
 
@@ -105,7 +110,7 @@ async function main(): Promise<void> {
     provider,
     cwd: CWD,
     systemContext: { instructions },
-    adminUserId,
+    adminUserIds,
   });
 }
 

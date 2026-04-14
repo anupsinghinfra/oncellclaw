@@ -37,7 +37,6 @@ createAgentGroup({
   id: 'ag-e2e',
   name: 'E2E Test Agent',
   folder: 'test-agent-e2e',
-  is_admin: 0,
   agent_provider: 'claude',
   container_config: null,
   created_at: new Date().toISOString(),
@@ -49,7 +48,7 @@ createMessagingGroup({
   platform_id: 'e2e-channel',
   name: 'E2E Test Channel',
   is_group: 0,
-  admin_user_id: null,
+  unknown_sender_policy: 'public',
   created_at: new Date().toISOString(),
 });
 

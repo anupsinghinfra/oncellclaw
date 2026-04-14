@@ -94,6 +94,23 @@ export interface ChannelAdapter {
   setTyping?(platformId: string, threadId: string | null): Promise<void>;
   syncConversations?(): Promise<ConversationInfo[]>;
   updateConversations?(conversations: ConversationConfig[]): void;
+
+  /**
+   * Open (or fetch) a DM with this user, returning the platform_id of the
+   * resulting DM channel. Called by the host on demand to initiate cold
+   * DMs — approvals, pairing handshakes, host-initiated notifications — to
+   * users who may never have messaged the bot themselves.
+   *
+   * Omit this method on channels where the user handle IS already the DM
+   * chat id (Telegram, WhatsApp, iMessage, email, Matrix). Callers will
+   * fall through to using the handle directly.
+   *
+   * For channels that distinguish user id from DM channel id (Discord,
+   * Slack, Teams, Webex, gChat): implement by delegating to Chat SDK's
+   * chat.openDM, which hits the platform's idempotent open-DM endpoint.
+   * Returning the same platform_id on repeated calls is expected.
+   */
+  openDM?(userHandle: string): Promise<string>;
 }
 
 /** Factory function that creates a channel adapter (returns null if credentials missing). */

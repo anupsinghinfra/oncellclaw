@@ -19,9 +19,9 @@
  */
 import { OneCLI, type ApprovalRequest, type ManualApprovalHandle } from '@onecli-sh/sdk';
 
+import { pickApprovalDelivery, pickApprover } from './access.js';
 import { ONECLI_URL } from './config.js';
-import { getAdminAgentGroup, getAgentGroup } from './db/agent-groups.js';
-import { getMessagingGroupsByAgentGroup } from './db/messaging-groups.js';
+import { getAgentGroup } from './db/agent-groups.js';
 import {
   createPendingApproval,
   deletePendingApproval,
@@ -113,23 +113,31 @@ export function stopOneCLIApprovalHandler(): void {
 async function handleRequest(request: ApprovalRequest): Promise<Decision> {
   if (!adapterRef) return 'deny';
 
-  // Same routing as requestApproval(): global admin agent group's first messaging group.
-  // Per-group routing is a follow-up (see admin-model refactor in docs/v2-checklist.md).
-  const adminGroup = getAdminAgentGroup();
-  const adminMGs = adminGroup ? getMessagingGroupsByAgentGroup(adminGroup.id) : [];
-  if (adminMGs.length === 0) {
-    log.warn('OneCLI approval auto-denied: no admin channel configured', {
+  // Originating agent group is carried on the request via OneCLI's agent
+  // identifier (set by container-runner.ts to agentGroup.id). Use it as
+  // the scope for approver selection: admin @ group → global admin → owner.
+  const originGroup = request.agent.externalId ? getAgentGroup(request.agent.externalId) : undefined;
+  const agentGroupId = originGroup?.id ?? null;
+  const approvers = pickApprover(agentGroupId);
+  if (approvers.length === 0) {
+    log.warn('OneCLI approval auto-denied: no eligible approver', {
       id: request.id,
       host: request.host,
       agent: request.agent.externalId,
     });
     return 'deny';
   }
-  const adminChannel = adminMGs[0];
 
-  // Resolve the originating agent group (for logging / future per-group routing).
-  const originGroup = request.agent.externalId ? getAgentGroup(request.agent.externalId) : adminGroup;
-  const agentGroupId = originGroup?.id ?? null;
+  // No origin channel preference — OneCLI requests don't carry one. First
+  // approver with a reachable DM wins.
+  const target = await pickApprovalDelivery(approvers, '');
+  if (!target) {
+    log.warn('OneCLI approval auto-denied: no DM channel for any approver', {
+      id: request.id,
+      approvers,
+    });
+    return 'deny';
+  }
 
   // Use a short id for the card/button so Chat SDK's Telegram adapter can
   // fit everything inside the 64-byte callback_data limit. The OneCLI
@@ -145,8 +153,8 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
   let platformMessageId: string | undefined;
   try {
     platformMessageId = await adapterRef.deliver(
-      adminChannel.channel_type,
-      adminChannel.platform_id,
+      target.messagingGroup.channel_type,
+      target.messagingGroup.platform_id,
       null,
       'chat-sdk',
       JSON.stringify({
@@ -174,11 +182,12 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
       path: request.path,
       bodyPreview: request.bodyPreview,
       agent: request.agent,
+      approver: target.userId,
     }),
     created_at: new Date().toISOString(),
     agent_group_id: agentGroupId,
-    channel_type: adminChannel.channel_type,
-    platform_id: adminChannel.platform_id,
+    channel_type: target.messagingGroup.channel_type,
+    platform_id: target.messagingGroup.platform_id,
     platform_message_id: platformMessageId ?? null,
     expires_at: request.expiresAt,
     status: 'pending',

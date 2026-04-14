@@ -133,7 +133,6 @@ describe('channel + router integration', () => {
       id: 'ag-1',
       name: 'Test Agent',
       folder: 'test-agent',
-      is_admin: 0,
       agent_provider: null,
       container_config: null,
       created_at: now(),
@@ -144,7 +143,7 @@ describe('channel + router integration', () => {
       platform_id: 'chan-100',
       name: 'Test Channel',
       is_group: 1,
-      admin_user_id: null,
+      unknown_sender_policy: 'public',
       created_at: now(),
     });
     createMessagingGroupAgent({

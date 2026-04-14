@@ -69,12 +69,19 @@ Added `session_mode: 'agent-shared'` for cross-channel shared sessions (e.g. Git
 
 ### v2 Entity Model
 ```
-agent_groups (id, name, folder, is_admin, agent_provider, container_config)
+agent_groups (id, name, folder, agent_provider, container_config)
     ↕ many-to-many
-messaging_groups (id, channel_type, platform_id, name, is_group, admin_user_id)
+messaging_groups (id, channel_type, platform_id, name, is_group, unknown_sender_policy)
     via
 messaging_group_agents (messaging_group_id, agent_group_id, trigger_rules, session_mode, priority)
+
+users (id, kind, display_name)          -- namespaced as "<channel>:<handle>"
+user_roles (user_id, role, agent_group_id)    -- owner / admin (global or scoped)
+agent_group_members (user_id, agent_group_id) -- unprivileged access gate
+user_dms (user_id, channel_type, messaging_group_id)  -- cold-DM cache
 ```
+
+Privilege is a user-level concept — there is no "main" agent group or "admin" messaging group. `user_roles` carries `owner` (global only, first pairing sets it) and `admin` (global or scoped to an `agent_group_id`). Unknown-sender gating is per-messaging-group via `messaging_groups.unknown_sender_policy` (`strict | request_approval | public`).
 
 ### Message Flow
 ```

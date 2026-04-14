@@ -21,13 +21,13 @@ import {
 } from './db/sessions.js';
 import {
   getAgentGroup,
-  getAdminAgentGroup,
   createAgentGroup,
   updateAgentGroup,
   getAgentGroupByFolder,
 } from './db/agent-groups.js';
 import { createDestination, getDestinationByName, hasDestination, normalizeName } from './db/agent-destinations.js';
-import { getMessagingGroupByPlatform, getMessagingGroupsByAgentGroup } from './db/messaging-groups.js';
+import { getMessagingGroup, getMessagingGroupByPlatform } from './db/messaging-groups.js';
+import { pickApprovalDelivery, pickApprover } from './access.js';
 import {
   getDueOutboundMessages,
   getDeliveredIds,
@@ -107,9 +107,12 @@ function notifyAgent(session: Session, text: string): void {
 }
 
 /**
- * Send an approval request to the admin channel and record a pending_approval row.
- * The admin's button click routes via the existing ncq: card infrastructure to
- * handleApprovalResponse in index.ts, which completes the action.
+ * Send an approval request to a privileged user's DM and record a
+ * pending_approval row. Routing: admin @ originating agent group → owner.
+ * Tie-break: prefer an approver reachable on the same channel kind as the
+ * originating session's messaging group. Delivery always lands in the
+ * approver's DM (not the origin group), regardless of where the action
+ * was triggered.
  */
 const APPROVAL_OPTIONS: RawOption[] = [
   { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
@@ -124,13 +127,22 @@ async function requestApproval(
   title: string,
   question: string,
 ): Promise<void> {
-  const adminGroup = getAdminAgentGroup();
-  const adminMGs = adminGroup ? getMessagingGroupsByAgentGroup(adminGroup.id) : [];
-  if (adminMGs.length === 0) {
-    notifyAgent(session, `${action} failed: no admin channel configured for approvals.`);
+  const approvers = pickApprover(session.agent_group_id);
+  if (approvers.length === 0) {
+    notifyAgent(session, `${action} failed: no owner or admin configured to approve.`);
     return;
   }
-  const adminChannel = adminMGs[0];
+
+  // Origin channel kind drives the tie-break preference in approval delivery.
+  const originChannelType = session.messaging_group_id
+    ? (getMessagingGroup(session.messaging_group_id)?.channel_type ?? '')
+    : '';
+
+  const target = await pickApprovalDelivery(approvers, originChannelType);
+  if (!target) {
+    notifyAgent(session, `${action} failed: no DM channel found for any eligible approver.`);
+    return;
+  }
 
   const approvalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const normalizedOptions = normalizeOptions(APPROVAL_OPTIONS);
@@ -148,8 +160,8 @@ async function requestApproval(
   if (deliveryAdapter) {
     try {
       await deliveryAdapter.deliver(
-        adminChannel.channel_type,
-        adminChannel.platform_id,
+        target.messagingGroup.channel_type,
+        target.messagingGroup.platform_id,
         null,
         'chat-sdk',
         JSON.stringify({
@@ -162,12 +174,12 @@ async function requestApproval(
       );
     } catch (err) {
       log.error('Failed to deliver approval card', { action, approvalId, err });
-      notifyAgent(session, `${action} failed: could not deliver approval request to admin.`);
+      notifyAgent(session, `${action} failed: could not deliver approval request to ${target.userId}.`);
       return;
     }
   }
 
-  log.info('Approval requested', { action, approvalId, agentName });
+  log.info('Approval requested', { action, approvalId, agentName, approver: target.userId });
 }
 
 /** Show typing indicator on a channel. Called when a message is routed to the agent. */
@@ -316,8 +328,7 @@ async function deliverMessage(
   if (msg.channel_type === 'agent') {
     const targetAgentGroupId = msg.platform_id;
     if (!targetAgentGroupId) {
-      log.warn('Agent message missing target agent group ID', { id: msg.id });
-      return;
+      throw new Error(`agent-to-agent message ${msg.id} is missing a target agent group id`);
     }
     // Self-messages are always allowed — used for system notes injected back
     // into an agent's own session (e.g. post-approval follow-up prompts).
@@ -325,15 +336,12 @@ async function deliverMessage(
       targetAgentGroupId !== session.agent_group_id &&
       !hasDestination(session.agent_group_id, 'agent', targetAgentGroupId)
     ) {
-      log.warn('Unauthorized agent-to-agent message — dropping', {
-        source: session.agent_group_id,
-        target: targetAgentGroupId,
-      });
-      return;
+      throw new Error(
+        `unauthorized agent-to-agent: ${session.agent_group_id} has no destination for ${targetAgentGroupId}`,
+      );
     }
     if (!getAgentGroup(targetAgentGroupId)) {
-      log.warn('Target agent group not found', { id: msg.id, targetAgentGroupId });
-      return;
+      throw new Error(`target agent group ${targetAgentGroupId} not found for message ${msg.id}`);
     }
     const { session: targetSession } = resolveSession(targetAgentGroupId, null, null, 'agent-shared');
     writeSessionMessage(targetAgentGroupId, targetSession.id, {
@@ -355,18 +363,34 @@ async function deliverMessage(
     return;
   }
 
-  // Permission check: the source agent must have a destination row for this target.
-  // Defense in depth — the container already validates via its local map, but the
-  // host's central DB is the authoritative ACL.
+  // Permission check: the source agent must be allowed to deliver to this
+  // channel destination. Two ways it passes:
+  //
+  //   1. The target is the session's own origin chat (session.messaging_group_id
+  //      matches). An agent can always reply to the chat it was spawned from;
+  //      requiring a destinations row for the obvious case is a footgun.
+  //
+  //   2. Otherwise, the agent must have an explicit agent_destinations row
+  //      targeting that messaging group. createMessagingGroupAgent() inserts
+  //      these automatically when wiring, so an operator wiring additional
+  //      chats to the agent doesn't need a separate ACL step.
+  //
+  // Failures throw — unlike a silent `return`, an Error falls into the retry
+  // path in deliverSessionMessages and eventually marks the message as failed
+  // (instead of marking it delivered when nothing was actually delivered,
+  // which was the pre-refactor bug).
   if (msg.channel_type && msg.platform_id) {
     const mg = getMessagingGroupByPlatform(msg.channel_type, msg.platform_id);
-    if (!mg || !hasDestination(session.agent_group_id, 'channel', mg.id)) {
-      log.warn('Unauthorized channel destination — dropping message', {
-        sourceAgentGroup: session.agent_group_id,
-        channelType: msg.channel_type,
-        platformId: msg.platform_id,
-      });
-      return;
+    if (!mg) {
+      throw new Error(
+        `unknown messaging group for ${msg.channel_type}/${msg.platform_id} (message ${msg.id})`,
+      );
+    }
+    const isOriginChat = session.messaging_group_id === mg.id;
+    if (!isOriginChat && !hasDestination(session.agent_group_id, 'channel', mg.id)) {
+      throw new Error(
+        `unauthorized channel destination: ${session.agent_group_id} cannot send to ${mg.channel_type}/${mg.platform_id}`,
+      );
     }
   }
 
@@ -501,10 +525,9 @@ async function handleSystemAction(
       const instructions = content.instructions as string | null;
 
       const sourceGroup = getAgentGroup(session.agent_group_id);
-      if (!sourceGroup?.is_admin) {
-        // Notify the agent via a chat message (fire-and-forget pattern)
-        notifyAgent(session, `Your create_agent request for "${name}" was rejected: admin permission required.`);
-        log.warn('create_agent denied (not admin)', { sessionAgentGroup: session.agent_group_id, name });
+      if (!sourceGroup) {
+        notifyAgent(session, `create_agent failed: source agent group not found.`);
+        log.warn('create_agent failed: missing source group', { sessionAgentGroup: session.agent_group_id, name });
         break;
       }
 
@@ -540,7 +563,6 @@ async function handleSystemAction(
         id: agentGroupId,
         name,
         folder,
-        is_admin: 0,
         agent_provider: null,
         container_config: null,
         created_at: now,

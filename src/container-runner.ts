@@ -12,7 +12,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZONE } from './config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
-import { getMessagingGroup } from './db/messaging-groups.js';
+import { getAdminsOfAgentGroup, getGlobalAdmins, getOwners } from './db/user-roles.js';
 import { initGroupFilesystem } from './group-init.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -92,11 +92,9 @@ async function spawnContainer(session: Session): Promise<void> {
 
   const mounts = buildMounts(agentGroup, session);
   const containerName = `nanoclaw-v2-${agentGroup.folder}-${Date.now()}`;
-  // OneCLI agent identifier is the agent group id. The admin group uses OneCLI's
-  // default agent (undefined), so unscoped credentials apply. Non-admin groups
-  // use their stable ag-xxx id, which is reversible via getAgentGroup() for
-  // approval-request routing.
-  const agentIdentifier = agentGroup.is_admin ? undefined : agentGroup.id;
+  // OneCLI agent identifier is always the agent group id — stable across
+  // sessions and reversible via getAgentGroup() for approval routing.
+  const agentIdentifier = agentGroup.id;
   const args = await buildContainerArgs(mounts, containerName, session, agentGroup, agentIdentifier);
 
   log.info('Spawning container', { sessionId: session.id, agentGroup: agentGroup.name, containerName });
@@ -173,7 +171,6 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   initGroupFilesystem(agentGroup);
 
   const mounts: VolumeMount[] = [];
-  const projectRoot = process.cwd();
   const sessDir = sessionDir(agentGroup.id, session.id);
   const groupDir = path.resolve(GROUPS_DIR, agentGroup.folder);
 
@@ -183,12 +180,11 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   // Agent group folder at /workspace/agent
   mounts.push({ hostPath: groupDir, containerPath: '/workspace/agent', readonly: false });
 
-  // Global memory directory — read-only for non-admin so the @import
-  // in each group's CLAUDE.md can resolve it without risk of being
-  // overwritten by an agent in some other group.
+  // Global memory directory — always read-only. Edits to global config
+  // happen through the approval flow, not by handing one workspace RW.
   const globalDir = path.join(GROUPS_DIR, 'global');
   if (fs.existsSync(globalDir)) {
-    mounts.push({ hostPath: globalDir, containerPath: '/workspace/global', readonly: !agentGroup.is_admin });
+    mounts.push({ hostPath: globalDir, containerPath: '/workspace/global', readonly: true });
   }
 
   // Per-group .claude-shared at /home/node/.claude (Claude state, settings,
@@ -201,23 +197,10 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   const groupRunnerDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, 'agent-runner-src');
   mounts.push({ hostPath: groupRunnerDir, containerPath: '/app/src', readonly: false });
 
-  // Admin: mount project root read-only
-  if (agentGroup.is_admin) {
-    mounts.push({ hostPath: projectRoot, containerPath: '/workspace/project', readonly: true });
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({ hostPath: '/dev/null', containerPath: '/workspace/project/.env', readonly: true });
-    }
-  }
-
   // Additional mounts from container config
   const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
   if (containerConfig.additionalMounts) {
-    const validated = validateAdditionalMounts(
-      containerConfig.additionalMounts,
-      agentGroup.name,
-      !!agentGroup.is_admin,
-    );
+    const validated = validateAdditionalMounts(containerConfig.additionalMounts, agentGroup.name);
     mounts.push(...validated);
   }
 
@@ -241,19 +224,22 @@ async function buildContainerArgs(
   args.push('-e', 'SESSION_OUTBOUND_DB_PATH=/workspace/outbound.db');
   args.push('-e', 'SESSION_HEARTBEAT_PATH=/workspace/.heartbeat');
 
-  // Pass admin user ID and assistant name from messaging group/agent group
-  if (session.messaging_group_id) {
-    const mg = getMessagingGroup(session.messaging_group_id);
-    if (mg?.admin_user_id) {
-      args.push('-e', `NANOCLAW_ADMIN_USER_ID=${mg.admin_user_id}`);
-    }
-  }
   if (agentGroup.name) {
     args.push('-e', `NANOCLAW_ASSISTANT_NAME=${agentGroup.name}`);
   }
   args.push('-e', `NANOCLAW_AGENT_GROUP_ID=${agentGroup.id}`);
   args.push('-e', `NANOCLAW_AGENT_GROUP_NAME=${agentGroup.name}`);
-  args.push('-e', `NANOCLAW_IS_ADMIN=${agentGroup.is_admin ? '1' : '0'}`);
+
+  // Users allowed to run admin commands (e.g. /clear) inside this container.
+  // Computed at wake time: owners + global admins + admins scoped to this
+  // agent group. Role changes take effect on next container spawn.
+  const adminUserIds = new Set<string>();
+  for (const r of getOwners()) adminUserIds.add(r.user_id);
+  for (const r of getGlobalAdmins()) adminUserIds.add(r.user_id);
+  for (const r of getAdminsOfAgentGroup(agentGroup.id)) adminUserIds.add(r.user_id);
+  if (adminUserIds.size > 0) {
+    args.push('-e', `NANOCLAW_ADMIN_USER_IDS=${Array.from(adminUserIds).join(',')}`);
+  }
 
   // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
   // are routed through the agent vault for credential injection.

@@ -3,7 +3,7 @@ import type { MessageInRow } from './db/messages-in.js';
 
 /**
  * Command categories for messages starting with '/'.
- * - admin: requires NANOCLAW_ADMIN_USER_ID check
+ * - admin: sender must be in NANOCLAW_ADMIN_USER_IDS
  * - filtered: silently drop (mark completed without processing)
  * - passthrough: pass raw to the agent (no XML wrapping)
  * - none: not a command — format normally
