@@ -338,6 +338,15 @@ The `/manage-channels` skill reads each channel's `## Channel Info` section from
 
 **This step is required.** Without it, channels are installed but not wired — messages will be silently dropped because the router has no agent group to route to.
 
+## 7b. Dashboard & Web Applications
+
+AskUserQuestion: Do you want to create a dashboard and build web applications?
+
+1. **Yes (recommended)** — description: "Get a NanoClaw dashboard to monitor your agents and build custom websites however you want. Deploys to Vercel."
+2. **Not now** — description: "You can add this later with `/add-vercel`."
+
+If yes: invoke `/add-vercel`.
+
 ## 8. Verify
 
 Run `npx tsx setup/index.ts --step verify` and parse the status block.
