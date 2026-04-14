@@ -20,12 +20,13 @@ import {
   Browsers,
   DisconnectReason,
   fetchLatestWaWebVersion,
+  downloadMediaMessage,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
   useMultiFileAuthState,
   proto,
 } from '@whiskeysockets/baileys';
-import type { GroupMetadata, WAMessageKey, WASocket } from '@whiskeysockets/baileys';
+import type { GroupMetadata, WAMessageKey, WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -121,9 +122,27 @@ function transformForWhatsApp(text: string): string {
 /** Convert Claude's markdown to WhatsApp-native formatting. */
 function formatWhatsApp(text: string): string {
   const segments = splitProtectedRegions(text);
-  return segments
-    .map(({ content, isProtected }) => (isProtected ? content : transformForWhatsApp(content)))
-    .join('');
+  return segments.map(({ content, isProtected }) => (isProtected ? content : transformForWhatsApp(content))).join('');
+}
+
+/** Map file extension to Baileys media message type. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildMediaMessage(data: Buffer, filename: string, ext: string, caption?: string): any {
+  const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  const videoExts = ['.mp4', '.mov', '.avi', '.mkv'];
+  const audioExts = ['.mp3', '.ogg', '.m4a', '.wav', '.aac', '.opus'];
+
+  if (imageExts.includes(ext)) {
+    return { image: data, caption, mimetype: `image/${ext.slice(1) === 'jpg' ? 'jpeg' : ext.slice(1)}` };
+  }
+  if (videoExts.includes(ext)) {
+    return { video: data, caption, mimetype: `video/${ext.slice(1)}` };
+  }
+  if (audioExts.includes(ext)) {
+    return { audio: data, mimetype: `audio/${ext.slice(1) === 'mp3' ? 'mpeg' : ext.slice(1)}` };
+  }
+  // Default: send as document
+  return { document: data, fileName: filename, caption, mimetype: 'application/octet-stream' };
 }
 
 registerChannelAdapter('whatsapp', {
@@ -160,10 +179,13 @@ registerChannelAdapter('whatsapp', {
 
     // Pending questions: chatJid → { questionId, options }
     // User replies with /approve, /reject, etc. to answer
-    const pendingQuestions = new Map<string, {
-      questionId: string;
-      options: string[];
-    }>();
+    const pendingQuestions = new Map<
+      string,
+      {
+        questionId: string;
+        options: string[];
+      }
+    >();
 
     // Group sync tracking
     let lastGroupSync = 0;
@@ -272,6 +294,35 @@ registerChannelAdapter('whatsapp', {
       } finally {
         flushing = false;
       }
+    }
+
+    /** Download media from an inbound message, save to /workspace/attachments/. */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function downloadInboundMedia(msg: WAMessage, normalized: any): Promise<Array<{ type: string; name: string; localPath: string }>> {
+      const mediaTypes: Array<{ key: string; type: string; ext: string }> = [
+        { key: 'imageMessage', type: 'image', ext: '.jpg' },
+        { key: 'videoMessage', type: 'video', ext: '.mp4' },
+        { key: 'audioMessage', type: 'audio', ext: '.ogg' },
+        { key: 'documentMessage', type: 'document', ext: '' },
+      ];
+      const results: Array<{ type: string; name: string; localPath: string }> = [];
+      for (const { key, type, ext } of mediaTypes) {
+        if (!normalized[key]) continue;
+        try {
+          const buffer = await downloadMediaMessage(msg, 'buffer', {});
+          const docFilename = normalized[key].fileName;
+          const filename = docFilename || `${type}-${Date.now()}${ext}`;
+          const attachDir = path.join(DATA_DIR, 'attachments');
+          fs.mkdirSync(attachDir, { recursive: true });
+          const filePath = path.join(attachDir, filename);
+          fs.writeFileSync(filePath, buffer);
+          results.push({ type, name: filename, localPath: `attachments/${filename}` });
+          log.info('Media downloaded', { type, filename });
+        } catch (err) {
+          log.warn('Failed to download media', { type, err });
+        }
+      }
+      return results;
     }
 
     async function sendRawMessage(jid: string, text: string): Promise<string | undefined> {
@@ -478,8 +529,11 @@ registerChannelAdapter('whatsapp', {
               content = content.replace(`@${botLidUser}`, `@${ASSISTANT_NAME}`);
             }
 
-            // Skip empty protocol messages
-            if (!content) continue;
+            // Download media attachments (images, video, audio, documents)
+            const attachments = await downloadInboundMedia(msg, normalized);
+
+            // Skip empty protocol messages (no text and no attachments)
+            if (!content && attachments.length === 0) continue;
 
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const senderName = msg.pushName || sender.split('@')[0];
@@ -515,6 +569,7 @@ registerChannelAdapter('whatsapp', {
                 text: content,
                 sender,
                 senderName,
+                ...(attachments.length > 0 && { attachments }),
                 fromMe,
                 isBotMessage,
                 isGroup,
@@ -582,6 +637,21 @@ registerChannelAdapter('whatsapp', {
           return msgId;
         }
 
+        // Reaction → emoji on a message
+        if (content.operation === 'reaction' && content.messageId && content.emoji) {
+          try {
+            await sock.sendMessage(platformId, {
+              react: {
+                text: content.emoji as string,
+                key: { remoteJid: platformId, id: content.messageId as string, fromMe: false },
+              },
+            });
+          } catch (err) {
+            log.debug('Failed to send reaction', { platformId, err });
+          }
+          return;
+        }
+
         // Credential request → text fallback (WhatsApp doesn't support modals)
         if (content.type === 'credential_request' && content.credentialId) {
           const question = (content.question as string) || 'A credential has been requested.';
@@ -590,14 +660,37 @@ registerChannelAdapter('whatsapp', {
           return sendRawMessage(platformId, prefixed);
         }
 
-        // Normal message
+        // Normal message (with optional file attachments)
         const text = (content.markdown as string) || (content.text as string);
-        if (!text) return;
+        const hasFiles = message.files && message.files.length > 0;
 
-        const formatted = formatWhatsApp(text);
-        const prefixed = ASSISTANT_HAS_OWN_NUMBER ? formatted : `${ASSISTANT_NAME}: ${formatted}`;
+        if (!text && !hasFiles) return;
 
-        return sendRawMessage(platformId, prefixed);
+        // Send file attachments (first file gets the caption, rest are captionless)
+        if (hasFiles) {
+          let captionUsed = false;
+          for (const file of message.files!) {
+            try {
+              const ext = path.extname(file.filename).toLowerCase();
+              const caption = !captionUsed ? text : undefined;
+              const mediaMsg = buildMediaMessage(file.data, file.filename, ext, caption);
+              const sent = await sock.sendMessage(platformId, mediaMsg);
+              if (sent?.key?.id && sent.message) {
+                sentMessageCache.set(sent.key.id, sent.message);
+              }
+              if (caption) captionUsed = true;
+            } catch (err) {
+              log.error('Failed to send file', { platformId, filename: file.filename, err });
+            }
+          }
+          if (captionUsed) return; // Text was sent as caption
+        }
+
+        if (text) {
+          const formatted = formatWhatsApp(text);
+          const prefixed = ASSISTANT_HAS_OWN_NUMBER ? formatted : `${ASSISTANT_NAME}: ${formatted}`;
+          return sendRawMessage(platformId, prefixed);
+        }
       },
 
       async setTyping(platformId: string) {
