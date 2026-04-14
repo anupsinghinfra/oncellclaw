@@ -29,7 +29,9 @@ export const migration003: Migration = {
         platform_id         TEXT,
         platform_message_id TEXT,
         expires_at          TEXT,
-        status              TEXT NOT NULL DEFAULT 'pending'
+        status              TEXT NOT NULL DEFAULT 'pending',
+        title               TEXT NOT NULL DEFAULT '',
+        options_json        TEXT NOT NULL DEFAULT '[]'
       );
 
       CREATE INDEX idx_pending_approvals_action_status

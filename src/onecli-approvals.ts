@@ -137,6 +137,11 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
   const approvalId = shortApprovalId();
   const question = buildQuestion(request, originGroup?.name ?? request.agent.name);
 
+  const onecliTitle = 'Credentials Request';
+  const onecliOptions = [
+    { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
+    { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
+  ];
   let platformMessageId: string | undefined;
   try {
     platformMessageId = await adapterRef.deliver(
@@ -147,12 +152,9 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
       JSON.stringify({
         type: 'ask_question',
         questionId: approvalId,
-        title: 'Credentials Request',
+        title: onecliTitle,
         question,
-        options: [
-          { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
-          { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
-        ],
+        options: onecliOptions,
       }),
     );
   } catch (err) {
@@ -180,6 +182,8 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
     platform_message_id: platformMessageId ?? null,
     expires_at: request.expiresAt,
     status: 'pending',
+    title: onecliTitle,
+    options_json: JSON.stringify(onecliOptions),
   });
 
   // Expiry timer fires just before the gateway's own TTL so our decision lands

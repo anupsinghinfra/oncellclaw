@@ -21,7 +21,7 @@ import {
 import { log } from '../log.js';
 import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
-import { getPendingQuestion } from '../db/sessions.js';
+import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
 import type { ChannelAdapter, ChannelSetup, ConversationConfig, InboundMessage } from './adapter.js';
 
@@ -244,10 +244,10 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const selectedOption = event.value || '';
         const userId = event.user?.userId || '';
 
-        // Look up the pending question BEFORE dispatching onAction (which deletes it).
-        const pq = getPendingQuestion(questionId);
-        const title = pq?.title ?? '❓ Question';
-        const matched = pq?.options.find((o) => o.value === selectedOption);
+        // Resolve render metadata BEFORE dispatching onAction (which deletes the row).
+        const render = getAskQuestionRender(questionId);
+        const title = render?.title ?? '❓ Question';
+        const matched = render?.options.find((o) => o.value === selectedOption);
         const selectedLabel = matched?.selectedLabel ?? selectedOption ?? '(clicked)';
 
         // Update the card to show the selected answer and remove buttons
@@ -519,9 +519,9 @@ async function handleForwardedEvent(
       const originalEmbeds =
         ((interaction.message as Record<string, unknown>)?.embeds as Array<Record<string, unknown>>) || [];
       const originalDescription = (originalEmbeds[0]?.description as string) || '';
-      const pq = questionId ? getPendingQuestion(questionId) : undefined;
-      const cardTitle = pq?.title ?? ((originalEmbeds[0]?.title as string) || '❓ Question');
-      const matchedOpt = pq?.options.find((o) => o.value === selectedOption);
+      const render = questionId ? getAskQuestionRender(questionId) : undefined;
+      const cardTitle = render?.title ?? ((originalEmbeds[0]?.title as string) || '❓ Question');
+      const matchedOpt = render?.options.find((o) => o.value === selectedOption);
       const selectedLabel = matchedOpt?.selectedLabel ?? selectedOption ?? customId;
       try {
         await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {

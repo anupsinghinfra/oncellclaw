@@ -108,16 +108,21 @@ export function deletePendingQuestion(questionId: string): void {
 
 export function createPendingApproval(
   pa: Partial<PendingApproval> &
-    Pick<PendingApproval, 'approval_id' | 'request_id' | 'action' | 'payload' | 'created_at'>,
+    Pick<
+      PendingApproval,
+      'approval_id' | 'request_id' | 'action' | 'payload' | 'created_at' | 'title' | 'options_json'
+    >,
 ): void {
   getDb()
     .prepare(
       `INSERT INTO pending_approvals
          (approval_id, session_id, request_id, action, payload, created_at,
-          agent_group_id, channel_type, platform_id, platform_message_id, expires_at, status)
+          agent_group_id, channel_type, platform_id, platform_message_id, expires_at, status,
+          title, options_json)
        VALUES
          (@approval_id, @session_id, @request_id, @action, @payload, @created_at,
-          @agent_group_id, @channel_type, @platform_id, @platform_message_id, @expires_at, @status)`,
+          @agent_group_id, @channel_type, @platform_id, @platform_message_id, @expires_at, @status,
+          @title, @options_json)`,
     )
     .run({
       session_id: null,
@@ -147,4 +152,21 @@ export function deletePendingApproval(approvalId: string): void {
 
 export function getPendingApprovalsByAction(action: string): PendingApproval[] {
   return getDb().prepare('SELECT * FROM pending_approvals WHERE action = ?').all(action) as PendingApproval[];
+}
+
+/**
+ * Resolve ask_question render metadata (title + normalized options) for any
+ * card, regardless of whether it was persisted as a pending_question (generic
+ * ask_user_question) or a pending_approval (self-mod / OneCLI credential).
+ */
+export function getAskQuestionRender(
+  id: string,
+): { title: string; options: import('../channels/ask-question.js').NormalizedOption[] } | undefined {
+  const q = getPendingQuestion(id);
+  if (q) return { title: q.title, options: q.options };
+  const a = getDb()
+    .prepare('SELECT title, options_json FROM pending_approvals WHERE approval_id = ?')
+    .get(id) as { title: string; options_json: string } | undefined;
+  if (!a || !a.title) return undefined;
+  return { title: a.title, options: JSON.parse(a.options_json) };
 }

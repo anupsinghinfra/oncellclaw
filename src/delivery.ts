@@ -133,6 +133,7 @@ async function requestApproval(
   const adminChannel = adminMGs[0];
 
   const approvalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const normalizedOptions = normalizeOptions(APPROVAL_OPTIONS);
   createPendingApproval({
     approval_id: approvalId,
     session_id: session.id,
@@ -140,6 +141,8 @@ async function requestApproval(
     action,
     payload: JSON.stringify(payload),
     created_at: new Date().toISOString(),
+    title,
+    options_json: JSON.stringify(normalizedOptions),
   });
 
   if (deliveryAdapter) {

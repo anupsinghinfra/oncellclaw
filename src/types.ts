@@ -106,6 +106,8 @@ export interface PendingApproval {
   platform_message_id: string | null;
   expires_at: string | null;
   status: 'pending' | 'approved' | 'rejected' | 'expired';
+  title: string;
+  options_json: string;
 }
 
 // ── Pending credentials (central DB) ──
