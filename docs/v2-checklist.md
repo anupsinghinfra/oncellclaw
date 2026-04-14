@@ -62,6 +62,8 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Setup flow wired to v2 channels (channel skills + /manage-channels for registration + verify.ts checks all tokens)
 - [x] Channel Info metadata in each channel skill (type, terminology, how-to-find-id, isolation defaults)
 - [x] /manage-channels skill (wire channels to agent groups with three isolation levels)
+- [x] /init-first-agent skill (standalone first-agent bootstrap; walks the operator through channel pick → identity lookup → DM platform_id resolution → wire → welcome DM; fallback to telegram pair-code or "DM the bot first" lookup for channels without cold DM)
+- [x] Cold-DM infrastructure — `ChannelAdapter.openDM?(handle)` optional method, resolved via Chat SDK `chat.openDM` for resolution-required channels (Discord, Slack, Teams, Webex, gChat) and fall-through to the handle directly for direct-addressable channels (Telegram, WhatsApp, iMessage, Matrix, Resend). `src/user-dm.ts::ensureUserDm` caches every resolution in `user_dms` so subsequent cold DMs are a DB read.
 - [x] Agent-shared session mode (cross-channel shared sessions, e.g. GitHub + Slack)
 - [x] Auto-onboarding on channel registration (/welcome skill triggered on first wiring)
 - [ ] Setup vs production channel separation
@@ -70,8 +72,8 @@ Status: [x] done, [~] partial, [ ] not started
 
 **Goal:** get the user out of Claude Code and into their messaging app as quickly as possible, then enable every part of customization, configuration, and setup from inside the chat app. Claude Code is the bootstrap, not the home.
 
-- [ ] Minimum-viable bootstrap in Claude Code: install deps, pick one channel, authenticate it, wire it to a default agent group, hand off — nothing else required before the user can leave Claude Code
-- [ ] Post-handoff welcome message in the chat app guides the user through remaining setup (channels, skills, integrations, memory, scheduling, etc.)
+- [~] Minimum-viable bootstrap in Claude Code: install deps, pick one channel, authenticate it, wire it to a default agent group, hand off — nothing else required before the user can leave Claude Code. `/setup` handles deps/auth, `/init-first-agent` handles the first-agent wiring + welcome DM. Still TODO: single top-level entrypoint that composes both, and a true "nothing else required" handoff (today `/setup` still runs through `/manage-channels` for additional channels).
+- [~] Post-handoff welcome message in the chat app guides the user through remaining setup (channels, skills, integrations, memory, scheduling, etc.) — `/init-first-agent` stages a `kind:'chat'` / `sender:'system'` welcome prompt that the agent DMs back to the operator via the normal delivery path. Current prompt just introduces the agent; TODO: expand the prompt (or follow-up flow) to walk through remaining setup tasks from within the chat.
 - [ ] Add more channels from chat (currently requires returning to Claude Code to run `/add-*` skills)
 - [ ] Self-register agent into a new chat room from chat: user gives the agent a channel/group name + approval, and the agent joins via the underlying adapter (e.g. Baileys for WhatsApp), wires the room to an agent group, and posts a first "hi, I'm here" message — no manual invite, no `/add-*` skill, no terminal
 - [ ] Authenticate channels from chat (OAuth/token entry via cards, no terminal required)
@@ -110,6 +112,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Container waking on new message
 - [x] Typing indicator triggered on message route
 - [~] Trigger rule matching (router picks highest-priority agent, regex/mention matching TODO)
+- [x] Delivery ACL — `delivery.ts` throws on unauthorized channel / agent-to-agent targets (was `return` previously, which falsely marked the message as delivered because the outer loop treated undefined as success — real incident: silent drops during the welcome-DM test before the fix). Self-origin chat and self-to-self agent messages skip the destination check. `createMessagingGroupAgent` auto-creates the companion `agent_destinations` row with a normalized, collision-broken `local_name` so operators don't have to hand-insert destinations when wiring channels.
 
 ## Rich Messaging
 
@@ -135,9 +138,9 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] schedule_task (with process_after and recurrence)
 - [x] list_tasks
 - [x] cancel_task / pause_task / resume_task
-- [x] create_agent (admin-only, creates agent group + folder + bidirectional destinations)
-- [x] install_packages (apt/npm, admin approval required, strict name validation)
-- [x] add_mcp_server (admin approval required)
+- [x] create_agent (any agent, creates agent group + folder + bidirectional destinations; host re-normalizes the name, deduplicates folder, path-traversal guarded)
+- [x] install_packages (apt/npm, owner/admin approval required via `pickApprover`, strict name validation)
+- [x] add_mcp_server (owner/admin approval required via `pickApprover`)
 - [x] request_rebuild (rebuilds per-agent-group Docker image)
 - ~~send_to_agent~~ — deleted; agents are just destinations in the unified `send_message`
 
@@ -206,7 +209,7 @@ Status: [x] done, [~] partial, [ ] not started
 ## Agent-to-Agent Communication
 
 - [x] Host delivery to target agent's session DB (`channel_type='agent'` routing in `src/delivery.ts`)
-- [x] Agent spawning a new sub-agent (`create_agent` MCP tool, admin-only, path-traversal guarded)
+- [x] Agent spawning a new sub-agent (`create_agent` MCP tool, available to any agent, path-traversal guarded)
 - [x] Dynamic agent group creation (folder + optional CLAUDE.md at runtime)
 - [x] Internal-only agents (agents created without a channel attached)
 - [x] Permission delegation from parent to child (bidirectional destination rows inserted at creation)
