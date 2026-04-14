@@ -164,9 +164,9 @@ export function getAskQuestionRender(
 ): { title: string; options: import('../channels/ask-question.js').NormalizedOption[] } | undefined {
   const q = getPendingQuestion(id);
   if (q) return { title: q.title, options: q.options };
-  const a = getDb()
-    .prepare('SELECT title, options_json FROM pending_approvals WHERE approval_id = ?')
-    .get(id) as { title: string; options_json: string } | undefined;
+  const a = getDb().prepare('SELECT title, options_json FROM pending_approvals WHERE approval_id = ?').get(id) as
+    | { title: string; options_json: string }
+    | undefined;
   if (!a || !a.title) return undefined;
   return { title: a.title, options: JSON.parse(a.options_json) };
 }
