@@ -47,14 +47,10 @@ import type {
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 try {
-  const _generics = _require(
-    '@whiskeysockets/baileys/lib/Utils/generics',
-  ) as Record<string, unknown>;
+  const _generics = _require('@whiskeysockets/baileys/lib/Utils/generics') as Record<string, unknown>;
   _generics.getPlatformId = (browser: string): string => {
     const platformType =
-      proto.DeviceProps.PlatformType[
-        browser.toUpperCase() as keyof typeof proto.DeviceProps.PlatformType
-      ];
+      proto.DeviceProps.PlatformType[browser.toUpperCase() as keyof typeof proto.DeviceProps.PlatformType];
     return platformType ? platformType.toString() : '1';
   };
 } catch {
@@ -70,6 +66,65 @@ const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const GROUP_METADATA_CACHE_TTL_MS = 60_000; // 1 min for outbound sends
 const SENT_MESSAGE_CACHE_MAX = 256;
 const RECONNECT_DELAY_MS = 5000;
+const PENDING_QUESTIONS_MAX = 64;
+
+/** Normalize an option name to a slash command: "Approve" → "/approve" */
+function optionToCommand(option: string): string {
+  return '/' + option.toLowerCase().replace(/\s+/g, '-');
+}
+
+// --- Markdown → WhatsApp formatting ---
+
+interface TextSegment {
+  content: string;
+  isProtected: boolean;
+}
+
+/** Split text into code-block-protected and unprotected regions. */
+function splitProtectedRegions(text: string): TextSegment[] {
+  const segments: TextSegment[] = [];
+  const codeBlockRegex = /```[\s\S]*?```|`[^`\n]+`/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ content: text.slice(lastIndex, match.index), isProtected: false });
+    }
+    segments.push({ content: match[0], isProtected: true });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({ content: text.slice(lastIndex), isProtected: false });
+  }
+
+  return segments;
+}
+
+/** Apply WhatsApp-native formatting to an unprotected text segment. */
+function transformForWhatsApp(text: string): string {
+  // Order matters: italic before bold to avoid **bold** → *bold* → _bold_
+  // 1. Italic: *text* (not **) → _text_
+  text = text.replace(/(?<!\*)\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?!\*)/g, '_$1_');
+  // 2. Bold: **text** → *text*
+  text = text.replace(/\*\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*\*/g, '*$1*');
+  // 3. Headings: ## Title → *Title*
+  text = text.replace(/^#{1,6}\s+(.+)$/gm, '*$1*');
+  // 4. Links: [text](url) → text (url)
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
+  // 5. Horizontal rules: --- / *** / ___ → stripped
+  text = text.replace(/^(-{3,}|\*{3,}|_{3,})$/gm, '');
+  return text;
+}
+
+/** Convert Claude's markdown to WhatsApp-native formatting. */
+function formatWhatsApp(text: string): string {
+  const segments = splitProtectedRegions(text);
+  return segments
+    .map(({ content, isProtected }) => (isProtected ? content : transformForWhatsApp(content)))
+    .join('');
+}
 
 registerChannelAdapter('whatsapp', {
   factory: () => {
@@ -102,6 +157,13 @@ registerChannelAdapter('whatsapp', {
 
     // Group metadata cache with TTL
     const groupMetadataCache = new Map<string, { metadata: GroupMetadata; expiresAt: number }>();
+
+    // Pending questions: chatJid → { questionId, options }
+    // User replies with /approve, /reject, etc. to answer
+    const pendingQuestions = new Map<string, {
+      questionId: string;
+      options: string[];
+    }>();
 
     // Group sync tracking
     let lastGroupSync = 0;
@@ -296,8 +358,7 @@ registerChannelAdapter('whatsapp', {
 
         if (connection === 'close') {
           connected = false;
-          const reason = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output
-            ?.statusCode;
+          const reason = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
           const shouldReconnect = reason !== DisconnectReason.loggedOut;
 
           log.info('WhatsApp connection closed', { reason, shouldReconnect });
@@ -327,7 +388,9 @@ registerChannelAdapter('whatsapp', {
           // Clean up pairing code file after successful connection
           try {
             if (fs.existsSync(pairingCodeFile)) fs.unlinkSync(pairingCodeFile);
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
 
           // Announce availability for presence updates
           sock.sendPresenceUpdate('available').catch((err) => {
@@ -421,9 +484,29 @@ registerChannelAdapter('whatsapp', {
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const senderName = msg.pushName || sender.split('@')[0];
             const fromMe = msg.key.fromMe || false;
-            const isBotMessage = ASSISTANT_HAS_OWN_NUMBER
-              ? fromMe
-              : content.startsWith(`${ASSISTANT_NAME}:`);
+            // Filter bot's own messages to prevent echo loops.
+            // fromMe is always true for messages sent from this linked device,
+            // regardless of ASSISTANT_HAS_OWN_NUMBER mode.
+            if (fromMe) continue;
+
+            const isBotMessage = ASSISTANT_HAS_OWN_NUMBER ? false : content.startsWith(`${ASSISTANT_NAME}:`);
+
+            // Check if this reply answers a pending question via slash command
+            const pending = pendingQuestions.get(chatJid);
+            if (pending && content.startsWith('/')) {
+              const cmd = content.trim().toLowerCase();
+              const matched = pending.options.find((o) => optionToCommand(o) === cmd);
+              if (matched) {
+                const voterName = msg.pushName || sender.split('@')[0];
+                setupConfig.onAction(pending.questionId, matched, sender);
+                pendingQuestions.delete(chatJid);
+                // Past tense for common actions: Approve→Approved, Reject→Rejected
+                const label = matched.endsWith('e') ? `${matched}d` : `${matched}ed`;
+                await sendRawMessage(chatJid, `*${label}* by ${voterName}`);
+                log.info('Question answered', { questionId: pending.questionId, matched, voterName });
+                continue; // Don't forward this reply to the agent
+              }
+            }
 
             const inbound: InboundMessage = {
               id: msg.key.id || `wa-${Date.now()}`,
@@ -473,15 +556,46 @@ registerChannelAdapter('whatsapp', {
         log.info('WhatsApp adapter initialized');
       },
 
-      async deliver(platformId: string, _threadId: string | null, message: OutboundMessage): Promise<string | undefined> {
+      async deliver(
+        platformId: string,
+        _threadId: string | null,
+        message: OutboundMessage,
+      ): Promise<string | undefined> {
         const content = message.content as Record<string, unknown>;
 
-        // Typing indicator (composing → paused is handled by the host)
+        // Ask question → text with slash command replies
+        if (content.type === 'ask_question' && content.questionId && content.options) {
+          const questionId = content.questionId as string;
+          const question = content.question as string;
+          const options = content.options as string[];
+
+          const optionLines = options.map((o) => `  ${optionToCommand(o)}`).join('\n');
+          const text = `${question}\n\nReply with:\n${optionLines}`;
+          const msgId = await sendRawMessage(platformId, text);
+          if (msgId) {
+            pendingQuestions.set(platformId, { questionId, options });
+            if (pendingQuestions.size > PENDING_QUESTIONS_MAX) {
+              const oldest = pendingQuestions.keys().next().value!;
+              pendingQuestions.delete(oldest);
+            }
+          }
+          return msgId;
+        }
+
+        // Credential request → text fallback (WhatsApp doesn't support modals)
+        if (content.type === 'credential_request' && content.credentialId) {
+          const question = (content.question as string) || 'A credential has been requested.';
+          const text = `Credential request: ${question}\n\nPlease provide this credential through a secure channel (e.g. Discord or Slack).`;
+          const prefixed = ASSISTANT_HAS_OWN_NUMBER ? text : `${ASSISTANT_NAME}: ${text}`;
+          return sendRawMessage(platformId, prefixed);
+        }
+
+        // Normal message
         const text = (content.markdown as string) || (content.text as string);
         if (!text) return;
 
-        // Prefix bot messages on shared number
-        const prefixed = ASSISTANT_HAS_OWN_NUMBER ? text : `${ASSISTANT_NAME}: ${text}`;
+        const formatted = formatWhatsApp(text);
+        const prefixed = ASSISTANT_HAS_OWN_NUMBER ? formatted : `${ASSISTANT_NAME}: ${formatted}`;
 
         return sendRawMessage(platformId, prefixed);
       },
