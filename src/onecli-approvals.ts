@@ -71,7 +71,7 @@ export function resolveOneCLIApproval(approvalId: string, selectedOption: string
   pending.delete(approvalId);
   clearTimeout(state.timer);
 
-  const decision: Decision = selectedOption === 'Approve' ? 'approve' : 'deny';
+  const decision: Decision = selectedOption === 'approve' ? 'approve' : 'deny';
   updatePendingApprovalStatus(approvalId, decision === 'approve' ? 'approved' : 'rejected');
   // Card is auto-edited to "✅ <option>" by chat-sdk-bridge's onAction handler,
   // so we don't need to deliver an edit here.
@@ -147,8 +147,12 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
       JSON.stringify({
         type: 'ask_question',
         questionId: approvalId,
+        title: 'Credentials Request',
         question,
-        options: ['Approve', 'Reject'],
+        options: [
+          { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
+          { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
+        ],
       }),
     );
   } catch (err) {

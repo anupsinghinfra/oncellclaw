@@ -40,6 +40,7 @@ import {
   resumeTask,
 } from './db/session-db.js';
 import { log } from './log.js';
+import { normalizeOptions, type RawOption } from './channels/ask-question.js';
 import {
   openInboundDb,
   openOutboundDb,
@@ -110,11 +111,17 @@ function notifyAgent(session: Session, text: string): void {
  * The admin's button click routes via the existing ncq: card infrastructure to
  * handleApprovalResponse in index.ts, which completes the action.
  */
+const APPROVAL_OPTIONS: RawOption[] = [
+  { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
+  { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
+];
+
 async function requestApproval(
   session: Session,
   agentName: string,
   action: 'install_packages' | 'request_rebuild' | 'add_mcp_server',
   payload: Record<string, unknown>,
+  title: string,
   question: string,
 ): Promise<void> {
   const adminGroup = getAdminAgentGroup();
@@ -145,8 +152,9 @@ async function requestApproval(
         JSON.stringify({
           type: 'ask_question',
           questionId: approvalId,
+          title,
           question,
-          options: ['Approve', 'Reject'],
+          options: APPROVAL_OPTIONS,
         }),
       );
     } catch (err) {
@@ -356,16 +364,26 @@ async function deliverMessage(
 
   // Track pending questions for ask_user_question flow
   if (content.type === 'ask_question' && content.questionId) {
-    createPendingQuestion({
-      question_id: content.questionId,
-      session_id: session.id,
-      message_out_id: msg.id,
-      platform_id: msg.platform_id,
-      channel_type: msg.channel_type,
-      thread_id: msg.thread_id,
-      created_at: new Date().toISOString(),
-    });
-    log.info('Pending question created', { questionId: content.questionId, sessionId: session.id });
+    const title = content.title as string | undefined;
+    const rawOptions = content.options as unknown;
+    if (!title || !Array.isArray(rawOptions)) {
+      log.error('ask_question missing required title/options — not persisting', {
+        questionId: content.questionId,
+      });
+    } else {
+      createPendingQuestion({
+        question_id: content.questionId,
+        session_id: session.id,
+        message_out_id: msg.id,
+        platform_id: msg.platform_id,
+        channel_type: msg.channel_type,
+        thread_id: msg.thread_id,
+        title,
+        options: normalizeOptions(rawOptions as never),
+        created_at: new Date().toISOString(),
+      });
+      log.info('Pending question created', { questionId: content.questionId, sessionId: session.id });
+    }
   }
 
   // Channel delivery
@@ -584,7 +602,8 @@ async function handleSystemAction(
           args: (content.args as string[]) || [],
           env: (content.env as Record<string, string>) || {},
         },
-        `Agent "${agentGroup.name}" requests a new MCP server:\n${serverName} (${command})`,
+        'Add MCP Request',
+        `Agent "${agentGroup.name}" is attempting to add a new MCP server:\n${serverName} (${command})`,
       );
       break;
     }
@@ -633,7 +652,8 @@ async function handleSystemAction(
         agentGroup.name,
         'install_packages',
         { apt, npm, reason },
-        `Agent "${agentGroup.name}" requests package install + container rebuild:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
+        'Install Packages Request',
+        `Agent "${agentGroup.name}" is attempting to install a package + rebuild container:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
       );
       break;
     }
@@ -650,7 +670,8 @@ async function handleSystemAction(
         agentGroup.name,
         'request_rebuild',
         { reason },
-        `Agent "${agentGroup.name}" requests a container rebuild.${reason ? `\nReason: ${reason}` : ''}`,
+        'Rebuild Request',
+        `Agent "${agentGroup.name}" is attempting to rebuild container.${reason ? `\nReason: ${reason}` : ''}`,
       );
       break;
     }

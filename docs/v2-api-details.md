@@ -309,8 +309,13 @@ function createWhatsAppChannel(): ChannelAdapter {
 {
   "operation": "ask_question",
   "questionId": "q-123",
+  "title": "Failing Test",
   "question": "How should we handle the failing test?",
-  "options": ["Skip it", "Fix and retry", "Abort deployment"]
+  "options": [
+    "Skip it",
+    { "label": "Fix and retry", "selectedLabel": "✅ Fixing", "value": "fix" },
+    { "label": "Abort deployment", "selectedLabel": "❌ Aborted", "value": "abort" }
+  ]
 }
 ```
 

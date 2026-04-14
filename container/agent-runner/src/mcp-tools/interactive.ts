@@ -37,26 +37,53 @@ export const askUserQuestion: McpToolDefinition = {
   tool: {
     name: 'ask_user_question',
     description:
-      'Ask the user a multiple-choice question and wait for their response. This is a blocking call — execution pauses until the user responds or the timeout expires.',
+      'Ask the user a multiple-choice question and wait for their response. This is a blocking call — execution pauses until the user responds or the timeout expires. Provide a short card title (e.g. "Confirm deletion") and an array of options — each option may be a plain string (used as both button label and result value) or an object { label, selectedLabel?, value? } where selectedLabel is the text shown on the card after the user clicks.',
     inputSchema: {
       type: 'object' as const,
       properties: {
+        title: { type: 'string', description: 'Short card title shown above the question' },
         question: { type: 'string', description: 'The question to ask' },
         options: {
           type: 'array',
-          items: { type: 'string' },
-          description: 'Button labels for the user to choose from',
+          items: {
+            oneOf: [
+              { type: 'string' },
+              {
+                type: 'object',
+                properties: {
+                  label: { type: 'string' },
+                  selectedLabel: { type: 'string' },
+                  value: { type: 'string' },
+                },
+                required: ['label'],
+              },
+            ],
+          },
+          description: 'Options for the user to choose from (string or {label, selectedLabel?, value?})',
         },
         timeout: { type: 'number', description: 'Timeout in seconds (default: 300)' },
       },
-      required: ['question', 'options'],
+      required: ['title', 'question', 'options'],
     },
   },
   async handler(args) {
+    const title = args.title as string;
     const question = args.question as string;
-    const options = args.options as string[];
+    const rawOptions = args.options as unknown[];
     const timeout = ((args.timeout as number) || 300) * 1000;
-    if (!question || !options?.length) return err('question and options are required');
+    if (!title || !question || !rawOptions?.length) {
+      return err('title, question, and options are required');
+    }
+
+    const options = rawOptions.map((o) => {
+      if (typeof o === 'string') return { label: o, selectedLabel: o, value: o };
+      const obj = o as { label: string; selectedLabel?: string; value?: string };
+      return {
+        label: obj.label,
+        selectedLabel: obj.selectedLabel ?? obj.label,
+        value: obj.value ?? obj.label,
+      };
+    });
 
     const questionId = generateId();
     const r = routing();
@@ -71,6 +98,7 @@ export const askUserQuestion: McpToolDefinition = {
       content: JSON.stringify({
         type: 'ask_question',
         questionId,
+        title,
         question,
         options,
       }),

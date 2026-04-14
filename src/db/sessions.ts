@@ -75,16 +75,29 @@ export function deleteSession(id: string): void {
 export function createPendingQuestion(pq: PendingQuestion): void {
   getDb()
     .prepare(
-      `INSERT INTO pending_questions (question_id, session_id, message_out_id, platform_id, channel_type, thread_id, created_at)
-       VALUES (@question_id, @session_id, @message_out_id, @platform_id, @channel_type, @thread_id, @created_at)`,
+      `INSERT INTO pending_questions (question_id, session_id, message_out_id, platform_id, channel_type, thread_id, title, options_json, created_at)
+       VALUES (@question_id, @session_id, @message_out_id, @platform_id, @channel_type, @thread_id, @title, @options_json, @created_at)`,
     )
-    .run(pq);
+    .run({
+      question_id: pq.question_id,
+      session_id: pq.session_id,
+      message_out_id: pq.message_out_id,
+      platform_id: pq.platform_id,
+      channel_type: pq.channel_type,
+      thread_id: pq.thread_id,
+      title: pq.title,
+      options_json: JSON.stringify(pq.options),
+      created_at: pq.created_at,
+    });
 }
 
 export function getPendingQuestion(questionId: string): PendingQuestion | undefined {
-  return getDb().prepare('SELECT * FROM pending_questions WHERE question_id = ?').get(questionId) as
-    | PendingQuestion
-    | undefined;
+  const row = getDb()
+    .prepare('SELECT * FROM pending_questions WHERE question_id = ?')
+    .get(questionId) as (Omit<PendingQuestion, 'options'> & { options_json: string }) | undefined;
+  if (!row) return undefined;
+  const { options_json, ...rest } = row;
+  return { ...rest, options: JSON.parse(options_json) };
 }
 
 export function deletePendingQuestion(questionId: string): void {

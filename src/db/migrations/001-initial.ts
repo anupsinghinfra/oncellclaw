@@ -61,6 +61,8 @@ export const migration001: Migration = {
         platform_id    TEXT,
         channel_type   TEXT,
         thread_id      TEXT,
+        title          TEXT NOT NULL,
+        options_json   TEXT NOT NULL,
         created_at     TEXT NOT NULL
       );
     `);

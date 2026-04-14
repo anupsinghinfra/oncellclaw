@@ -512,8 +512,9 @@ Send an interactive question and wait for the user's response. This is a **block
 {
   name: 'ask_user_question',
   params: {
+    title: string,         // short card title, e.g. "Confirm deletion"
     question: string,
-    options: string[],     // button labels
+    options: (string | { label: string; selectedLabel?: string; value?: string })[],
     timeout?: number,      // seconds (default: 300)
   }
 }

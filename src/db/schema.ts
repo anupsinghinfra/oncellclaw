@@ -64,6 +64,8 @@ CREATE TABLE pending_questions (
   platform_id    TEXT,
   channel_type   TEXT,
   thread_id      TEXT,
+  title          TEXT NOT NULL,
+  options_json   TEXT NOT NULL,
   created_at     TEXT NOT NULL
 );
 `;

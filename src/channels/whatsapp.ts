@@ -32,6 +32,7 @@ import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR } from '../config.js
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { registerChannelAdapter } from './channel-registry.js';
+import { normalizeOptions, type NormalizedOption } from './ask-question.js';
 import type {
   ChannelAdapter,
   ChannelSetup,
@@ -69,7 +70,7 @@ const SENT_MESSAGE_CACHE_MAX = 256;
 const RECONNECT_DELAY_MS = 5000;
 const PENDING_QUESTIONS_MAX = 64;
 
-/** Normalize an option name to a slash command: "Approve" → "/approve" */
+/** Normalize an option label to a slash command: "Approve" → "/approve" */
 function optionToCommand(option: string): string {
   return '/' + option.toLowerCase().replace(/\s+/g, '-');
 }
@@ -183,7 +184,7 @@ registerChannelAdapter('whatsapp', {
       string,
       {
         questionId: string;
-        options: string[];
+        options: NormalizedOption[];
       }
     >();
 
@@ -549,15 +550,17 @@ registerChannelAdapter('whatsapp', {
             const pending = pendingQuestions.get(chatJid);
             if (pending && content.startsWith('/')) {
               const cmd = content.trim().toLowerCase();
-              const matched = pending.options.find((o) => optionToCommand(o) === cmd);
+              const matched = pending.options.find((o) => optionToCommand(o.label) === cmd);
               if (matched) {
                 const voterName = msg.pushName || sender.split('@')[0];
-                setupConfig.onAction(pending.questionId, matched, sender);
+                setupConfig.onAction(pending.questionId, matched.value, sender);
                 pendingQuestions.delete(chatJid);
-                // Past tense for common actions: Approve→Approved, Reject→Rejected
-                const label = matched.endsWith('e') ? `${matched}d` : `${matched}ed`;
-                await sendRawMessage(chatJid, `*${label}* by ${voterName}`);
-                log.info('Question answered', { questionId: pending.questionId, matched, voterName });
+                await sendRawMessage(chatJid, `${matched.selectedLabel} by ${voterName}`);
+                log.info('Question answered', {
+                  questionId: pending.questionId,
+                  value: matched.value,
+                  voterName,
+                });
                 continue; // Don't forward this reply to the agent
               }
             }
@@ -621,11 +624,16 @@ registerChannelAdapter('whatsapp', {
         // Ask question → text with slash command replies
         if (content.type === 'ask_question' && content.questionId && content.options) {
           const questionId = content.questionId as string;
+          const title = content.title as string;
           const question = content.question as string;
-          const options = content.options as string[];
+          if (!title) {
+            log.error('ask_question missing required title — skipping delivery', { questionId });
+            return;
+          }
+          const options: NormalizedOption[] = normalizeOptions(content.options as never);
 
-          const optionLines = options.map((o) => `  ${optionToCommand(o)}`).join('\n');
-          const text = `${question}\n\nReply with:\n${optionLines}`;
+          const optionLines = options.map((o) => `  ${optionToCommand(o.label)}`).join('\n');
+          const text = `*${title}*\n\n${question}\n\nReply with:\n${optionLines}`;
           const msgId = await sendRawMessage(platformId, text);
           if (msgId) {
             pendingQuestions.set(platformId, { questionId, options });

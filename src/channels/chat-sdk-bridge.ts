@@ -21,6 +21,8 @@ import {
 import { log } from '../log.js';
 import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
+import { getPendingQuestion } from '../db/sessions.js';
+import { normalizeOptions, type NormalizedOption } from './ask-question.js';
 import type { ChannelAdapter, ChannelSetup, ConversationConfig, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -243,11 +245,17 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const selectedOption = event.value || '';
         const userId = event.user?.userId || '';
 
+        // Look up the pending question BEFORE dispatching onAction (which deletes it).
+        const pq = getPendingQuestion(questionId);
+        const title = pq?.title ?? '❓ Question';
+        const matched = pq?.options.find((o) => o.value === selectedOption);
+        const selectedLabel = matched?.selectedLabel ?? selectedOption ?? '(clicked)';
+
         // Update the card to show the selected answer and remove buttons
         try {
           const tid = event.threadId;
           await adapter.editMessage(tid, event.messageId, {
-            markdown: `❓ **Question**\n\n${selectedOption ? `✅ **${selectedOption}**` : '(clicked)'}`,
+            markdown: `${title}\n\n${selectedLabel}`,
           });
         } catch (err) {
           log.warn('Failed to update card after action', { err });
@@ -342,17 +350,27 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // Ask question card — render as Card with buttons
       if (content.type === 'ask_question' && content.questionId && content.options) {
         const questionId = content.questionId as string;
-        const options = content.options as string[];
+        const title = content.title as string;
+        const question = content.question as string;
+        if (!title) {
+          log.error('ask_question missing required title — skipping delivery', { questionId });
+          return;
+        }
+        const options: NormalizedOption[] = normalizeOptions(content.options as never);
         const card = Card({
-          title: '❓ Question',
+          title,
           children: [
-            CardText(content.question as string),
-            Actions(options.map((opt) => Button({ id: `ncq:${questionId}:${opt}`, label: opt, value: opt }))),
+            CardText(question),
+            Actions(
+              options.map((opt) =>
+                Button({ id: `ncq:${questionId}:${opt.value}`, label: opt.label, value: opt.value }),
+              ),
+            ),
           ],
         });
         const result = await adapter.postMessage(tid, {
           card,
-          fallbackText: `${content.question}\nOptions: ${options.join(', ')}`,
+          fallbackText: `${title}\n\n${question}\nOptions: ${options.map((o) => o.label).join(', ')}`,
         });
         return result?.id;
       }
@@ -502,6 +520,10 @@ async function handleForwardedEvent(
       const originalEmbeds =
         ((interaction.message as Record<string, unknown>)?.embeds as Array<Record<string, unknown>>) || [];
       const originalDescription = (originalEmbeds[0]?.description as string) || '';
+      const pq = questionId ? getPendingQuestion(questionId) : undefined;
+      const cardTitle = pq?.title ?? ((originalEmbeds[0]?.title as string) || '❓ Question');
+      const matchedOpt = pq?.options.find((o) => o.value === selectedOption);
+      const selectedLabel = matchedOpt?.selectedLabel ?? selectedOption ?? customId;
       try {
         await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
           method: 'POST',
@@ -511,8 +533,8 @@ async function handleForwardedEvent(
             data: {
               embeds: [
                 {
-                  title: '❓ Question',
-                  description: `${originalDescription}\n\n✅ **${selectedOption || customId}**`,
+                  title: cardTitle,
+                  description: `${originalDescription}\n\n${selectedLabel}`,
                 },
               ],
               components: [], // remove buttons

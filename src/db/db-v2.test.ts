@@ -375,11 +375,15 @@ describe('pending questions', () => {
       platform_id: 'chan-1',
       channel_type: 'discord',
       thread_id: null,
+      title: 'Test',
+      options: [{ label: 'Yes', selectedLabel: 'Yes', value: 'yes' }],
       created_at: now(),
     });
     const result = getPendingQuestion('q-1');
     expect(result).toBeDefined();
     expect(result!.session_id).toBe('sess-1');
+    expect(result!.title).toBe('Test');
+    expect(result!.options[0].value).toBe('yes');
   });
 
   it('should delete', () => {
@@ -390,6 +394,8 @@ describe('pending questions', () => {
       platform_id: null,
       channel_type: null,
       thread_id: null,
+      title: 'Test',
+      options: [{ label: 'Yes', selectedLabel: 'Yes', value: 'yes' }],
       created_at: now(),
     });
     deletePendingQuestion('q-1');

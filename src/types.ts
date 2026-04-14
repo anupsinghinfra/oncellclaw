@@ -86,6 +86,8 @@ export interface PendingQuestion {
   platform_id: string | null;
   channel_type: string | null;
   thread_id: string | null;
+  title: string;
+  options: import('./channels/ask-question.js').NormalizedOption[];
   created_at: string;
 }
 
