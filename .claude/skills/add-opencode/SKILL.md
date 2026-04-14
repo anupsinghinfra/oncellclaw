@@ -57,6 +57,37 @@ OPENCODE_PROVIDER=openrouter
 OPENCODE_MODEL=openrouter/google/gemini-2.5-pro-preview
 ```
 
+#### OpenCode Zen (`x-api-key`, not Bearer)
+
+Zen’s HTTP API (e.g. `POST …/zen/v1/messages`) expects the key in the **`x-api-key`** header. If OneCLI injects **`Authorization: Bearer …`** only, Zen often returns **401 / “Missing API key”** even though the gateway is working.
+
+**Naming:** NanoClaw **`AGENT_PROVIDER=opencode`** (v2 DB `agent_provider`) means “run the **OpenCode agent provider**.” Separately, **`OPENCODE_PROVIDER=opencode`** in `.env` is OpenCode’s **Zen provider id** inside the OpenCode config (see [Zen docs](https://opencode.ai/docs/zen/)).
+
+**Host `.env` (typical Zen shape):**
+
+```env
+# NanoClaw still resolves AGENT_PROVIDER from agent_groups / sessions; set agent_provider to opencode there.
+# OpenCode SDK: Zen as the upstream provider + models under opencode/…
+OPENCODE_PROVIDER=opencode
+OPENCODE_MODEL=opencode/big-pickle
+OPENCODE_SMALL_MODEL=opencode/big-pickle
+
+# Point the credential proxy at Zen’s Anthropic-compatible base URL (host + OneCLI must forward this host).
+ANTHROPIC_BASE_URL=https://opencode.ai/zen/v1
+```
+
+Use a real Zen model id from the docs; `big-pickle` is one example.
+
+**OneCLI:** register the Zen key with **`x-api-key`**, not Bearer:
+
+```bash
+onecli secrets create --name "OpenCode Zen" --type generic \
+  --value YOUR_ZEN_KEY --host-pattern opencode.ai \
+  --header-name "x-api-key" --value-format "{value}"
+```
+
+For comparison, OpenRouter uses `Authorization` + `Bearer {value}`. Zen is different by design.
+
 ### Per group / per session
 
 v2 schema: **`agent_groups.agent_provider`** and **`sessions.agent_provider`**. Set to `opencode` for groups or sessions that should use OpenCode. The container receives `AGENT_PROVIDER` from the resolved value (session overrides group).
