@@ -2,11 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 
 import { canAccessAgentGroup, pickApprovalDelivery, pickApprover } from './access.js';
 import type { ChannelAdapter, OutboundMessage } from './channels/adapter.js';
-import {
-  initChannelAdapters,
-  registerChannelAdapter,
-  teardownChannelAdapters,
-} from './channels/channel-registry.js';
+import { initChannelAdapters, registerChannelAdapter, teardownChannelAdapters } from './channels/channel-registry.js';
 import {
   addMember,
   closeDb,
