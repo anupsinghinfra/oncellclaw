@@ -633,7 +633,7 @@ async function handleSystemAction(
         agentGroup.name,
         'install_packages',
         { apt, npm, reason },
-        `Agent "${agentGroup.name}" requests package installation:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
+        `Agent "${agentGroup.name}" requests package install + container rebuild:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
       );
       break;
     }

@@ -281,8 +281,31 @@ async function handleApprovalResponse(
     updateAgentGroup(session.agent_group_id, { container_config: JSON.stringify(containerConfig) });
 
     const pkgs = [...(payload.apt || []), ...(payload.npm || [])].join(', ');
-    notify(`Packages approved (${pkgs}). Call request_rebuild to apply them.`);
     log.info('Package install approved', { approvalId: approval.approval_id, userId });
+    try {
+      await buildAgentGroupImage(session.agent_group_id);
+      killContainer(session.id, 'rebuild applied');
+      // Schedule a follow-up prompt a few seconds after kill so the host sweep
+      // respawns the container on the new image and the agent verifies + reports.
+      writeSessionMessage(session.agent_group_id, session.id, {
+        id: `appr-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'chat',
+        timestamp: new Date().toISOString(),
+        platformId: session.agent_group_id,
+        channelType: 'agent',
+        threadId: null,
+        content: JSON.stringify({
+          text: `Packages installed (${pkgs}) and container rebuilt. Verify the new packages are available (e.g. run them or check versions) and report the result to the user.`,
+          sender: 'system',
+          senderId: 'system',
+        }),
+        processAfter: new Date(Date.now() + 5000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ''),
+      });
+      log.info('Container rebuild completed (bundled with install)', { approvalId: approval.approval_id });
+    } catch (e) {
+      notify(`Packages added to config (${pkgs}) but rebuild failed: ${e instanceof Error ? e.message : String(e)}. Call request_rebuild to retry.`);
+      log.error('Bundled rebuild failed after install approval', { approvalId: approval.approval_id, err: e });
+    }
   } else if (approval.action === 'request_rebuild') {
     try {
       await buildAgentGroupImage(session.agent_group_id);
