@@ -92,9 +92,9 @@ export function createPendingQuestion(pq: PendingQuestion): void {
 }
 
 export function getPendingQuestion(questionId: string): PendingQuestion | undefined {
-  const row = getDb()
-    .prepare('SELECT * FROM pending_questions WHERE question_id = ?')
-    .get(questionId) as (Omit<PendingQuestion, 'options'> & { options_json: string }) | undefined;
+  const row = getDb().prepare('SELECT * FROM pending_questions WHERE question_id = ?').get(questionId) as
+    | (Omit<PendingQuestion, 'options'> & { options_json: string })
+    | undefined;
   if (!row) return undefined;
   const { options_json, ...rest } = row;
   return { ...rest, options: JSON.parse(options_json) };

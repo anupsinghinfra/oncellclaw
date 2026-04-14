@@ -29,9 +29,7 @@ describe('sanitizeTelegramLegacyMarkdown', () => {
   });
 
   it('strips formatting chars on odd delimiter count (unbalanced _)', () => {
-    expect(sanitizeTelegramLegacyMarkdown('file_name has _one italic_')).toBe(
-      'filename has one italic',
-    );
+    expect(sanitizeTelegramLegacyMarkdown('file_name has _one italic_')).toBe('filename has one italic');
   });
 
   it('strips brackets when unbalanced', () => {

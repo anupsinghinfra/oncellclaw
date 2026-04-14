@@ -299,7 +299,10 @@ registerChannelAdapter('whatsapp', {
 
     /** Download media from an inbound message, save to /workspace/attachments/. */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async function downloadInboundMedia(msg: WAMessage, normalized: any): Promise<Array<{ type: string; name: string; localPath: string }>> {
+    async function downloadInboundMedia(
+      msg: WAMessage,
+      normalized: any,
+    ): Promise<Array<{ type: string; name: string; localPath: string }>> {
       const mediaTypes: Array<{ key: string; type: string; ext: string }> = [
         { key: 'imageMessage', type: 'image', ext: '.jpg' },
         { key: 'videoMessage', type: 'video', ext: '.mp4' },

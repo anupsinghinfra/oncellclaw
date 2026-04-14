@@ -69,8 +69,7 @@ export interface ChatSdkBridgeConfig {
 
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
   const { adapter } = config;
-  const transformText = (t: string): string =>
-    config.transformOutboundText ? config.transformOutboundText(t) : t;
+  const transformText = (t: string): string => (config.transformOutboundText ? config.transformOutboundText(t) : t);
   let chat: Chat;
   let state: SqliteStateAdapter;
   let setupConfig: ChannelSetup;

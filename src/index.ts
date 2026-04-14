@@ -299,11 +299,16 @@ async function handleApprovalResponse(
           sender: 'system',
           senderId: 'system',
         }),
-        processAfter: new Date(Date.now() + 5000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ''),
+        processAfter: new Date(Date.now() + 5000)
+          .toISOString()
+          .replace('T', ' ')
+          .replace(/\.\d+Z$/, ''),
       });
       log.info('Container rebuild completed (bundled with install)', { approvalId: approval.approval_id });
     } catch (e) {
-      notify(`Packages added to config (${pkgs}) but rebuild failed: ${e instanceof Error ? e.message : String(e)}. Call request_rebuild to retry.`);
+      notify(
+        `Packages added to config (${pkgs}) but rebuild failed: ${e instanceof Error ? e.message : String(e)}. Call request_rebuild to retry.`,
+      );
       log.error('Bundled rebuild failed after install approval', { approvalId: approval.approval_id, err: e });
     }
   } else if (approval.action === 'request_rebuild') {
