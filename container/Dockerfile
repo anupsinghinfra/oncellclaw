@@ -35,14 +35,15 @@ ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
 
-# Install agent-browser and claude-code globally
-RUN pnpm install -g agent-browser @anthropic-ai/claude-code vercel
+# Allow agent-browser build scripts for global install, then install
+RUN echo "only-built-dependencies[]=agent-browser" > /root/.npmrc && \
+    pnpm install -g agent-browser @anthropic-ai/claude-code vercel
 
 # Create app directory
 WORKDIR /app
 
 # Copy package files first for better caching
-COPY agent-runner/package.json agent-runner/pnpm-lock.yaml* ./
+COPY agent-runner/package.json agent-runner/pnpm-lock.yaml agent-runner/pnpm-workspace.yaml ./
 
 # Install dependencies
 RUN pnpm install --frozen-lockfile
