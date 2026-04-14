@@ -14,7 +14,7 @@ Check if `src/channels/resend.ts` exists and the import is uncommented in `src/c
 ## Install
 
 ```bash
-npm install @resend/chat-sdk-adapter
+pnpm install @resend/chat-sdk-adapter
 ```
 
 Uncomment the Resend import in `src/channels/index.ts`:
@@ -26,7 +26,7 @@ import './resend.js';
 Build:
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

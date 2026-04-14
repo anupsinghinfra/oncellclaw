@@ -14,7 +14,7 @@ Check if `src/channels/imessage.ts` exists and the import is uncommented in `src
 ## Install
 
 ```bash
-npm install chat-adapter-imessage
+pnpm install chat-adapter-imessage
 ```
 
 Uncomment the iMessage import in `src/channels/index.ts`:
@@ -24,7 +24,7 @@ import './imessage.js';
 ```
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

@@ -40,8 +40,8 @@ git remote add telegram https://github.com/qwibitai/nanoclaw-telegram.git
 ```bash
 git fetch telegram main
 git merge telegram/main || {
-  git checkout --theirs package-lock.json
-  git add package-lock.json
+  git checkout --theirs pnpm-lock.yaml
+  git add pnpm-lock.yaml
   git merge --continue
 }
 ```
@@ -58,9 +58,9 @@ If the merge reports conflicts, resolve them by reading the conflicted files and
 ### Validate code changes
 
 ```bash
-npm install
-npm run build
-npx vitest run src/channels/telegram.test.ts
+pnpm install
+pnpm run build
+pnpm exec vitest run src/channels/telegram.test.ts
 ```
 
 All tests must pass (including the new Telegram tests) and build must be clean before proceeding.
@@ -114,7 +114,7 @@ Tell the user:
 ### Build and restart
 
 ```bash
-npm run build
+pnpm run build
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 # Linux: systemctl --user restart nanoclaw
 ```
@@ -133,18 +133,18 @@ Wait for the user to provide the chat ID (format: `tg:123456789` or `tg:-1001234
 
 ### Register the chat
 
-The chat ID, name, and folder name are needed. Use `npx tsx setup/index.ts --step register` with the appropriate flags.
+The chat ID, name, and folder name are needed. Use `pnpm exec tsx setup/index.ts --step register` with the appropriate flags.
 
 For a main chat (responds to all messages):
 
 ```bash
-npx tsx setup/index.ts --step register -- --jid "tg:<chat-id>" --name "<chat-name>" --folder "telegram_main" --trigger "@${ASSISTANT_NAME}" --channel telegram --no-trigger-required --is-main
+pnpm exec tsx setup/index.ts --step register -- --jid "tg:<chat-id>" --name "<chat-name>" --folder "telegram_main" --trigger "@${ASSISTANT_NAME}" --channel telegram --no-trigger-required --is-main
 ```
 
 For additional chats (trigger-only):
 
 ```bash
-npx tsx setup/index.ts --step register -- --jid "tg:<chat-id>" --name "<chat-name>" --folder "telegram_<group-name>" --trigger "@${ASSISTANT_NAME}" --channel telegram
+pnpm exec tsx setup/index.ts --step register -- --jid "tg:<chat-id>" --name "<chat-name>" --folder "telegram_<group-name>" --trigger "@${ASSISTANT_NAME}" --channel telegram
 ```
 
 ## Phase 5: Verify
@@ -189,16 +189,16 @@ If `/chatid` doesn't work:
 
 ## After Setup
 
-If running `npm run dev` while the service is active:
+If running `pnpm run dev` while the service is active:
 ```bash
 # macOS:
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-npm run dev
+pnpm run dev
 # When done testing:
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 # Linux:
 # systemctl --user stop nanoclaw
-# npm run dev
+# pnpm run dev
 # systemctl --user start nanoclaw
 ```
 
@@ -210,5 +210,5 @@ To remove Telegram integration:
 2. Remove `import './telegram.js'` from `src/channels/index.ts`
 3. Remove `TELEGRAM_BOT_TOKEN` from `.env`
 4. Remove Telegram registrations from SQLite: `sqlite3 store/messages.db "DELETE FROM registered_groups WHERE jid LIKE 'tg:%'"`
-5. Uninstall: `npm uninstall grammy`
-6. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `npm run build && systemctl --user restart nanoclaw` (Linux)
+5. Uninstall: `ppnpm uninstall grammy`
+6. Rebuild: `pnpm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `pnpm run build && systemctl --user restart nanoclaw` (Linux)

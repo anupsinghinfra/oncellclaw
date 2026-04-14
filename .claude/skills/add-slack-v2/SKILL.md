@@ -16,7 +16,7 @@ Check if `src/channels/slack.ts` exists and the import is uncommented in `src/ch
 ### Install the adapter package
 
 ```bash
-npm install @chat-adapter/slack
+pnpm install @chat-adapter/slack
 ```
 
 ### Enable the channel
@@ -30,7 +30,7 @@ import './slack.js';
 ### Build
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

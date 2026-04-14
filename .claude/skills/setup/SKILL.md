@@ -55,7 +55,7 @@ Run `bash setup.sh` and parse the status block.
 
 ## 2. Check Environment
 
-Run `npx tsx setup/index.ts --step environment` and parse the status block.
+Run `pnpm exec tsx setup/index.ts --step environment` and parse the status block.
 
 - If HAS_AUTH=true → WhatsApp is already configured, note for step 5
 - If HAS_REGISTERED_GROUPS=true → note existing config, offer to skip or reconfigure
@@ -73,9 +73,9 @@ If "Migrate now": invoke `/migrate-from-openclaw`, then return here and continue
 
 ## 2a. Timezone
 
-Run `npx tsx setup/index.ts --step timezone` and parse the status block.
+Run `pnpm exec tsx setup/index.ts --step timezone` and parse the status block.
 
-- If NEEDS_USER_INPUT=true → The system timezone could not be autodetected (e.g. POSIX-style TZ like `IST-2`). AskUserQuestion: "What is your timezone?" with common options (America/New_York, Europe/London, Asia/Jerusalem, Asia/Tokyo) and an "Other" escape. Then re-run: `npx tsx setup/index.ts --step timezone -- --tz <their-answer>`.
+- If NEEDS_USER_INPUT=true → The system timezone could not be autodetected (e.g. POSIX-style TZ like `IST-2`). AskUserQuestion: "What is your timezone?" with common options (America/New_York, Europe/London, Asia/Jerusalem, Asia/Tokyo) and an "Other" escape. Then re-run: `pnpm exec tsx setup/index.ts --step timezone -- --tz <their-answer>`.
 - If STATUS=success and RESOLVED_TZ is `UTC` or `Etc/UTC` → confirm with the user: "Your system timezone is UTC — is that correct, or are you on a remote server?" If wrong, ask for their actual timezone and re-run with `--tz`.
 - If STATUS=success → Timezone is configured. Note RESOLVED_TZ for reference.
 
@@ -91,7 +91,7 @@ Run `npx tsx setup/index.ts --step timezone` and parse the status block.
 
 ### 3b. Build and test
 
-Run `npx tsx setup/index.ts --step container -- --runtime docker` and parse the status block.
+Run `pnpm exec tsx setup/index.ts --step container -- --runtime docker` and parse the status block.
 
 **If BUILD_OK=false:** Read `logs/setup.log` tail for the build error.
 - Cache issue (stale layers): `docker builder prune -f`. Retry.
@@ -220,7 +220,7 @@ The skill will:
 **After the channel skill completes**, install dependencies and rebuild — channel merges may introduce new packages:
 
 ```bash
-npm install && npm run build
+pnpm install && pnpm run build
 ```
 
 If the build fails, read the error output and fix it (usually a missing dependency). Then continue to step 5a.
@@ -230,7 +230,7 @@ If the build fails, read the error output and fix it (usually a missing dependen
 Set empty mount allowlist (agents only access their own workspace). Users can configure mounts later with `/manage-mounts`.
 
 ```bash
-npx tsx setup/index.ts --step mounts -- --empty
+pnpm exec tsx setup/index.ts --step mounts -- --empty
 ```
 
 ## 7. Start Service
@@ -239,7 +239,7 @@ If service already running: unload first.
 - macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
 - Linux: `systemctl --user stop nanoclaw` (or `systemctl stop nanoclaw` if root)
 
-Run `npx tsx setup/index.ts --step service` and parse the status block.
+Run `pnpm exec tsx setup/index.ts --step service` and parse the status block.
 
 **If FALLBACK=wsl_no_systemd:** WSL without systemd detected. Tell user they can either enable systemd in WSL (`echo -e "[boot]\nsystemd=true" | sudo tee /etc/wsl.conf` then restart WSL) or use the generated `start-nanoclaw.sh` wrapper.
 
@@ -287,10 +287,10 @@ If yes: invoke `/add-vercel`.
 
 ## 8. Verify
 
-Run `npx tsx setup/index.ts --step verify` and parse the status block.
+Run `pnpm exec tsx setup/index.ts --step verify` and parse the status block.
 
 **If STATUS=failed, fix each:**
-- SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
+- SERVICE=stopped → `pnpm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
 - SERVICE=not_found → re-run step 7
 - CREDENTIALS=missing → re-run step 4 (check `onecli secrets list`)
 - CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
@@ -303,7 +303,7 @@ Tell user to test: send a message in their registered chat. Show: `tail -f logs/
 
 **Container agent fails ("Claude Code process exited with code 1"):** Ensure Docker is running — `open -a Docker` (macOS) or `sudo systemctl start docker` (Linux). Check container logs in `groups/main/logs/container-*.log`.
 
-**No response to messages:** Check trigger pattern. Main channel doesn't need prefix. Check DB: `npx tsx setup/index.ts --step verify`. Check `logs/nanoclaw.log`.
+**No response to messages:** Check trigger pattern. Main channel doesn't need prefix. Check DB: `pnpm exec tsx setup/index.ts --step verify`. Check `logs/nanoclaw.log`.
 
 **Channel not connecting:** Verify the channel's credentials are set in `.env`. Channels auto-enable when their credentials are present. For WhatsApp: check `store/auth/creds.json` exists. For token-based channels: check token values in `.env`. Restart the service after any `.env` change.
 

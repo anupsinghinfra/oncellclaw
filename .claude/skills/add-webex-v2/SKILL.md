@@ -14,7 +14,7 @@ Check if `src/channels/webex.ts` exists and the import is uncommented in `src/ch
 ## Install
 
 ```bash
-npm install @bitbasti/chat-adapter-webex
+pnpm install @bitbasti/chat-adapter-webex
 ```
 
 Uncomment the Webex import in `src/channels/index.ts`:
@@ -24,7 +24,7 @@ import './webex.js';
 ```
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

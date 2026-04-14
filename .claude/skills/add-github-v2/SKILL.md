@@ -14,7 +14,7 @@ Check if `src/channels/github.ts` exists and the import is uncommented in `src/c
 ## Install
 
 ```bash
-npm install @chat-adapter/github
+pnpm install @chat-adapter/github
 ```
 
 Uncomment the GitHub import in `src/channels/index.ts`:
@@ -24,7 +24,7 @@ import './github.js';
 ```
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

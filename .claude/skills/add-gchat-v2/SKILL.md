@@ -14,7 +14,7 @@ Check if `src/channels/gchat.ts` exists and the import is uncommented in `src/ch
 ## Install
 
 ```bash
-npm install @chat-adapter/gchat
+pnpm install @chat-adapter/gchat
 ```
 
 Uncomment the Google Chat import in `src/channels/index.ts`:
@@ -24,7 +24,7 @@ import './gchat.js';
 ```
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

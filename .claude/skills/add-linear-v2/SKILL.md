@@ -14,7 +14,7 @@ Check if `src/channels/linear.ts` exists and the import is uncommented in `src/c
 ## Install
 
 ```bash
-npm install @chat-adapter/linear
+pnpm install @chat-adapter/linear
 ```
 
 Uncomment the Linear import in `src/channels/index.ts`:
@@ -24,7 +24,7 @@ import './linear.js';
 ```
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

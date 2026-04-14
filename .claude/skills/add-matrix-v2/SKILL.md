@@ -14,7 +14,7 @@ Check if `src/channels/matrix.ts` exists and the import is uncommented in `src/c
 ## Install
 
 ```bash
-npm install @beeper/chat-adapter-matrix
+pnpm install @beeper/chat-adapter-matrix
 ```
 
 Uncomment the Matrix import in `src/channels/index.ts`:
@@ -24,7 +24,7 @@ import './matrix.js';
 ```
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials
