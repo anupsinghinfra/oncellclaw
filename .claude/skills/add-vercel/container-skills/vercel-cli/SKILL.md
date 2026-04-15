@@ -98,6 +98,34 @@ echo "value" | vercel env add VAR_NAME production --token placeholder
 | `ENOTFOUND api.vercel.com` | Network issue. Check proxy connectivity |
 | Auth error after `vercel whoami` | Credential may be expired. Re-run `trigger_credential_collection` |
 
+## Building Websites — Delegate to Frontend Engineer
+
+When asked to **build, create, or redesign** a website or web app, do NOT build it yourself. Spin up a dedicated frontend-engineer agent that has full context for the job:
+
+```
+create_agent({
+  name: "Frontend Engineer",
+  instructions: "You are a dedicated frontend engineer. Your frontend-engineer skill has your full workflow. Build what is requested, test it visually with agent-browser, deploy to Vercel, and send back the live URL + screenshots to your parent agent when done."
+})
+```
+
+Then hand off the task:
+
+```
+send_message(to: "Frontend Engineer", text: "<what to build, design requirements, any assets or content>")
+```
+
+The frontend agent will:
+1. Build the site following pro frontend standards
+2. Test visually with `agent-browser` (screenshots as proof)
+3. Deploy to Vercel using `vercel deploy --yes --prod --token placeholder`
+4. Verify the production URL in browser
+5. Send back the live URL + screenshots
+
+**When to delegate vs do it yourself:**
+- **Delegate**: building new sites, redesigns, multi-page apps, anything that needs visual testing
+- **Do yourself**: simple `vercel deploy` of an existing project, checking deployment status, managing domains/env vars
+
 ## Best Practices
 
 - Run `npm run build` locally before deploying to catch build errors early
