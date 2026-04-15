@@ -2,12 +2,7 @@ import path from 'path';
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  isHostLevelSwap,
-  parseSwapSummary,
-  requiresFullHostRebuild,
-  targetRepoRelPath,
-} from './swap.js';
+import { isHostLevelSwap, parseSwapSummary, requiresFullHostRebuild, targetRepoRelPath } from './swap.js';
 import type { PendingSwap } from '../types.js';
 
 function makeSwap(overrides: Partial<PendingSwap> = {}): PendingSwap {
@@ -99,14 +94,10 @@ describe('requiresFullHostRebuild', () => {
     expect(requiresFullHostRebuild([abs('groups/main/CLAUDE.md')])).toBe(false);
   });
   it('does not flag per-group runner dir changes', () => {
-    expect(
-      requiresFullHostRebuild([abs('data/v2-sessions/ag-1/agent-runner-src/poll-loop.ts')]),
-    ).toBe(false);
+    expect(requiresFullHostRebuild([abs('data/v2-sessions/ag-1/agent-runner-src/poll-loop.ts')])).toBe(false);
   });
   it('returns true if any path requires rebuild even if others do not', () => {
-    expect(
-      requiresFullHostRebuild([abs('groups/main/CLAUDE.md'), abs('src/delivery.ts')]),
-    ).toBe(true);
+    expect(requiresFullHostRebuild([abs('groups/main/CLAUDE.md'), abs('src/delivery.ts')])).toBe(true);
   });
 });
 
@@ -118,9 +109,9 @@ describe('targetRepoRelPath', () => {
   });
 
   it('maps nested runner paths correctly', () => {
-    expect(
-      targetRepoRelPath('container/agent-runner/src/mcp-tools/agents.ts', 'ag-abc'),
-    ).toBe('data/v2-sessions/ag-abc/agent-runner-src/mcp-tools/agents.ts');
+    expect(targetRepoRelPath('container/agent-runner/src/mcp-tools/agents.ts', 'ag-abc')).toBe(
+      'data/v2-sessions/ag-abc/agent-runner-src/mcp-tools/agents.ts',
+    );
   });
 
   it('maps skills paths to the per-group skills dir', () => {
@@ -136,8 +127,8 @@ describe('targetRepoRelPath', () => {
   });
 
   it('handles Windows-style separators by normalizing', () => {
-    expect(
-      targetRepoRelPath('container\\agent-runner\\src\\index.ts', 'ag-abc'),
-    ).toBe('data/v2-sessions/ag-abc/agent-runner-src/index.ts');
+    expect(targetRepoRelPath('container\\agent-runner\\src\\index.ts', 'ag-abc')).toBe(
+      'data/v2-sessions/ag-abc/agent-runner-src/index.ts',
+    );
   });
 });

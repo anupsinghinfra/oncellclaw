@@ -19,10 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import {
-  getAwaitingConfirmationSwaps,
-  getPendingSwap,
-} from '../db/pending-swaps.js';
+import { getAwaitingConfirmationSwaps, getPendingSwap } from '../db/pending-swaps.js';
 import { log } from '../log.js';
 import { resumeDeadman } from './deadman.js';
 import { removeDevWorktree } from './worktree.js';
@@ -59,10 +56,7 @@ function cleanupOrphanWorktrees(): void {
 
     // Orphaned if: no row, or row in a terminal state.
     const terminal =
-      !swap ||
-      swap.status === 'finalized' ||
-      swap.status === 'rolled_back' ||
-      swap.status === 'rejected';
+      !swap || swap.status === 'finalized' || swap.status === 'rolled_back' || swap.status === 'rejected';
 
     if (terminal) {
       log.info('Cleaning up orphan worktree', { requestId, status: swap?.status ?? 'missing' });

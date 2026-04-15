@@ -57,9 +57,7 @@ export function setPromoteDelivery(adapter: PromoteDelivery): void {
 export function swapTouchedRunnerOrSkills(swap: PendingSwap): boolean {
   const summary = parseSwapSummary(swap);
   return summary.classifiedFiles.some(
-    (f) =>
-      f.path.startsWith('container/agent-runner/src/') ||
-      f.path.startsWith('container/skills/'),
+    (f) => f.path.startsWith('container/agent-runner/src/') || f.path.startsWith('container/skills/'),
   );
 }
 
@@ -77,9 +75,7 @@ export async function maybeSendPromotePrompt(swap: PendingSwap): Promise<void> {
   }
 
   const isHostLevel = swap.classification === 'host' || swap.classification === 'combined';
-  const approvers = isHostLevel
-    ? getOwners().map((r) => r.user_id)
-    : pickApprover(swap.originating_group_id);
+  const approvers = isHostLevel ? getOwners().map((r) => r.user_id) : pickApprover(swap.originating_group_id);
 
   if (approvers.length === 0) {
     log.info('Skipping promote prompt: no approvers configured', { requestId: swap.request_id });
@@ -187,9 +183,7 @@ async function applyToTemplate(swapRequestId: string): Promise<void> {
 
   const summary = parseSwapSummary(swap);
   const runnerOrSkills = summary.classifiedFiles.filter(
-    (f) =>
-      f.path.startsWith('container/agent-runner/src/') ||
-      f.path.startsWith('container/skills/'),
+    (f) => f.path.startsWith('container/agent-runner/src/') || f.path.startsWith('container/skills/'),
   );
   if (runnerOrSkills.length === 0) return;
 

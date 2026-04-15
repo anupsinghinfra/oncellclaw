@@ -22,29 +22,19 @@ describe('classifyPath', () => {
     const r = classifyPath('container/agent-runner/src/index.ts', OPTS);
     expect(r).not.toBeNull();
     expect(r!.classification).toBe('group');
-    expect(r!.target).toBe(
-      path.join('/repo/data/v2-sessions/grp-abc/agent-runner-src/index.ts'),
-    );
+    expect(r!.target).toBe(path.join('/repo/data/v2-sessions/grp-abc/agent-runner-src/index.ts'));
   });
 
   it('routes nested runner edits correctly', () => {
     const r = classifyPath('container/agent-runner/src/mcp-tools/agents.ts', OPTS);
     expect(r!.classification).toBe('group');
-    expect(r!.target).toBe(
-      path.join(
-        '/repo/data/v2-sessions/grp-abc/agent-runner-src/mcp-tools/agents.ts',
-      ),
-    );
+    expect(r!.target).toBe(path.join('/repo/data/v2-sessions/grp-abc/agent-runner-src/mcp-tools/agents.ts'));
   });
 
   it('routes skills edits to the per-group private skills dir', () => {
     const r = classifyPath('container/skills/browser/SKILL.md', OPTS);
     expect(r!.classification).toBe('group');
-    expect(r!.target).toBe(
-      path.join(
-        '/repo/data/v2-sessions/grp-abc/.claude-shared/skills/browser/SKILL.md',
-      ),
-    );
+    expect(r!.target).toBe(path.join('/repo/data/v2-sessions/grp-abc/.claude-shared/skills/browser/SKILL.md'));
   });
 
   it('routes originating group folder edits to their repo path', () => {
@@ -131,10 +121,7 @@ describe('isMigrationPath', () => {
 
 describe('classifyDiff — overall classification', () => {
   it('is "group" when all changes land in originating group targets', () => {
-    const d = classifyDiff(
-      ['groups/main/CLAUDE.md', 'container/agent-runner/src/index.ts'],
-      OPTS,
-    );
+    const d = classifyDiff(['groups/main/CLAUDE.md', 'container/agent-runner/src/index.ts'], OPTS);
     expect(d.overall).toBe('group');
     expect(d.hostPaths).toHaveLength(0);
     expect(d.runnerOrSkillsPaths).toHaveLength(1);
@@ -148,28 +135,19 @@ describe('classifyDiff — overall classification', () => {
   });
 
   it('is "combined" when host AND runner/skills are both changed', () => {
-    const d = classifyDiff(
-      ['src/delivery.ts', 'container/agent-runner/src/poll-loop.ts'],
-      OPTS,
-    );
+    const d = classifyDiff(['src/delivery.ts', 'container/agent-runner/src/poll-loop.ts'], OPTS);
     expect(d.overall).toBe('combined');
     expect(d.hostPaths).toHaveLength(1);
     expect(d.runnerOrSkillsPaths).toHaveLength(1);
   });
 
   it('is "combined" for host + skills change', () => {
-    const d = classifyDiff(
-      ['Dockerfile', 'container/skills/browser/SKILL.md'],
-      OPTS,
-    );
+    const d = classifyDiff(['Dockerfile', 'container/skills/browser/SKILL.md'], OPTS);
     expect(d.overall).toBe('combined');
   });
 
   it('flags migrations regardless of other paths', () => {
-    const d = classifyDiff(
-      ['src/db/migrations/007-new.ts', 'src/delivery.ts'],
-      OPTS,
-    );
+    const d = classifyDiff(['src/db/migrations/007-new.ts', 'src/delivery.ts'], OPTS);
     expect(d.touchesMigrations).toBe(true);
     expect(d.overall).toBe('host');
   });
@@ -180,9 +158,7 @@ describe('classifyDiff — overall classification', () => {
   });
 
   it('throws on excluded paths in the diff', () => {
-    expect(() => classifyDiff(['.env'], OPTS)).toThrow(
-      /unreachable or excluded path/,
-    );
+    expect(() => classifyDiff(['.env'], OPTS)).toThrow(/unreachable or excluded path/);
   });
 
   it('throws on data/ paths in the diff', () => {
@@ -190,13 +166,7 @@ describe('classifyDiff — overall classification', () => {
   });
 
   it('preserves original paths in output files', () => {
-    const d = classifyDiff(
-      ['groups/main/CLAUDE.md', 'src/delivery.ts'],
-      OPTS,
-    );
-    expect(d.files.map((f) => f.path)).toEqual([
-      'groups/main/CLAUDE.md',
-      'src/delivery.ts',
-    ]);
+    const d = classifyDiff(['groups/main/CLAUDE.md', 'src/delivery.ts'], OPTS);
+    expect(d.files.map((f) => f.path)).toEqual(['groups/main/CLAUDE.md', 'src/delivery.ts']);
   });
 });

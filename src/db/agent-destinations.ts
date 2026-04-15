@@ -105,9 +105,7 @@ export function deleteDestination(agentGroupId: string, localName: string): void
  */
 export function deleteAllDestinationsTouching(agentGroupId: string): void {
   getDb()
-    .prepare(
-      'DELETE FROM agent_destinations WHERE agent_group_id = ? OR (target_type = ? AND target_id = ?)',
-    )
+    .prepare('DELETE FROM agent_destinations WHERE agent_group_id = ? OR (target_type = ? AND target_id = ?)')
     .run(agentGroupId, 'agent', agentGroupId);
 }
 

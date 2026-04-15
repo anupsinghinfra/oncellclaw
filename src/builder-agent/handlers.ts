@@ -272,10 +272,7 @@ export async function handleCreateDevAgent(
     } catch {
       /* best effort */
     }
-    notifyAgent(
-      session,
-      `create_dev_agent failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    notifyAgent(session, `create_dev_agent failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
 
@@ -355,10 +352,7 @@ export async function handleRequestSwap(
       originatingGroupFolder: getAgentGroup(pending.originating_group_id)?.folder ?? '',
     });
   } catch (err) {
-    notifyAgent(
-      session,
-      `Code change submission failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    notifyAgent(session, `Code change submission failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
 

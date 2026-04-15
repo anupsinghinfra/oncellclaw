@@ -18,9 +18,7 @@ export function createPendingSwap(swap: PendingSwap): void {
 }
 
 export function getPendingSwap(requestId: string): PendingSwap | undefined {
-  return getDb().prepare('SELECT * FROM pending_swaps WHERE request_id = ?').get(requestId) as
-    | PendingSwap
-    | undefined;
+  return getDb().prepare('SELECT * FROM pending_swaps WHERE request_id = ?').get(requestId) as PendingSwap | undefined;
 }
 
 /**
@@ -60,9 +58,7 @@ export function getSwapForDevAgent(devAgentId: string): PendingSwap | undefined 
  * unexpected for group-level crashes).
  */
 export function getAwaitingConfirmationSwaps(): PendingSwap[] {
-  return getDb()
-    .prepare(`SELECT * FROM pending_swaps WHERE status = 'awaiting_confirmation'`)
-    .all() as PendingSwap[];
+  return getDb().prepare(`SELECT * FROM pending_swaps WHERE status = 'awaiting_confirmation'`).all() as PendingSwap[];
 }
 
 /** All terminal-status swaps — used by the startup worktree-orphan sweep. */
@@ -76,11 +72,7 @@ export function updatePendingSwapStatus(requestId: string, status: SwapStatus): 
   getDb().prepare('UPDATE pending_swaps SET status = ? WHERE request_id = ?').run(status, requestId);
 }
 
-export function setSwapPreSwapState(
-  requestId: string,
-  preSwapSha: string,
-  dbSnapshotPath: string,
-): void {
+export function setSwapPreSwapState(requestId: string, preSwapSha: string, dbSnapshotPath: string): void {
   getDb()
     .prepare(
       `UPDATE pending_swaps
@@ -109,17 +101,11 @@ export function startSwapDeadman(
 }
 
 export function extendSwapDeadman(requestId: string, expiresAt: string): void {
-  getDb().prepare('UPDATE pending_swaps SET deadman_expires_at = ? WHERE request_id = ?').run(
-    expiresAt,
-    requestId,
-  );
+  getDb().prepare('UPDATE pending_swaps SET deadman_expires_at = ? WHERE request_id = ?').run(expiresAt, requestId);
 }
 
 export function setSwapHandshakeState(requestId: string, state: SwapHandshakeState): void {
-  getDb().prepare('UPDATE pending_swaps SET handshake_state = ? WHERE request_id = ?').run(
-    state,
-    requestId,
-  );
+  getDb().prepare('UPDATE pending_swaps SET handshake_state = ? WHERE request_id = ?').run(state, requestId);
 }
 
 export function deletePendingSwap(requestId: string): void {

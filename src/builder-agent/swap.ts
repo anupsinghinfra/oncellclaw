@@ -18,11 +18,7 @@ import path from 'path';
 import { DATA_DIR } from '../config.js';
 import { getAgentGroup } from '../db/agent-groups.js';
 import { getDb } from '../db/connection.js';
-import {
-  getPendingSwap,
-  resetSwapForRetry,
-  setSwapPreSwapState,
-} from '../db/pending-swaps.js';
+import { getPendingSwap, resetSwapForRetry, setSwapPreSwapState } from '../db/pending-swaps.js';
 import { log } from '../log.js';
 import type { PendingSwap } from '../types.js';
 import { classifyDiff, type ClassifiedFile } from './classifier.js';
@@ -132,10 +128,7 @@ export function applySwapFiles(requestId: string): string[] {
   // Enumerate every path that changed in the reviewed commit relative
   // to main. Pairs each path with its A/M/D status. --no-renames keeps
   // the parsing simple (a rename shows up as D+A).
-  const nameStatus = git(
-    ['diff', '--name-status', '--no-renames', `main..${swap.commit_sha}`],
-    worktreePath,
-  );
+  const nameStatus = git(['diff', '--name-status', '--no-renames', `main..${swap.commit_sha}`], worktreePath);
 
   const changes: Array<{ status: 'A' | 'M' | 'D'; path: string }> = [];
   for (const line of nameStatus.split('\n')) {
@@ -158,9 +151,7 @@ export function applySwapFiles(requestId: string): string[] {
     },
   );
 
-  const statusByPath = new Map<string, 'A' | 'M' | 'D'>(
-    changes.map((c) => [c.path, c.status]),
-  );
+  const statusByPath = new Map<string, 'A' | 'M' | 'D'>(changes.map((c) => [c.path, c.status]));
 
   const touchedAbs: string[] = [];
   for (const file of classified.files) {
@@ -182,9 +173,7 @@ export function applySwapFiles(requestId: string): string[] {
         });
       } catch (err) {
         throw new Error(
-          `git show ${swap.commit_sha}:${file.path} failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          `git show ${swap.commit_sha}:${file.path} failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
       const dir = path.dirname(dst);
@@ -269,10 +258,7 @@ export function rollbackSwapFiles(swap: PendingSwap): void {
   // Record a forward-only revert commit so main's history shows what reverted.
   try {
     git(['add', '--', ...relPaths], PROJECT_ROOT);
-    git(
-      ['commit', '-m', `rollback ${swap.request_id}: deadman timeout`, '--', ...relPaths],
-      PROJECT_ROOT,
-    );
+    git(['commit', '-m', `rollback ${swap.request_id}: deadman timeout`, '--', ...relPaths], PROJECT_ROOT);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!(msg.includes('nothing to commit') || msg.includes('no changes added'))) {
@@ -291,10 +277,7 @@ export function rollbackSwapFiles(swap: PendingSwap): void {
  *
  * Exported so tests can lock the mapping against the classifier's rules.
  */
-export function targetRepoRelPath(
-  worktreeRelPath: string,
-  originatingGroupId: string,
-): string {
+export function targetRepoRelPath(worktreeRelPath: string, originatingGroupId: string): string {
   const norm = worktreeRelPath.replace(/\\/g, '/');
   if (norm.startsWith('container/agent-runner/src/')) {
     const rel = norm.slice('container/agent-runner/src/'.length);
@@ -302,14 +285,7 @@ export function targetRepoRelPath(
   }
   if (norm.startsWith('container/skills/')) {
     const rel = norm.slice('container/skills/'.length);
-    return path.posix.join(
-      'data',
-      'v2-sessions',
-      originatingGroupId,
-      '.claude-shared',
-      'skills',
-      rel,
-    );
+    return path.posix.join('data', 'v2-sessions', originatingGroupId, '.claude-shared', 'skills', rel);
   }
   return norm;
 }

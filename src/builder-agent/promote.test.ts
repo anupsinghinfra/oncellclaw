@@ -38,9 +38,7 @@ describe('swapTouchedRunnerOrSkills', () => {
   });
 
   it('is true when container/agent-runner/src is touched', () => {
-    const swap = makeSwap([
-      { path: 'container/agent-runner/src/poll-loop.ts', classification: 'group' },
-    ]);
+    const swap = makeSwap([{ path: 'container/agent-runner/src/poll-loop.ts', classification: 'group' }]);
     expect(swapTouchedRunnerOrSkills(swap)).toBe(true);
   });
 
@@ -76,16 +74,12 @@ describe('sourceForTemplate', () => {
 
   it('maps nested runner paths correctly', () => {
     const src = sourceForTemplate('container/agent-runner/src/mcp-tools/agents.ts', 'ag-abc');
-    expect(src).toBe(
-      path.join(DATA_DIR, 'v2-sessions', 'ag-abc', 'agent-runner-src', 'mcp-tools', 'agents.ts'),
-    );
+    expect(src).toBe(path.join(DATA_DIR, 'v2-sessions', 'ag-abc', 'agent-runner-src', 'mcp-tools', 'agents.ts'));
   });
 
   it('maps skills template paths to the per-group skills dir', () => {
     const src = sourceForTemplate('container/skills/browser/SKILL.md', 'ag-abc');
-    expect(src).toBe(
-      path.join(DATA_DIR, 'v2-sessions', 'ag-abc', '.claude-shared', 'skills', 'browser', 'SKILL.md'),
-    );
+    expect(src).toBe(path.join(DATA_DIR, 'v2-sessions', 'ag-abc', '.claude-shared', 'skills', 'browser', 'SKILL.md'));
   });
 });
 

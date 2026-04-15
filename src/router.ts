@@ -155,13 +155,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   // as soon as the agent goes idle — not when the container eventually
   // exits. Container-runner also calls stopTypingRefresh on exit as a
   // fast-path cleanup.
-  startTypingRefresh(
-    session.id,
-    session.agent_group_id,
-    event.channelType,
-    event.platformId,
-    event.threadId,
-  );
+  startTypingRefresh(session.id, session.agent_group_id, event.channelType, event.platformId, event.threadId);
 
   // 8. Wake container
   const freshSession = getSession(session.id);
@@ -206,9 +200,10 @@ function extractAndUpsertUser(event: InboundEvent): string | null {
   // `senderId` or `sender` directly at the top level. Check all three.
   const senderIdField = typeof content.senderId === 'string' ? content.senderId : undefined;
   const senderField = typeof content.sender === 'string' ? content.sender : undefined;
-  const author = typeof content.author === 'object' && content.author !== null
-    ? (content.author as Record<string, unknown>)
-    : undefined;
+  const author =
+    typeof content.author === 'object' && content.author !== null
+      ? (content.author as Record<string, unknown>)
+      : undefined;
   const authorUserId = typeof author?.userId === 'string' ? (author.userId as string) : undefined;
   const senderName =
     (typeof content.senderName === 'string' ? content.senderName : undefined) ??

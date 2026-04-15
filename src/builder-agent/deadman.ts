@@ -34,12 +34,7 @@ import { log } from '../log.js';
 import type { PendingSwap } from '../types.js';
 import { maybeSendPromotePrompt } from './promote.js';
 import { removeDevWorktree } from './worktree.js';
-import {
-  isHostLevelSwap,
-  parseSwapSummary,
-  restoreDbFromSnapshot,
-  rollbackSwapFiles,
-} from './swap.js';
+import { isHostLevelSwap, parseSwapSummary, restoreDbFromSnapshot, rollbackSwapFiles } from './swap.js';
 
 const DEADMAN_INITIAL_MS = 2 * 60 * 1000;
 const DEADMAN_HARD_CAP_MS = 10 * 60 * 1000;

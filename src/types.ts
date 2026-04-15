@@ -189,12 +189,7 @@ export type SwapClassification = 'group' | 'host' | 'combined';
  *   pending_approval → awaiting_confirmation → (finalized | rolled_back | rejected)
  * `rejected` is also reachable directly from pending_approval.
  */
-export type SwapStatus =
-  | 'pending_approval'
-  | 'awaiting_confirmation'
-  | 'finalized'
-  | 'rolled_back'
-  | 'rejected';
+export type SwapStatus = 'pending_approval' | 'awaiting_confirmation' | 'finalized' | 'rolled_back' | 'rejected';
 
 /**
  * Deadman handshake state — only meaningful while status = awaiting_confirmation.

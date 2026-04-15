@@ -95,10 +95,7 @@ export function writeContainerConfig(folder: string, config: ContainerConfig): v
  * result. Convenient for append-style changes like `install_packages` and
  * `add_mcp_server` handlers.
  */
-export function updateContainerConfig(
-  folder: string,
-  mutate: (config: ContainerConfig) => void,
-): ContainerConfig {
+export function updateContainerConfig(folder: string, mutate: (config: ContainerConfig) => void): ContainerConfig {
   const config = readContainerConfig(folder);
   mutate(config);
   writeContainerConfig(folder, config);

@@ -98,13 +98,7 @@ export function classifyPath(
     const rel = norm.slice(runnerPrefix.length);
     return {
       classification: 'group',
-      target: path.join(
-        opts.dataDir,
-        'v2-sessions',
-        opts.originatingGroupId,
-        'agent-runner-src',
-        rel,
-      ),
+      target: path.join(opts.dataDir, 'v2-sessions', opts.originatingGroupId, 'agent-runner-src', rel),
     };
   }
 
@@ -114,14 +108,7 @@ export function classifyPath(
     const rel = norm.slice(skillsPrefix.length);
     return {
       classification: 'group',
-      target: path.join(
-        opts.dataDir,
-        'v2-sessions',
-        opts.originatingGroupId,
-        '.claude-shared',
-        'skills',
-        rel,
-      ),
+      target: path.join(opts.dataDir, 'v2-sessions', opts.originatingGroupId, '.claude-shared', 'skills', rel),
     };
   }
 
@@ -146,10 +133,7 @@ export function classifyPath(
 /** True iff a classified file's worktree path is under runner or skills template. */
 export function isRunnerOrSkillsPath(relPath: string): boolean {
   const norm = relPath.replace(/\\/g, '/');
-  return (
-    norm.startsWith('container/agent-runner/src/') ||
-    norm.startsWith('container/skills/')
-  );
+  return norm.startsWith('container/agent-runner/src/') || norm.startsWith('container/skills/');
 }
 
 /** True iff a changed path is a schema migration. */
@@ -168,9 +152,7 @@ export function classifyDiff(changedPaths: string[], opts: ClassifyOptions): Cla
   for (const p of changedPaths) {
     const result = classifyPath(p, opts);
     if (!result) {
-      throw new Error(
-        `builder-agent: diff contains unreachable or excluded path: ${p}`,
-      );
+      throw new Error(`builder-agent: diff contains unreachable or excluded path: ${p}`);
     }
     files.push({
       path: p,

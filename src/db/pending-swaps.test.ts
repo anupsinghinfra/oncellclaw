@@ -189,7 +189,9 @@ describe('pending-swaps bulk lookups', () => {
     createPendingSwap(makeSwap({ request_id: 'req-t3', status: 'rejected' }));
     createPendingSwap(makeSwap({ request_id: 'req-active', status: 'awaiting_confirmation' }));
 
-    const terminal = getTerminalSwaps().map((s) => s.request_id).sort();
+    const terminal = getTerminalSwaps()
+      .map((s) => s.request_id)
+      .sort();
     expect(terminal).toEqual(['req-t1', 'req-t2', 'req-t3']);
   });
 });

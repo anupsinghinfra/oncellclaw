@@ -71,9 +71,7 @@ export function assertGitCleanEnoughForSwap(): void {
   const rebaseDir = path.join(gitDir, 'rebase-merge');
   const rebaseApply = path.join(gitDir, 'rebase-apply');
   if (fs.existsSync(rebaseDir) || fs.existsSync(rebaseApply)) {
-    throw new Error(
-      'cannot start swap: git repo is mid-rebase. resolve it in the terminal first.',
-    );
+    throw new Error('cannot start swap: git repo is mid-rebase. resolve it in the terminal first.');
   }
 }
 
@@ -86,10 +84,7 @@ export function assertGitCleanEnoughForSwap(): void {
  * or crash), it is removed first via `git worktree remove --force` so the
  * creation is clean.
  */
-export function createDevWorktree(
-  requestId: string,
-  originatingGroupId: string,
-): string {
+export function createDevWorktree(requestId: string, originatingGroupId: string): string {
   assertGitCleanEnoughForSwap();
 
   if (!fs.existsSync(WORKTREES_DIR)) {
@@ -128,14 +123,8 @@ export function createDevWorktree(
   // what the originating group is actually running, not the pristine
   // template.
   const sessDir = path.join(DATA_DIR, 'v2-sessions', originatingGroupId);
-  overlayDir(
-    path.join(sessDir, 'agent-runner-src'),
-    path.join(worktreePath, 'container', 'agent-runner', 'src'),
-  );
-  overlayDir(
-    path.join(sessDir, '.claude-shared', 'skills'),
-    path.join(worktreePath, 'container', 'skills'),
-  );
+  overlayDir(path.join(sessDir, 'agent-runner-src'), path.join(worktreePath, 'container', 'agent-runner', 'src'));
+  overlayDir(path.join(sessDir, '.claude-shared', 'skills'), path.join(worktreePath, 'container', 'skills'));
 
   // Shadow the .env with an empty placeholder so the dev agent can't read
   // credentials from a committed-but-gitignored file if one snuck into the

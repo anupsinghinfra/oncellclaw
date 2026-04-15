@@ -68,9 +68,7 @@ export async function sendSwapApprovalCard(
 
   // Host-level swaps target the owner only. Group-level uses the normal
   // approver ladder (scoped admin → global admin → owner).
-  const approvers = isHostLevel
-    ? getOwners().map((r) => r.user_id)
-    : pickApprover(swap.originating_group_id);
+  const approvers = isHostLevel ? getOwners().map((r) => r.user_id) : pickApprover(swap.originating_group_id);
 
   if (approvers.length === 0) {
     notifyDevAgent(
@@ -85,7 +83,8 @@ export async function sendSwapApprovalCard(
   // Origin channel kind drives tie-break preference (same as existing
   // install_packages / request_rebuild approvals).
   const originChannelType = originatingSession.messaging_group_id
-    ? (await import('../db/messaging-groups.js')).getMessagingGroup(originatingSession.messaging_group_id)?.channel_type ?? ''
+    ? ((await import('../db/messaging-groups.js')).getMessagingGroup(originatingSession.messaging_group_id)
+        ?.channel_type ?? '')
     : '';
 
   const target = await pickApprovalDelivery(approvers, originChannelType);
@@ -230,9 +229,7 @@ async function sendSwapReviewMessages(
   };
 
   // 1. Intro message
-  const headerPrefix = isHostLevel
-    ? '⚠️ ⚠️ ⚠️  **HOST-LEVEL CODE CHANGE PROPOSED**'
-    : '🔧 **Code change proposed**';
+  const headerPrefix = isHostLevel ? '⚠️ ⚠️ ⚠️  **HOST-LEVEL CODE CHANGE PROPOSED**' : '🔧 **Code change proposed**';
   const intro =
     `${headerPrefix} by agent "${originatingName}".\n\n` +
     `**What it does:** ${summary.overallSummary || '(no summary)'}\n\n` +

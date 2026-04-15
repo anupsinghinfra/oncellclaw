@@ -506,7 +506,9 @@ async function handleSwapRequestApproval(
     await startDeadman(swapRequestId);
 
     if (isHostLevelSwap(swap)) {
-      notifyDev('Code change applied and committed. Triggering host restart so the new code takes effect. Awaiting user confirmation after restart.');
+      notifyDev(
+        'Code change applied and committed. Triggering host restart so the new code takes effect. Awaiting user confirmation after restart.',
+      );
       log.warn('Host-level swap triggering process exit for supervisor respawn', {
         requestId: swapRequestId,
       });
@@ -520,7 +522,9 @@ async function handleSwapRequestApproval(
       if (originatingSession) {
         killContainer(originatingSession.id, 'swap applied');
       }
-      notifyDev('Code change applied and committed. The originating agent will restart on its next message. Awaiting user confirmation.');
+      notifyDev(
+        'Code change applied and committed. The originating agent will restart on its next message. Awaiting user confirmation.',
+      );
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
