@@ -85,9 +85,35 @@ function readInboundFields(message: InboundMessage): InboundFields {
  * the user to owner if the instance has no owner yet, and short-circuits.
  * On miss: forwards to the host.
  */
+/**
+ * Send a one-shot confirmation back to the paired chat. Best-effort — failures
+ * are logged but never propagated, so a Telegram outage can't undo a successful
+ * pairing or trigger the interceptor's fail-open path.
+ */
+async function sendPairingConfirmation(token: string, platformId: string): Promise<void> {
+  const chatId = platformId.split(':').slice(1).join(':');
+  if (!chatId) return;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "Pairing success! I'm spinning up the agent now, you'll get a message from them shortly.",
+      }),
+    });
+    if (!res.ok) {
+      log.warn('Telegram pairing confirmation non-OK', { status: res.status });
+    }
+  } catch (err) {
+    log.warn('Telegram pairing confirmation failed', { err });
+  }
+}
+
 function createPairingInterceptor(
   botUsernamePromise: Promise<string | null>,
   hostOnInbound: ChannelSetup['onInbound'],
+  token: string,
 ): ChannelSetup['onInbound'] {
   return (platformId, threadId, message) => {
     void (async () => {
@@ -159,6 +185,8 @@ function createPairingInterceptor(
         promotedToOwner,
         intent: consumed.intent,
       });
+
+      await sendPairingConfirmation(token, platformId);
     })().catch((err) => {
       log.error('Telegram pairing interceptor error', { err });
       // Fail open: pass through so a pairing bug doesn't break normal traffic.
@@ -191,7 +219,7 @@ registerChannelAdapter('telegram', {
       async setup(hostConfig: ChannelSetup) {
         const intercepted: ChannelSetup = {
           ...hostConfig,
-          onInbound: createPairingInterceptor(botUsernamePromise, hostConfig.onInbound),
+          onInbound: createPairingInterceptor(botUsernamePromise, hostConfig.onInbound, token),
         };
         return withRetry(() => bridge.setup(intercepted), 'bridge.setup');
       },
