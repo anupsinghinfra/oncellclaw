@@ -23,11 +23,18 @@ export interface CommandInfo {
 /**
  * Categorize a message as a command or not.
  * Only applies to chat/chat-sdk messages.
+ *
+ * The extracted `senderId` is compared against `NANOCLAW_ADMIN_USER_IDS`
+ * which stores ids in the namespaced form `<channel_type>:<raw>` (see
+ * src/db/users.ts). chat-sdk-bridge serializes `author.userId` as a raw
+ * platform id with no prefix, so we prefix it here. If the id already
+ * contains a `:` we assume it's pre-namespaced (non-chat-sdk adapters
+ * that populate `senderId` directly) and leave it alone.
  */
 export function categorizeMessage(msg: MessageInRow): CommandInfo {
   const content = parseContent(msg.content);
   const text = (content.text || '').trim();
-  const senderId = content.senderId || content.author?.userId || null;
+  const senderId = extractSenderId(msg, content);
 
   if (!text.startsWith('/')) {
     return { category: 'none', command: '', text, senderId };
@@ -45,6 +52,17 @@ export function categorizeMessage(msg: MessageInRow): CommandInfo {
   }
 
   return { category: 'passthrough', command, text, senderId };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractSenderId(msg: MessageInRow, content: any): string | null {
+  const raw: string | null = content?.senderId || content?.author?.userId || null;
+  if (!raw) return null;
+  // Already namespaced (e.g. "telegram:123") — use as-is.
+  if (raw.includes(':')) return raw;
+  // Raw platform id from chat-sdk serialization — prefix with channel type.
+  if (!msg.channel_type) return raw;
+  return `${msg.channel_type}:${raw}`;
 }
 
 /**

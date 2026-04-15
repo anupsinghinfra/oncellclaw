@@ -35,4 +35,7 @@ groups/global/*
 # Skills system (local per-installation state)
 .nanoclaw/
 
+# Builder-agent worktrees (ephemeral, per-request)
+.worktrees/
+
 agents-sdk-docs

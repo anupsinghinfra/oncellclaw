@@ -134,7 +134,6 @@ describe('channel + router integration', () => {
       name: 'Test Agent',
       folder: 'test-agent',
       agent_provider: null,
-      container_config: null,
       created_at: now(),
     });
     createMessagingGroup({

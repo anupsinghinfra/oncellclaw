@@ -43,6 +43,7 @@ export {
   createSession,
   getSession,
   findSession,
+  findSessionByAgentGroup,
   getSessionsByAgentGroup,
   getActiveSessions,
   getRunningSessions,
@@ -64,3 +65,18 @@ export {
   updatePendingCredentialMessageId,
   deletePendingCredential,
 } from './credentials.js';
+export {
+  createPendingSwap,
+  getPendingSwap,
+  getInFlightSwapForGroup,
+  getSwapForDevAgent,
+  getAwaitingConfirmationSwaps,
+  getTerminalSwaps,
+  updatePendingSwapStatus,
+  setSwapPreSwapState,
+  startSwapDeadman,
+  extendSwapDeadman,
+  setSwapHandshakeState,
+  resetSwapForRetry,
+  deletePendingSwap,
+} from './pending-swaps.js';

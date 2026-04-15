@@ -4,8 +4,8 @@ import { getDb } from './connection.js';
 export function createAgentGroup(group: AgentGroup): void {
   getDb()
     .prepare(
-      `INSERT INTO agent_groups (id, name, folder, agent_provider, container_config, created_at)
-       VALUES (@id, @name, @folder, @agent_provider, @container_config, @created_at)`,
+      `INSERT INTO agent_groups (id, name, folder, agent_provider, created_at)
+       VALUES (@id, @name, @folder, @agent_provider, @created_at)`,
     )
     .run(group);
 }
@@ -24,7 +24,7 @@ export function getAllAgentGroups(): AgentGroup[] {
 
 export function updateAgentGroup(
   id: string,
-  updates: Partial<Pick<AgentGroup, 'name' | 'agent_provider' | 'container_config'>>,
+  updates: Partial<Pick<AgentGroup, 'name' | 'agent_provider'>>,
 ): void {
   const fields: string[] = [];
   const values: Record<string, unknown> = { id };

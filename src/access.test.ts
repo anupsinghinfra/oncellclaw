@@ -81,7 +81,6 @@ function seedAgentGroup(id: string): void {
     name: id.toUpperCase(),
     folder: id,
     agent_provider: null,
-    container_config: null,
     created_at: now(),
   });
 }

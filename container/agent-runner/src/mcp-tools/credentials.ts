@@ -35,7 +35,7 @@ export const triggerCredentialCollection: McpToolDefinition = {
   tool: {
     name: 'trigger_credential_collection',
     description:
-      'Collect a credential (API key, token, etc.) from the user for a third-party service. Research the service first so you can pass the correct host pattern, header name, and value format. A card is sent to the user with a button that opens a secure input modal — the value is inserted directly into OneCLI and never enters your context. Blocks until the user saves, rejects, or the request fails.',
+      'Collect an API key / OAuth token / secret from the user for a third-party service. Research the service first so you pass the correct host pattern, header name, and value format. The value is injected straight into OneCLI and never enters your context. Blocks until saved/rejected/failed.',
     inputSchema: {
       type: 'object' as const,
       properties: {

@@ -12,7 +12,6 @@ export const migration001: Migration = {
         name             TEXT NOT NULL,
         folder           TEXT NOT NULL UNIQUE,
         agent_provider   TEXT,
-        container_config TEXT,
         created_at       TEXT NOT NULL
       );
 

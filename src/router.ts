@@ -21,7 +21,7 @@ import { getChannelAdapter } from './channels/channel-registry.js';
 import { isMember } from './db/agent-group-members.js';
 import { getMessagingGroupByPlatform, createMessagingGroup, getMessagingGroupAgents } from './db/messaging-groups.js';
 import { upsertUser, getUser } from './db/users.js';
-import { triggerTyping } from './delivery.js';
+import { startTypingRefresh } from './delivery.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
@@ -148,8 +148,20 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     created,
   });
 
-  // 7. Show typing indicator while agent processes
-  triggerTyping(event.channelType, event.platformId, event.threadId);
+  // 7. Show typing indicator while the agent processes. Refresh on a short
+  // interval so platforms like Discord (which auto-expire typing after
+  // ~10s) keep showing it for the full thinking window. Gated on the
+  // heartbeat file's mtime after an initial grace period, so typing stops
+  // as soon as the agent goes idle — not when the container eventually
+  // exits. Container-runner also calls stopTypingRefresh on exit as a
+  // fast-path cleanup.
+  startTypingRefresh(
+    session.id,
+    session.agent_group_id,
+    event.channelType,
+    event.platformId,
+    event.threadId,
+  );
 
   // 8. Wake container
   const freshSession = getSession(session.id);
@@ -189,14 +201,26 @@ function extractAndUpsertUser(event: InboundEvent): string | null {
     return null;
   }
 
-  const senderId = typeof content.senderId === 'string' ? content.senderId : undefined;
-  const sender = typeof content.sender === 'string' ? content.sender : undefined;
-  const senderName = typeof content.senderName === 'string' ? content.senderName : undefined;
+  // chat-sdk-bridge serializes author info as a nested `author.userId` and
+  // does NOT populate top-level `senderId`. Older adapters (v1, native) put
+  // `senderId` or `sender` directly at the top level. Check all three.
+  const senderIdField = typeof content.senderId === 'string' ? content.senderId : undefined;
+  const senderField = typeof content.sender === 'string' ? content.sender : undefined;
+  const author = typeof content.author === 'object' && content.author !== null
+    ? (content.author as Record<string, unknown>)
+    : undefined;
+  const authorUserId = typeof author?.userId === 'string' ? (author.userId as string) : undefined;
+  const senderName =
+    (typeof content.senderName === 'string' ? content.senderName : undefined) ??
+    (typeof author?.fullName === 'string' ? (author.fullName as string) : undefined) ??
+    (typeof author?.userName === 'string' ? (author.userName as string) : undefined);
 
-  const handle = senderId ?? sender;
-  if (!handle) return null;
+  const rawHandle = senderIdField ?? senderField ?? authorUserId;
+  if (!rawHandle) return null;
 
-  const userId = `${event.channelType}:${handle}`;
+  // If the raw handle already contains ':' it's pre-namespaced (the older
+  // adapters put it in that form). Otherwise prepend the channel type.
+  const userId = rawHandle.includes(':') ? rawHandle : `${event.channelType}:${rawHandle}`;
   if (!getUser(userId)) {
     upsertUser({
       id: userId,

@@ -156,7 +156,6 @@ async function main(): Promise<void> {
       name: args.agentName,
       folder,
       agent_provider: null,
-      container_config: null,
       created_at: now,
     });
     ag = getAgentGroupByFolder(folder)!;

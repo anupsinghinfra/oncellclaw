@@ -16,6 +16,7 @@ import { interactiveTools } from './interactive.js';
 import { agentTools } from './agents.js';
 import { selfModTools } from './self-mod.js';
 import { credentialTools } from './credentials.js';
+import { builderAgentTools } from './builder-agent.js';
 
 function log(msg: string): void {
   console.error(`[mcp-tools] ${msg}`);
@@ -28,6 +29,7 @@ const allTools: McpToolDefinition[] = [
   ...agentTools,
   ...selfModTools,
   ...credentialTools,
+  ...builderAgentTools,
 ];
 
 const toolMap = new Map<string, McpToolDefinition>();

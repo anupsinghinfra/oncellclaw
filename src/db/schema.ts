@@ -5,14 +5,15 @@
  */
 
 export const SCHEMA = `
--- Agent workspaces: folder, skills, CLAUDE.md, container config.
+-- Agent workspaces: folder, skills, CLAUDE.md.
 -- All workspaces are equal; privilege lives on users, not groups.
+-- Container config (mcpServers, packages, imageTag, additionalMounts) lives
+-- in groups/<folder>/container.json on disk, not in the DB.
 CREATE TABLE agent_groups (
   id               TEXT PRIMARY KEY,
   name             TEXT NOT NULL,
   folder           TEXT NOT NULL UNIQUE,
   agent_provider   TEXT,
-  container_config TEXT,
   created_at       TEXT NOT NULL
 );
 

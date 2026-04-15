@@ -9,11 +9,15 @@ import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
+import { worktreePathFor } from './builder-agent/worktree.js';
 import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZONE } from './config.js';
+import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { getSwapForDevAgent } from './db/pending-swaps.js';
 import { getAdminsOfAgentGroup, getGlobalAdmins, getOwners } from './db/user-roles.js';
 import { initGroupFilesystem } from './group-init.js';
+import { stopTypingRefresh } from './delivery.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import {
@@ -85,6 +89,24 @@ async function spawnContainer(session: Session): Promise<void> {
     return;
   }
 
+  // Freeze gate: if this agent group is the dev_agent of an in-flight
+  // swap that has already been submitted for approval (commit_sha set),
+  // refuse to spawn the container. The dev agent stays offline through
+  // the approval/deadman window so it can't make additional edits that
+  // weren't part of what the approver reviewed. `bailSwapForRetry`
+  // clears commit_sha, which implicitly unfreezes and allows the next
+  // wake to spawn again.
+  const devSwap = getSwapForDevAgent(agentGroup.id);
+  if (devSwap && devSwap.commit_sha) {
+    log.info('Refusing to spawn dev agent — frozen during code-change approval', {
+      sessionId: session.id,
+      agentGroup: agentGroup.name,
+      requestId: devSwap.request_id,
+      status: devSwap.status,
+    });
+    return;
+  }
+
   // Refresh the destination map and default reply routing so any admin
   // changes take effect on wake.
   writeDestinations(agentGroup.id, session.id);
@@ -132,6 +154,7 @@ async function spawnContainer(session: Session): Promise<void> {
     clearTimeout(idleTimer);
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
+    stopTypingRefresh(session.id);
     log.info('Container exited', { sessionId: session.id, code, containerName });
   });
 
@@ -139,6 +162,7 @@ async function spawnContainer(session: Session): Promise<void> {
     clearTimeout(idleTimer);
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
+    stopTypingRefresh(session.id);
     log.error('Container spawn error', { sessionId: session.id, err });
   });
 }
@@ -197,9 +221,27 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   const groupRunnerDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, 'agent-runner-src');
   mounts.push({ hostPath: groupRunnerDir, containerPath: '/app/src', readonly: false });
 
-  // Additional mounts from container config
-  const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
-  if (containerConfig.additionalMounts) {
+  // Builder-agent worktree at /worktree — only added when this agent group
+  // is the dev_agent of an in-flight swap. The dev agent edits the worktree
+  // (a git copy of the repo) through this mount. Its own runtime code at
+  // /app/src is unchanged — self-modification is structurally impossible.
+  const swap = getSwapForDevAgent(agentGroup.id);
+  if (swap) {
+    const worktreeDir = worktreePathFor(swap.request_id);
+    if (fs.existsSync(worktreeDir)) {
+      mounts.push({ hostPath: worktreeDir, containerPath: '/worktree', readonly: false });
+    } else {
+      log.warn('Dev agent has in-flight swap but worktree dir is missing', {
+        agentGroupId: agentGroup.id,
+        requestId: swap.request_id,
+        worktreeDir,
+      });
+    }
+  }
+
+  // Additional mounts from container config (groups/<folder>/container.json)
+  const containerConfig = readContainerConfig(agentGroup.folder);
+  if (containerConfig.additionalMounts && containerConfig.additionalMounts.length > 0) {
     const validated = validateAdditionalMounts(containerConfig.additionalMounts, agentGroup.name);
     mounts.push(...validated);
   }
@@ -279,8 +321,8 @@ async function buildContainerArgs(
     }
   }
 
-  // Pass additional MCP servers from container config
-  const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
+  // Pass additional MCP servers from container config (groups/<folder>/container.json)
+  const containerConfig = readContainerConfig(agentGroup.folder);
   if (containerConfig.mcpServers && Object.keys(containerConfig.mcpServers).length > 0) {
     args.push('-e', `NANOCLAW_MCP_SERVERS=${JSON.stringify(containerConfig.mcpServers)}`);
   }
@@ -305,10 +347,9 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
   const agentGroup = getAgentGroup(agentGroupId);
   if (!agentGroup) throw new Error('Agent group not found');
 
-  const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
-  const packages = containerConfig.packages || { apt: [], npm: [] };
-  const aptPackages = (packages.apt || []) as string[];
-  const npmPackages = (packages.npm || []) as string[];
+  const containerConfig = readContainerConfig(agentGroup.folder);
+  const aptPackages = containerConfig.packages.apt;
+  const npmPackages = containerConfig.packages.npm;
 
   if (aptPackages.length === 0 && npmPackages.length === 0) {
     throw new Error('No packages to install. Use install_packages first.');
@@ -340,10 +381,9 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
     fs.unlinkSync(tmpDockerfile);
   }
 
-  // Store the image tag in container_config
+  // Store the image tag in groups/<folder>/container.json
   containerConfig.imageTag = imageTag;
-  const { updateAgentGroup } = await import('./db/agent-groups.js');
-  updateAgentGroup(agentGroupId, { container_config: JSON.stringify(containerConfig) });
+  writeContainerConfig(agentGroup.folder, containerConfig);
 
   log.info('Per-agent-group image built', { agentGroupId, imageTag });
 }

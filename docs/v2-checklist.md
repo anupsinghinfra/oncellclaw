@@ -7,15 +7,13 @@ Status: [x] done, [~] partial, [ ] not started
 ## Core Architecture
 
 - [x] Session DB replaces IPC (messages_in / messages_out as sole IO)
-- [x] Two-DB split: inbound.db (host-owned) + outbound.db (container-owned) — zero cross-process write contention
-  - **Cross-mount invariants (empirically validated, see `scripts/sanity-live-poll.ts`):** (1) `journal_mode=DELETE` on every session DB — WAL's `-shm` is memory-mapped and VirtioFS does not propagate mmap coherency host→guest, so WAL leaves the container's poll loop frozen on an early snapshot with no error; (2) host opens-writes-closes per operation — the close is what invalidates the container's VirtioFS page cache; (3) one writer per file — DELETE-mode with two writers corrupts because journal-unlink doesn't propagate atomically. Each invariant was individually confirmed by flipping it and observing silent message loss or corruption. Do not "simplify" by unifying the DBs, switching to WAL, or keeping a long-lived host connection.
-  - **Seq parity is load-bearing, not cleanup:** host writes even seqs, container writes odd seqs. The seq is the agent-facing message ID returned by `send_message` and consumed by `edit_message` / `add_reaction`, and `getMessageIdBySeq()` looks up by seq across both tables. Removing parity would let a single ID resolve to the wrong row.
 - [x] Central DB (agent groups, messaging groups, sessions, routing)
 - [x] Host sweep (stale detection via heartbeat file, retry with backoff, recurrence scheduling)
 - [x] Active delivery polling (1s for running sessions)
 - [x] Sweep delivery polling (60s across all sessions)
 - [x] Container runner with session DB mounting
 - [x] Per-session container lifecycle and idle timeout
+- [ ] Replace hard Idle and Timeout with work aware prompts to user to kill stuck processes
 - [x] Session resume (sessionId + resumeAt across queries)
 - [x] Graceful shutdown (SIGTERM/SIGINT handlers)
 - [x] Orphan container cleanup on startup
@@ -36,7 +34,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Mock provider (testing)
 - [x] Provider factory
 - [ ] Codex provider
-- [ ] OpenCode provider
+- [~] OpenCode provider
 
 ## Channel Adapters
 
@@ -52,7 +50,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [~] Google Chat via Chat SDK (adapter + skill written, not tested)
 - [~] Linear via Chat SDK (adapter + skill written, not tested)
 - [~] GitHub via Chat SDK (adapter + skill written, not tested)
-- [~] WhatsApp Cloud API via Chat SDK (adapter + skill written, not tested)
+- [x] WhatsApp Cloud API via Chat SDK (adapter + skill written, not tested)
 - [~] Resend (email) via Chat SDK (adapter + skill written, not tested)
 - [~] Matrix via Chat SDK (adapter + skill written, not tested)
 - [~] Webex via Chat SDK (adapter + skill written, not tested)
@@ -66,7 +64,6 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Cold-DM infrastructure — `ChannelAdapter.openDM?(handle)` optional method, resolved via Chat SDK `chat.openDM` for resolution-required channels (Discord, Slack, Teams, Webex, gChat) and fall-through to the handle directly for direct-addressable channels (Telegram, WhatsApp, iMessage, Matrix, Resend). `src/user-dm.ts::ensureUserDm` caches every resolution in `user_dms` so subsequent cold DMs are a DB read.
 - [x] Agent-shared session mode (cross-channel shared sessions, e.g. GitHub + Slack)
 - [x] Auto-onboarding on channel registration (/welcome skill triggered on first wiring)
-- [ ] Setup vs production channel separation
 
 ## Chat-First Setup Flow
 
@@ -112,7 +109,6 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Container waking on new message
 - [x] Typing indicator triggered on message route
 - [~] Trigger rule matching (router picks highest-priority agent, regex/mention matching TODO)
-- [x] Delivery ACL — `delivery.ts` throws on unauthorized channel / agent-to-agent targets (was `return` previously, which falsely marked the message as delivered because the outer loop treated undefined as success — real incident: silent drops during the welcome-DM test before the fix). Self-origin chat and self-to-self agent messages skip the destination check. `createMessagingGroupAgent` auto-creates the companion `agent_destinations` row with a normalized, collision-broken `local_name` so operators don't have to hand-insert destinations when wiring channels.
 
 ## Rich Messaging
 
@@ -126,6 +122,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [~] Formatted /usage, /context, /cost output (commands pass through, no rich card formatting)
 - [ ] Context window visibility: show position in context, approaching compaction, when compaction happens, post-compaction state
 - [ ] Threading and replies support
+- [ ] Auto-compact on idle before cache expires
 
 ## MCP Tools (Container)
 
@@ -142,7 +139,6 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] install_packages (apt/npm, owner/admin approval required via `pickApprover`, strict name validation)
 - [x] add_mcp_server (owner/admin approval required via `pickApprover`)
 - [x] request_rebuild (rebuilds per-agent-group Docker image)
-- ~~send_to_agent~~ — deleted; agents are just destinations in the unified `send_message`
 
 ## Scheduling
 
@@ -167,30 +163,10 @@ Status: [x] done, [~] partial, [ ] not started
   - [x] add_mcp_server (admin approval)
   - [x] request_rebuild (builds per-agent-group Docker image with approved packages)
   - [x] Fire-and-forget model (write request, return immediately; chat notification on approval; container killed so next wake picks up new config/image)
-- [ ] Role definitions beyond admin (custom roles, per-group permissions)
-- [ ] Configurable sensitive action list (hardcoded today)
 - [~] OneCLI integration for human-loop approvals on credentialed requests (agent touching a credentialed resource → OneCLI gates → approval card to admin → OneCLI releases credential) — SDK 0.3.1 `configureManualApproval` wired into host, routes to admin via existing `pending_approvals` infra
-- [~] Credential collection from chat — `trigger_credential_collection` MCP tool; agent researches API config, card → modal → `onecli secrets create` via internal facade (`src/onecli-secrets.ts`); credential value never enters agent context
-  - [ ] Replace `src/onecli-secrets.ts` shell facade with SDK-native secret management when `@onecli-sh/sdk` adds it
-  - [ ] Per-agent-group secret scoping via OneCLI `agentId` (facade passes it today; CLI ignores it until upstream supports)
-  - [ ] **Attach newly created secrets to the calling agent** — `trigger_credential_collection` today runs `onecli secrets create` but leaves the secret unassigned, so the agent that requested the credential still gets zero injections. Fix options: (a) follow-up `onecli agents set-secrets` call in `src/onecli-secrets.ts` after create, (b) set the agent to `mode=all`, or (c) upstream ask — `onecli secrets create --assign-to-agent-ids <id,...>` so it's a one-shot and orphaned secrets are impossible. Prefer (c); use (a) as the interim.
-  - [ ] **Chat SDK input support beyond Slack (upstream ask)** — today only Slack's Modal surface works for secure input. The platforms themselves support it, but Chat SDK doesn't expose it:
-    - [ ] **Discord** — native modal (`InteractionResponseType.Modal` with `ActionRow([TextInput])`). Map `event.openModal(Modal(...))` to the Discord REST callback.
-    - [ ] **Microsoft Teams** — Adaptive Card with `Input.Text`, delivered as a regular message (inline, no modal-trigger needed).
-    - [ ] **Google Chat** — Cards v2 `textInput` widget, inline in the conversation.
-    - [ ] **Webex** — Adaptive Card with `Input.Text`, inline.
-    - [ ] **WhatsApp Cloud** — WhatsApp Flows with a text field (requires flow registration with Meta — heavier but doable).
-    - When these land upstream, `trigger_credential_collection` gets secure input on all major channels for free; no NanoClaw-side code change beyond maybe declaring the capability per adapter.
-  - [ ] Tunneled OneCLI dashboard fallback for platforms with no native form input (Telegram Mini Apps aside, iMessage without Apple Business Register, Matrix, email). Signed short-lived URL → browser form served by OneCLI at 10254 → tunnel via ngrok/cloudflared/tailscale-funnel. Value never touches the chat surface.
-  - [ ] OneCLI built-in apps (`onecli apps list`) shadow generic secrets on the same host. `trigger_credential_collection` should check for a matching app first; if one exists, route the user through the app's connect URL instead of creating a secret. Upstream ask: `apps configure --api-key` for api_key apps.
+- [ ] Tunneled OneCLI dashboard for credential addition (Telegram Mini Apps aside, iMessage without Apple Business Register, Matrix, email). Signed short-lived URL → browser form served by OneCLI at 10254 → tunnel via cloudflare durable object. Value never touches the chat surface.
 - [ ] Sensitive data access flow (agent requests PII / secrets / private files → approval card → scoped, time-limited access)
-- [ ] Self-modification via builder-agent delegation:
-  - [ ] Agent requests code changes by delegating to a builder agent
-  - [ ] Builder agent has write access to the requesting agent's code and Dockerfile
-  - [ ] Approval modes: approve per-edit as builder works, or approve full diff at the end
-  - [ ] Diff review card sent to admin showing all proposed changes
-  - [ ] On approval: apply edits, rebuild container image, restart agent
-  - [ ] On rejection: discard changes, notify requesting agent
+- [ ] Self-modification via builder-agent delegation — full design in [v2-builder-agent-plan.md](v2-builder-agent-plan.md). Dev-agent clone of originating agent edits a worktree overlaid with the group's private runner/skills; host classifies diff, routes approval (group admin or owner+typed-confirm), applies per-path swap targets, runs deadman-restart dance, commits every swap to main for full per-group history.
 
 ## Named Destinations + ACL
 

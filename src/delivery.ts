@@ -37,6 +37,7 @@ import {
 import { log } from './log.js';
 import { normalizeOptions, type RawOption } from './channels/ask-question.js';
 import {
+  heartbeatPath,
   openInboundDb,
   openOutboundDb,
   sessionDir,
@@ -186,6 +187,139 @@ export async function triggerTyping(channelType: string, platformId: string, thr
   }
 }
 
+// ── Typing refresh ──
+// Most platforms expire a typing indicator after 5–10s, so a one-shot call
+// on message arrival goes stale long before the agent finishes thinking.
+// We keep it alive by re-firing setTyping on a short interval — but only
+// while the agent is actually WORKING, not just while the container is
+// alive. The agent-runner touches `heartbeat` on every SDK event, so we
+// gate each tick on "is the heartbeat file fresh?". If it goes stale (agent
+// finished its turn and is idle-polling), the refresh stops on its own
+// without waiting for the container to exit.
+//
+// After delivering a user-facing message, the refresh is paused for
+// POST_DELIVERY_PAUSE_MS — long enough for the client-side typing
+// indicator to visually clear (Discord ~10s, Telegram ~5s). If the agent
+// keeps touching heartbeat past the pause window, typing resumes
+// naturally on the next refresh tick.
+//
+// `startTypingRefresh` is idempotent per session. `stopTypingRefresh` is
+// called from container-runner.ts on container exit as a fast-path cleanup
+// (the heartbeat-staleness path would catch it within one tick anyway).
+const TYPING_REFRESH_MS = 4000;
+// Grace window from startTypingRefresh: fire typing unconditionally for
+// this long regardless of heartbeat state. Covers container spawn/wake
+// latency, which can be 5–12s on a cold start before the first heartbeat
+// touch lands.
+const TYPING_GRACE_MS = 15000;
+// After the grace window, a heartbeat must be mtimed within this many
+// milliseconds of now to count as "agent is working." Heartbeats are
+// touched on every SDK event (tool calls, result chunks), so during
+// active work they land every few hundred ms. 6s is well above that
+// while still being small enough to stop typing quickly when the agent
+// goes idle.
+const HEARTBEAT_FRESH_MS = 6000;
+// After we deliver a user-facing message, pause typing for this long so
+// the client-side indicator has time to visually clear. Tuned for the
+// longest common client expiry (Discord ~10s). The interval stays
+// running; ticks inside the pause just skip the setTyping call.
+const POST_DELIVERY_PAUSE_MS = 10000;
+
+interface TypingTarget {
+  agentGroupId: string;
+  channelType: string;
+  platformId: string;
+  threadId: string | null;
+  interval: NodeJS.Timeout;
+  startedAt: number;
+  pausedUntil: number; // epoch ms; 0 = not paused
+}
+
+const typingRefreshers = new Map<string, TypingTarget>();
+
+function isHeartbeatFresh(agentGroupId: string, sessionId: string): boolean {
+  const hbPath = heartbeatPath(agentGroupId, sessionId);
+  try {
+    const stat = fs.statSync(hbPath);
+    return Date.now() - stat.mtimeMs < HEARTBEAT_FRESH_MS;
+  } catch {
+    return false;
+  }
+}
+
+export function startTypingRefresh(
+  sessionId: string,
+  agentGroupId: string,
+  channelType: string,
+  platformId: string,
+  threadId: string | null,
+): void {
+  const existing = typingRefreshers.get(sessionId);
+  if (existing) {
+    // Already refreshing. Fire an immediate tick for the new inbound
+    // event and reset the grace window — the new message restarts the
+    // container-wake latency budget. Also clear any lingering
+    // post-delivery pause: a new inbound means the user expects typing
+    // to show immediately.
+    triggerTyping(channelType, platformId, threadId).catch(() => {});
+    existing.startedAt = Date.now();
+    existing.pausedUntil = 0;
+    return;
+  }
+
+  // Immediate tick + periodic refresh.
+  triggerTyping(channelType, platformId, threadId).catch(() => {});
+  const startedAt = Date.now();
+  const interval = setInterval(() => {
+    const entry = typingRefreshers.get(sessionId);
+    if (!entry) return; // stopped externally since this tick was scheduled
+
+    // Inside a post-delivery pause: skip setTyping but keep the interval
+    // running so we resume automatically once the pause expires.
+    if (entry.pausedUntil > Date.now()) return;
+
+    const withinGrace = Date.now() - entry.startedAt < TYPING_GRACE_MS;
+    if (withinGrace || isHeartbeatFresh(entry.agentGroupId, sessionId)) {
+      triggerTyping(entry.channelType, entry.platformId, entry.threadId).catch(() => {});
+      return;
+    }
+
+    // Out of grace AND heartbeat stale — agent is idle, stop refreshing.
+    clearInterval(entry.interval);
+    typingRefreshers.delete(sessionId);
+  }, TYPING_REFRESH_MS);
+  // unref so a stale refresher can't hold the event loop alive.
+  interval.unref();
+  typingRefreshers.set(sessionId, {
+    agentGroupId,
+    channelType,
+    platformId,
+    threadId,
+    interval,
+    startedAt,
+    pausedUntil: 0,
+  });
+}
+
+/**
+ * Pause the typing refresh for POST_DELIVERY_PAUSE_MS. Called after a
+ * user-facing message is delivered so the client-side indicator has a
+ * chance to visually clear before the agent's next SDK event pushes it
+ * back on. No-op if no refresh is active for this session.
+ */
+export function pauseTypingRefreshAfterDelivery(sessionId: string): void {
+  const entry = typingRefreshers.get(sessionId);
+  if (!entry) return;
+  entry.pausedUntil = Date.now() + POST_DELIVERY_PAUSE_MS;
+}
+
+export function stopTypingRefresh(sessionId: string): void {
+  const entry = typingRefreshers.get(sessionId);
+  if (!entry) return;
+  clearInterval(entry.interval);
+  typingRefreshers.delete(sessionId);
+}
+
 /** Start the active container poll loop (~1s). */
 export function startActiveDeliveryPoll(): void {
   if (activePolling) return;
@@ -262,6 +396,16 @@ async function deliverSessionMessages(session: Session): Promise<void> {
         markDelivered(inDb, msg.id, platformMsgId ?? null);
         deliveryAttempts.delete(msg.id);
         resetContainerIdleTimer(session.id);
+
+        // Pause the typing indicator after a real user-facing message
+        // lands on the user's screen, so the client has time to visually
+        // clear the indicator before the next heartbeat tick brings it
+        // back. Skip the pause for internal traffic (system actions,
+        // agent-to-agent routing) — the user doesn't see those and
+        // shouldn't get a gap in their typing indicator for them.
+        if (msg.kind !== 'system' && msg.channel_type !== 'agent') {
+          pauseTypingRefreshAfterDelivery(session.id);
+        }
       } catch (err) {
         const attempts = (deliveryAttempts.get(msg.id) ?? 0) + 1;
         deliveryAttempts.set(msg.id, attempts);
@@ -557,7 +701,6 @@ async function handleSystemAction(
         name,
         folder,
         agent_provider: null,
-        container_config: null,
         created_at: now,
       };
       createAgentGroup(newGroup);
@@ -588,8 +731,11 @@ async function handleSystemAction(
         created_at: now,
       });
 
-      // Refresh the creator's destination map so the new child appears
-      // immediately on the next query — no restart needed.
+      // REQUIRED: project the new destination into the running
+      // container's inbound.db. See the top-of-file invariant in
+      // src/db/agent-destinations.ts — forgetting this causes
+      // "dropped: unknown destination" when the parent tries to send
+      // to the newly-created child.
       writeDestinations(session.agent_group_id, session.id);
 
       // Fire-and-forget notification back to the creator
@@ -702,6 +848,32 @@ async function handleSystemAction(
     case 'request_credential': {
       const { handleCredentialRequest } = await import('./credentials.js');
       await handleCredentialRequest(content, session);
+      break;
+    }
+
+    case 'create_dev_agent': {
+      const { handleCreateDevAgent } = await import('./builder-agent/handlers.js');
+      await handleCreateDevAgent(
+        {
+          requestId: content.requestId as string,
+          name: content.name as string,
+        },
+        session,
+        notifyAgent,
+      );
+      break;
+    }
+
+    case 'request_swap': {
+      const { handleRequestSwap } = await import('./builder-agent/handlers.js');
+      await handleRequestSwap(
+        {
+          perFileSummaries: (content.perFileSummaries as Record<string, string>) || {},
+          overallSummary: (content.overallSummary as string) || '',
+        },
+        session,
+        notifyAgent,
+      );
       break;
     }
 

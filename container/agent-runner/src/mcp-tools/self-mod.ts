@@ -35,7 +35,7 @@ export const installPackages: McpToolDefinition = {
   tool: {
     name: 'install_packages',
     description:
-      'Request installation of apt or npm packages. Requires admin approval. Fire-and-forget: you will receive a notification when the request is approved or rejected. After approval, call request_rebuild to apply the changes.',
+      'Install apt and/or npm packages into YOUR per-agent container image. Prefer this over `create_dev_agent` when the request is just to make a package available. Requires admin approval; fire-and-forget. After approval, call `request_rebuild` to apply.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -77,7 +77,7 @@ export const addMcpServer: McpToolDefinition = {
   tool: {
     name: 'add_mcp_server',
     description:
-      "Request adding an MCP server to this agent's configuration. Requires admin approval. Fire-and-forget: you will be notified when approved/rejected. On approval, your container restarts with the new server.",
+      "Wire an EXISTING third-party MCP server into YOUR per-agent runtime config — you must already know the exact `command` + `args` to invoke it (e.g. `npx @modelcontextprotocol/server-github`). NOT for writing a new tool or server from scratch — use `create_dev_agent` for that. Requires admin approval; fire-and-forget.",
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -116,7 +116,7 @@ export const requestRebuild: McpToolDefinition = {
   tool: {
     name: 'request_rebuild',
     description:
-      'Request a container rebuild to apply pending package installations. Requires admin approval. Fire-and-forget: you will be notified when approved/rejected. On approval, your container restarts with the new image on the next message.',
+      'Rebuild YOUR container image to pick up approved `install_packages` / `add_mcp_server` changes. Requires admin approval; fire-and-forget.',
     inputSchema: {
       type: 'object' as const,
       properties: {

@@ -38,7 +38,6 @@ createAgentGroup({
   name: 'E2E Test Agent',
   folder: 'test-agent-e2e',
   agent_provider: 'claude',
-  container_config: null,
   created_at: new Date().toISOString(),
 });
 
