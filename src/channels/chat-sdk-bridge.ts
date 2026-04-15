@@ -121,6 +121,19 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       if (replyTo) serialized.replyTo = replyTo;
     }
 
+    // Project chat-sdk's nested author into the flat sender fields the router
+    // expects (see src/router.ts extractAndUpsertUser). Native adapters already
+    // populate these directly; this brings chat-sdk adapters in line.
+    const author = serialized.author as
+      | { userId?: string; fullName?: string; userName?: string }
+      | undefined;
+    if (author) {
+      const name = author.fullName ?? author.userName;
+      serialized.senderId = author.userId;
+      serialized.sender = name;
+      serialized.senderName = name;
+    }
+
     // Drop raw to save DB space (can be very large)
     serialized.raw = undefined;
 
