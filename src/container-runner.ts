@@ -9,12 +9,10 @@ import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
-import { worktreePathFor } from './builder-agent/worktree.js';
 import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZONE } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
-import { getSwapForDevAgent } from './db/pending-swaps.js';
 import { getAdminsOfAgentGroup, getGlobalAdmins, getOwners } from './db/user-roles.js';
 import { initGroupFilesystem } from './group-init.js';
 import { stopTypingRefresh } from './delivery.js';
@@ -86,24 +84,6 @@ async function spawnContainer(session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) {
     log.error('Agent group not found', { agentGroupId: session.agent_group_id });
-    return;
-  }
-
-  // Freeze gate: if this agent group is the dev_agent of an in-flight
-  // swap that has already been submitted for approval (commit_sha set),
-  // refuse to spawn the container. The dev agent stays offline through
-  // the approval/deadman window so it can't make additional edits that
-  // weren't part of what the approver reviewed. `bailSwapForRetry`
-  // clears commit_sha, which implicitly unfreezes and allows the next
-  // wake to spawn again.
-  const devSwap = getSwapForDevAgent(agentGroup.id);
-  if (devSwap && devSwap.commit_sha) {
-    log.info('Refusing to spawn dev agent — frozen during code-change approval', {
-      sessionId: session.id,
-      agentGroup: agentGroup.name,
-      requestId: devSwap.request_id,
-      status: devSwap.status,
-    });
     return;
   }
 
@@ -220,24 +200,6 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
   // creation, persistent thereafter — agents can modify their runner)
   const groupRunnerDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, 'agent-runner-src');
   mounts.push({ hostPath: groupRunnerDir, containerPath: '/app/src', readonly: false });
-
-  // Builder-agent worktree at /worktree — only added when this agent group
-  // is the dev_agent of an in-flight swap. The dev agent edits the worktree
-  // (a git copy of the repo) through this mount. Its own runtime code at
-  // /app/src is unchanged — self-modification is structurally impossible.
-  const swap = getSwapForDevAgent(agentGroup.id);
-  if (swap) {
-    const worktreeDir = worktreePathFor(swap.request_id);
-    if (fs.existsSync(worktreeDir)) {
-      mounts.push({ hostPath: worktreeDir, containerPath: '/worktree', readonly: false });
-    } else {
-      log.warn('Dev agent has in-flight swap but worktree dir is missing', {
-        agentGroupId: agentGroup.id,
-        requestId: swap.request_id,
-        worktreeDir,
-      });
-    }
-  }
 
   // Additional mounts from container config (groups/<folder>/container.json)
   const containerConfig = readContainerConfig(agentGroup.folder);

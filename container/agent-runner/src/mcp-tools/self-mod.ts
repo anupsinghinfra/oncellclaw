@@ -35,7 +35,7 @@ export const installPackages: McpToolDefinition = {
   tool: {
     name: 'install_packages',
     description:
-      'Install apt and/or npm packages into YOUR per-agent container image. Prefer this over `create_dev_agent` when the request is just to make a package available. Requires admin approval; fire-and-forget. After approval, call `request_rebuild` to apply.',
+      'Install apt and/or npm packages into YOUR per-agent container image. Requires admin approval; fire-and-forget. After approval, call `request_rebuild` to apply.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -77,7 +77,7 @@ export const addMcpServer: McpToolDefinition = {
   tool: {
     name: 'add_mcp_server',
     description:
-      "Wire an EXISTING third-party MCP server into YOUR per-agent runtime config — you must already know the exact `command` + `args` to invoke it (e.g. `npx @modelcontextprotocol/server-github`). NOT for writing a new tool or server from scratch — use `create_dev_agent` for that. Requires admin approval; fire-and-forget.",
+      'Wire an EXISTING third-party MCP server into YOUR per-agent runtime config — you must already know the exact `command` + `args` to invoke it (e.g. `npx @modelcontextprotocol/server-github`). Requires admin approval; fire-and-forget.',
     inputSchema: {
       type: 'object' as const,
       properties: {

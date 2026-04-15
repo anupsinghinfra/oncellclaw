@@ -851,32 +851,6 @@ async function handleSystemAction(
       break;
     }
 
-    case 'create_dev_agent': {
-      const { handleCreateDevAgent } = await import('./builder-agent/handlers.js');
-      await handleCreateDevAgent(
-        {
-          requestId: content.requestId as string,
-          name: content.name as string,
-        },
-        session,
-        notifyAgent,
-      );
-      break;
-    }
-
-    case 'request_swap': {
-      const { handleRequestSwap } = await import('./builder-agent/handlers.js');
-      await handleRequestSwap(
-        {
-          perFileSummaries: (content.perFileSummaries as Record<string, string>) || {},
-          overallSummary: (content.overallSummary as string) || '',
-        },
-        session,
-        notifyAgent,
-      );
-      break;
-    }
-
     default:
       log.warn('Unknown system action', { action });
   }

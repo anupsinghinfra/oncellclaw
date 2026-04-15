@@ -65,18 +65,3 @@ export {
   updatePendingCredentialMessageId,
   deletePendingCredential,
 } from './credentials.js';
-export {
-  createPendingSwap,
-  getPendingSwap,
-  getInFlightSwapForGroup,
-  getSwapForDevAgent,
-  getAwaitingConfirmationSwaps,
-  getTerminalSwaps,
-  updatePendingSwapStatus,
-  setSwapPreSwapState,
-  startSwapDeadman,
-  extendSwapDeadman,
-  setSwapHandshakeState,
-  resetSwapForRetry,
-  deletePendingSwap,
-} from './pending-swaps.js';

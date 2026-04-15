@@ -6,7 +6,6 @@ import { migration002 } from './002-chat-sdk-state.js';
 import { migration003 } from './003-pending-approvals.js';
 import { migration004 } from './004-agent-destinations.js';
 import { migration005 } from './005-pending-credentials.js';
-import { migration006 } from './006-pending-swaps.js';
 import { migration007 } from './007-pending-approvals-title-options.js';
 
 export interface Migration {
@@ -21,7 +20,6 @@ const migrations: Migration[] = [
   migration003,
   migration004,
   migration005,
-  migration006,
   migration007,
 ];
 

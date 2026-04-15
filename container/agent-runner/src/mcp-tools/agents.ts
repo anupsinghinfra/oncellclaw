@@ -31,7 +31,7 @@ export const createAgent: McpToolDefinition = {
   tool: {
     name: 'create_agent',
     description:
-      "Create a long-lived companion sub-agent (research assistant, task manager, specialist) — the name becomes your destination for it. NOT for source-code changes — use `create_dev_agent` for those. Admin-only. Fire-and-forget.",
+      'Create a long-lived companion sub-agent (research assistant, task manager, specialist) — the name becomes your destination for it. Admin-only. Fire-and-forget.',
     inputSchema: {
       type: 'object' as const,
       properties: {

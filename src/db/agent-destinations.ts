@@ -30,7 +30,6 @@
  *
  * Affected call sites today (keep this list honest if you add more):
  *   - src/delivery.ts::handleSystemAction case 'create_agent'
- *   - src/builder-agent/handlers.ts::handleCreateDevAgent
  *   - src/db/messaging-groups.ts::createMessagingGroupAgent
  */
 import type { AgentDestination } from '../types.js';

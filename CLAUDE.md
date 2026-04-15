@@ -38,7 +38,7 @@ Exactly one writer per file — no cross-mount lock contention. Heartbeat is a f
 
 ## Central DB
 
-`data/v2.db` holds everything that isn't per-session: users, user_roles, agent_groups, messaging_groups, wiring, pending_approvals, pending_credentials, pending_swaps, user_dms, chat_sdk_* (for the Chat SDK bridge), schema_version. Migrations live at `src/db/migrations/`.
+`data/v2.db` holds everything that isn't per-session: users, user_roles, agent_groups, messaging_groups, wiring, pending_approvals, pending_credentials, user_dms, chat_sdk_* (for the Chat SDK bridge), schema_version. Migrations live at `src/db/migrations/`.
 
 ## Key Files
 
@@ -56,21 +56,21 @@ Exactly one writer per file — no cross-mount lock contention. Heartbeat is a f
 | `src/credentials.ts` | `trigger_credential_collection` host side — modal, OneCLI write-back |
 | `src/user-dm.ts` | Cold-DM resolution + `user_dms` cache |
 | `src/group-init.ts` | Per-agent-group filesystem scaffold (CLAUDE.md, skills, agent-runner-src overlay) |
-| `src/builder-agent/` | Self-modification feature: dev-agent spawn, worktree, classifier, swap, deadman, promote. See `docs/v2-builder-agent-plan.md` |
 | `src/db/` | DB layer — agent_groups, messaging_groups, sessions, user_roles, user_dms, pending_*, migrations |
 | `src/channels/` | Channel adapters + Chat SDK bridge |
 | `container/agent-runner/src/` | Agent-runner: poll loop, formatter, provider abstraction, MCP tools, destinations |
 | `container/skills/` | Container skills mounted into every agent session |
-| `groups/<folder>/` | Per-agent-group filesystem (CLAUDE.md, skills, `agent-runner-src/` overlay for builder-agent) |
+| `groups/<folder>/` | Per-agent-group filesystem (CLAUDE.md, skills, per-group `agent-runner-src/` overlay) |
 | `scripts/init-first-agent.ts` | Bootstrap the first DM-wired agent (used by `/init-first-agent` skill) |
 
 ## Self-Modification
 
-Three tiers of agent self-modification, lightest first:
+Two tiers of agent self-modification today:
 
 1. **`install_packages` / `add_mcp_server` / `request_rebuild`** — changes to the per-agent-group container config only (apt/npm deps, wire an existing MCP server). Admin approval, rebuild, container restart. `container/agent-runner/src/mcp-tools/self-mod.ts`.
 2. **`trigger_credential_collection`** — user provides an API key via a secure modal; value goes straight into OneCLI and never enters agent context. `src/credentials.ts`.
-3. **`create_dev_agent` + `request_swap`** — heaviest path. Agent spawns a dev-agent clone in a git worktree overlaid with the group's private `agent-runner-src/`, the dev agent edits source, the host classifies the diff, routes for approval, applies a per-path swap, and runs a deadman-restart dance. Every swap commits to `main` for audit. Full design in [docs/v2-builder-agent-plan.md](docs/v2-builder-agent-plan.md).
+
+A third tier (direct source-level self-edits via a draft/activate flow) is planned but not yet implemented.
 
 ## Secrets / Credentials / OneCLI
 
@@ -134,7 +134,6 @@ Host logs: `logs/nanoclaw.log` (normal) and `logs/nanoclaw.error.log` (errors on
 | [docs/v2-agent-runner-details.md](docs/v2-agent-runner-details.md) | Agent-runner internals + MCP tool interface |
 | [docs/v2-isolation-model.md](docs/v2-isolation-model.md) | Three-level channel isolation model |
 | [docs/v2-setup-wiring.md](docs/v2-setup-wiring.md) | What's wired, what's open in the setup flow |
-| [docs/v2-builder-agent-plan.md](docs/v2-builder-agent-plan.md) | Self-modification via dev-agent delegation |
 | [docs/v2-checklist.md](docs/v2-checklist.md) | Rolling status checklist across all subsystems |
 | [docs/v2-architecture-diagram.md](docs/v2-architecture-diagram.md) | Diagram version of the architecture |
 

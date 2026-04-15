@@ -166,7 +166,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [~] OneCLI integration for human-loop approvals on credentialed requests (agent touching a credentialed resource → OneCLI gates → approval card to admin → OneCLI releases credential) — SDK 0.3.1 `configureManualApproval` wired into host, routes to admin via existing `pending_approvals` infra
 - [ ] Tunneled OneCLI dashboard for credential addition (Telegram Mini Apps aside, iMessage without Apple Business Register, Matrix, email). Signed short-lived URL → browser form served by OneCLI at 10254 → tunnel via cloudflare durable object. Value never touches the chat surface.
 - [ ] Sensitive data access flow (agent requests PII / secrets / private files → approval card → scoped, time-limited access)
-- [ ] Self-modification via builder-agent delegation — full design in [v2-builder-agent-plan.md](v2-builder-agent-plan.md). Dev-agent clone of originating agent edits a worktree overlaid with the group's private runner/skills; host classifies diff, routes approval (group admin or owner+typed-confirm), applies per-path swap targets, runs deadman-restart dance, commits every swap to main for full per-group history.
+- [ ] Self-modification via direct source edits — planned draft/activate flow: RO baseline mount at `/app/src`, RW draft at `/workspace/src-draft`, atomic snapshot into `pending`, admin approval, `cp -a` into baseline, restart + deadman rollback. Unifies runner src, host src, migrations, package.json, container config through one edit path. Collapses the abandoned `create_dev_agent`/`request_swap` dev-agent-in-worktree approach.
 
 ## Named Destinations + ACL
 

@@ -4,27 +4,11 @@
  * Thin orchestrator: init DB, run migrations, start channel adapters,
  * start delivery polls, start sweep, handle shutdown.
  */
-import { execFileSync } from 'child_process';
 import path from 'path';
 
-import { setSwapApprovalDelivery } from './builder-agent/approval.js';
-import { handleSwapConfirmationResponse, setDeadmanDelivery, startDeadman } from './builder-agent/deadman.js';
-import { handlePromoteResponse, setPromoteDelivery } from './builder-agent/promote.js';
-import { runBuilderAgentStartupSweep } from './builder-agent/startup.js';
-import {
-  applySwapFiles,
-  bailSwapForRetry,
-  captureSwapPreState,
-  commitSwap,
-  isHostLevelSwap,
-  parseSwapSummary,
-  requiresFullHostRebuild,
-} from './builder-agent/swap.js';
-import { removeDevWorktree } from './builder-agent/worktree.js';
 import { DATA_DIR } from './config.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
-import { getPendingSwap, updatePendingSwapStatus } from './db/pending-swaps.js';
 import { getMessagingGroupsByChannel, getMessagingGroupAgents } from './db/messaging-groups.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
@@ -71,12 +55,6 @@ async function main(): Promise<void> {
   const db = initDb(dbPath);
   runMigrations(db);
   log.info('Central DB ready', { path: dbPath });
-
-  // 1b. Builder-agent startup sweep — resumes any in-flight deadmans (from a
-  // host-level swap restart or an unexpected host crash) and cleans up
-  // orphan worktrees. Must run before channel adapters start so any
-  // rollback path-exit happens cleanly without partial startup state.
-  await runBuilderAgentStartupSweep();
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();
@@ -158,9 +136,6 @@ async function main(): Promise<void> {
   };
   setDeliveryAdapter(deliveryAdapter);
   setCredentialDeliveryAdapter(deliveryAdapter);
-  setSwapApprovalDelivery(deliveryAdapter);
-  setDeadmanDelivery(deliveryAdapter);
-  setPromoteDelivery(deliveryAdapter);
 
   // 5. Start delivery polls
   startActiveDeliveryPoll();
@@ -266,33 +241,6 @@ async function handleApprovalResponse(
   selectedOption: string,
   userId: string,
 ): Promise<void> {
-  // Builder-agent actions are handled out-of-band from the install_packages
-  // family: their session linkage is different and swap_confirmation doesn't
-  // use `payload.session_id` at all (the session is derived from the swap's
-  // originating_group_id). Dispatch them first.
-  if (approval.action === 'swap_confirmation') {
-    const payload = JSON.parse(approval.payload) as { swapRequestId?: string };
-    if (payload.swapRequestId) {
-      await handleSwapConfirmationResponse(approval.approval_id, payload.swapRequestId, selectedOption);
-    } else {
-      deletePendingApproval(approval.approval_id);
-    }
-    return;
-  }
-  if (approval.action === 'swap_request') {
-    await handleSwapRequestApproval(approval, selectedOption, userId);
-    return;
-  }
-  if (approval.action === 'promote_template') {
-    const payload = JSON.parse(approval.payload) as { swapRequestId?: string };
-    if (payload.swapRequestId) {
-      await handlePromoteResponse(approval.approval_id, payload.swapRequestId, selectedOption);
-    } else {
-      deletePendingApproval(approval.approval_id);
-    }
-    return;
-  }
-
   if (!approval.session_id) {
     deletePendingApproval(approval.approval_id);
     return;
@@ -400,144 +348,6 @@ async function handleApprovalResponse(
 
   deletePendingApproval(approval.approval_id);
   await wakeContainer(session);
-}
-
-/**
- * Handle an approver's response to a builder-agent `swap_request` card.
- * Approve → capture pre-state, apply files, commit, rebuild if needed,
- * restart, start deadman. Reject → teardown worktree + dev agent, notify.
- *
- * Kept separate from the install_packages / request_rebuild flow because:
- *   - Host-level swaps require `process.exit(0)` for supervisor respawn,
- *     which the other flows never do.
- *   - Swap state lives in `pending_swaps`, not `pending_approvals.payload`.
- */
-async function handleSwapRequestApproval(
-  approval: import('./types.js').PendingApproval,
-  selectedOption: string,
-  userId: string,
-): Promise<void> {
-  const payload = JSON.parse(approval.payload) as { swapRequestId?: string };
-  const swapRequestId = payload.swapRequestId;
-  if (!swapRequestId) {
-    deletePendingApproval(approval.approval_id);
-    return;
-  }
-  const swap = getPendingSwap(swapRequestId);
-  if (!swap) {
-    deletePendingApproval(approval.approval_id);
-    return;
-  }
-
-  // Notify the dev agent's session about the outcome. Uses the existing
-  // session for the dev agent group so the dev agent sees it as an inbound
-  // chat message with sender=system.
-  const { findSessionByAgentGroup } = await import('./db/sessions.js');
-  const devSession = findSessionByAgentGroup(swap.dev_agent_id);
-  const notifyDev = (text: string): void => {
-    if (!devSession) return;
-    writeSessionMessage(devSession.agent_group_id, devSession.id, {
-      id: `appr-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      kind: 'chat',
-      timestamp: new Date().toISOString(),
-      platformId: devSession.agent_group_id,
-      channelType: 'agent',
-      threadId: null,
-      content: JSON.stringify({ text, sender: 'system', senderId: 'system' }),
-    });
-  };
-
-  if (selectedOption !== 'approve') {
-    notifyDev(`Your proposed code change was rejected by ${userId}.`);
-    log.info('Swap request rejected', { requestId: swapRequestId, userId, selectedOption });
-    updatePendingSwapStatus(swapRequestId, 'rejected');
-    try {
-      removeDevWorktree(swapRequestId);
-    } catch (err) {
-      log.warn('Failed to remove worktree after rejection', { swapRequestId, err });
-    }
-    deletePendingApproval(approval.approval_id);
-    return;
-  }
-
-  log.info('Swap request approved — executing swap dance', { requestId: swapRequestId, userId });
-
-  // Swap execution. Any failure inside the try (captureSwapPreState,
-  // applySwapFiles, commitSwap, npm run build, startDeadman, restart
-  // orchestration) triggers a unified retryable-bail: revert any on-disk
-  // changes via git, reset the pending_swaps row back to pending_approval,
-  // leave the dev agent + worktree ALIVE so the dev agent can fix the
-  // issue and call request_swap again. Only explicit rejection tears
-  // down the dev agent.
-  try {
-    // 1. Capture pre-state (pre_swap_sha + DB snapshot).
-    await captureSwapPreState(swapRequestId);
-
-    // 2. Apply files from worktree to swap targets.
-    const touchedAbs = applySwapFiles(swapRequestId);
-
-    // 3. Commit the swap to main.
-    const summary = parseSwapSummary(swap);
-    commitSwap(swapRequestId, touchedAbs, summary.overallSummary || 'no summary');
-
-    // 4. Host-level rebuild. If the diff touched host code that compiles
-    // to dist/ (src/**, package.json, etc.), run `npm run build` now so
-    // the respawned host process runs the new compiled output rather
-    // than stale dist/. Group-level swaps need no rebuild — /app/src is
-    // runtime-compiled inside each container on spawn, skills/CLAUDE.md
-    // are mounted.
-    if (requiresFullHostRebuild(touchedAbs)) {
-      notifyDev('Code change applied and committed. Running `npm run build` before the host restart…');
-      try {
-        execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'inherit' });
-        log.info('npm run build succeeded for host-level swap', { requestId: swapRequestId });
-      } catch (buildErr) {
-        const msg = buildErr instanceof Error ? buildErr.message : String(buildErr);
-        // Wrap with context and re-throw so the outer catch runs the
-        // unified bail path.
-        throw new Error(`npm run build failed: ${msg}`);
-      }
-    }
-
-    // 5. Start the deadman. This sets status=awaiting_confirmation, posts
-    // the handshake card, and schedules the timer. For host-level swaps
-    // we then exit so the supervisor respawns the host on the new code;
-    // the startup sweep will resume this deadman after restart.
-    await startDeadman(swapRequestId);
-
-    if (isHostLevelSwap(swap)) {
-      notifyDev(
-        'Code change applied and committed. Triggering host restart so the new code takes effect. Awaiting user confirmation after restart.',
-      );
-      log.warn('Host-level swap triggering process exit for supervisor respawn', {
-        requestId: swapRequestId,
-      });
-      // Give log sinks and the deadman card delivery a moment to flush
-      // before exiting.
-      setTimeout(() => process.exit(0), 500);
-    } else {
-      // Group-level: kill the originating agent's active container so its
-      // next wake respawns it with the new per-group runner/skills mounted.
-      const originatingSession = findSessionByAgentGroup(swap.originating_group_id);
-      if (originatingSession) {
-        killContainer(originatingSession.id, 'swap applied');
-      }
-      notifyDev(
-        'Code change applied and committed. The originating agent will restart on its next message. Awaiting user confirmation.',
-      );
-    }
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    log.error('Swap execution failed — bailing for retry', { requestId: swapRequestId, err });
-    bailSwapForRetry(swapRequestId);
-    notifyDev(
-      `❌ Code change failed: ${errMsg}\n\n` +
-        `Your worktree and dev-agent group are still alive. Review the error above, ` +
-        `fix the issue in /worktree, commit, and call \`request_swap\` again to retry.`,
-    );
-  }
-
-  deletePendingApproval(approval.approval_id);
 }
 
 /** Graceful shutdown. */

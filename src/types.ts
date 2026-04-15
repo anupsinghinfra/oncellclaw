@@ -179,42 +179,6 @@ export interface PendingCredential {
   created_at: string;
 }
 
-// ── Pending swaps (central DB, builder-agent feature) ──
-
-/** Classification of a swap's diff — drives approval routing + warning UX. */
-export type SwapClassification = 'group' | 'host' | 'combined';
-
-/**
- * Swap lifecycle status. Transitions:
- *   pending_approval → awaiting_confirmation → (finalized | rolled_back | rejected)
- * `rejected` is also reachable directly from pending_approval.
- */
-export type SwapStatus = 'pending_approval' | 'awaiting_confirmation' | 'finalized' | 'rolled_back' | 'rejected';
-
-/**
- * Deadman handshake state — only meaningful while status = awaiting_confirmation.
- *   pending_restart  — swap applied, container/host restarting, message 1 not yet sent.
- *   message1_sent    — handshake prompt delivered, waiting for user confirm/rollback.
- */
-export type SwapHandshakeState = 'pending_restart' | 'message1_sent';
-
-export interface PendingSwap {
-  request_id: string;
-  dev_agent_id: string;
-  originating_group_id: string;
-  dev_branch: string;
-  commit_sha: string;
-  classification: SwapClassification;
-  status: SwapStatus;
-  summary_json: string;
-  pre_swap_sha: string | null;
-  db_snapshot_path: string | null;
-  deadman_started_at: string | null;
-  deadman_expires_at: string | null;
-  handshake_state: SwapHandshakeState | null;
-  created_at: string;
-}
-
 // ── Agent destinations (central DB) ──
 
 export interface AgentDestination {
