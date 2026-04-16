@@ -35,7 +35,7 @@ import './telegram.js';
 // import './webex.js';
 
 // imessage
-// import './imessage.js';
+import './imessage.js';
 
 // gmail (native, no Chat SDK)
 

@@ -31,11 +31,21 @@ npm run build
 
 ### Local Mode (macOS)
 
-Requirements: macOS with Full Disk Access granted to your terminal/Node.js process.
+Requirements: macOS with Full Disk Access granted to the Node.js binary.
 
-1. Go to **System Settings** > **Privacy & Security** > **Full Disk Access**
-2. Add your terminal app (Terminal, iTerm2, etc.) or the Node.js binary
-3. The adapter reads directly from the iMessage database on disk
+The Node binary path is buried deep (e.g. `~/.nvm/versions/node/v22.x.x/bin/node`). To make it easy, open the folder in Finder so the user can drag the file into System Settings:
+
+```bash
+open "$(dirname "$(which node)")"
+```
+
+Then tell the user:
+
+1. Open **System Settings** > **Privacy & Security** > **Full Disk Access**
+2. Click **+**, then drag the `node` file from the Finder window that just opened
+3. Toggle it on
+
+Stop and wait for the user to confirm before continuing.
 
 ### Remote Mode (Photon API)
 
