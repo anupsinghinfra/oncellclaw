@@ -6,7 +6,7 @@
  * getMessage fallback, outgoing queue, group metadata cache, LID mapping,
  * reconnection with backoff.
  *
- * Auth credentials persist in data/whatsapp-auth/. On first run:
+ * Auth credentials persist in store/auth/. On first run:
  * - If WHATSAPP_PHONE_NUMBER is set → pairing code (printed to log)
  * - Otherwise → QR code (printed to log)
  * Subsequent restarts reuse the saved session automatically.
@@ -24,7 +24,6 @@ import {
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
   useMultiFileAuthState,
-  proto,
 } from '@whiskeysockets/baileys';
 import type { GroupMetadata, WAMessageKey, WAMessage, WASocket } from '@whiskeysockets/baileys';
 
@@ -46,8 +45,10 @@ import type {
 // Fixed in Baileys 7.x but not backported. Without this, pairing codes fail with
 // "couldn't link device" because WhatsApp receives an invalid platform ID.
 // Must use createRequire — ESM `import *` creates a read-only namespace.
+// proto is not available as a named ESM export — use createRequire (same as v1)
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
+const { proto } = _require('@whiskeysockets/baileys') as { proto: any };
 try {
   const _generics = _require('@whiskeysockets/baileys/lib/Utils/generics') as Record<string, unknown>;
   _generics.getPlatformId = (browser: string): string => {
@@ -63,7 +64,7 @@ try {
 
 const baileysLogger = pino({ level: 'silent' });
 
-const AUTH_DIR_NAME = 'whatsapp-auth';
+const AUTH_DIR = path.join(process.cwd(), 'store', 'auth');
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const GROUP_METADATA_CACHE_TTL_MS = 60_000; // 1 min for outbound sends
 const SENT_MESSAGE_CACHE_MAX = 256;
@@ -148,13 +149,13 @@ function buildMediaMessage(data: Buffer, filename: string, ext: string, caption?
 
 registerChannelAdapter('whatsapp', {
   factory: () => {
-    const env = readEnvFile(['WHATSAPP_PHONE_NUMBER']);
+    const env = readEnvFile(['WHATSAPP_PHONE_NUMBER', 'WHATSAPP_ENABLED']);
     const phoneNumber = env.WHATSAPP_PHONE_NUMBER;
-    const authDir = path.join(DATA_DIR, AUTH_DIR_NAME);
+    const authDir = AUTH_DIR;
 
-    // Skip if no existing auth and no phone number for pairing
+    // Skip if no existing auth, no phone number for pairing, and not explicitly enabled (QR mode)
     const hasAuth = fs.existsSync(path.join(authDir, 'creds.json'));
-    if (!hasAuth && !phoneNumber) return null;
+    if (!hasAuth && !phoneNumber && !env.WHATSAPP_ENABLED) return null;
 
     fs.mkdirSync(authDir, { recursive: true });
 
@@ -173,7 +174,7 @@ registerChannelAdapter('whatsapp', {
     let flushing = false;
 
     // Sent message cache for retry/re-encrypt requests
-    const sentMessageCache = new Map<string, proto.IMessage>();
+    const sentMessageCache = new Map<string, any>();
 
     // Group metadata cache with TTL
     const groupMetadataCache = new Map<string, { metadata: GroupMetadata; expiresAt: number }>();
@@ -197,7 +198,7 @@ registerChannelAdapter('whatsapp', {
     let rejectFirstOpen: ((err: Error) => void) | undefined;
 
     // Pairing code file for the setup skill to poll
-    const pairingCodeFile = path.join(DATA_DIR, 'whatsapp-pairing-code.txt');
+    const pairingCodeFile = path.join(process.cwd(), 'store', 'pairing-code.txt');
 
     // --- Helpers ---
 

@@ -310,9 +310,7 @@ export async function waitForPairing(code: string, opts: WaitForPairingOptions =
           ?.slice()
           .reverse()
           .find((a) => !a.matched);
-        reject(new Error(
-          `Pairing ${code} invalidated by wrong code${lastMiss ? ` (${lastMiss.candidate})` : ''}`
-        ));
+        reject(new Error(`Pairing ${code} invalidated by wrong code${lastMiss ? ` (${lastMiss.candidate})` : ''}`));
         return;
       }
     };

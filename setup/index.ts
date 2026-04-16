@@ -15,6 +15,7 @@ const STEPS: Record<
   groups: () => import('./groups.js'),
   register: () => import('./register.js'),
   'pair-telegram': () => import('./pair-telegram.js'),
+  'whatsapp-auth': () => import('./whatsapp-auth.js'),
   mounts: () => import('./mounts.js'),
   service: () => import('./service.js'),
   verify: () => import('./verify.js'),

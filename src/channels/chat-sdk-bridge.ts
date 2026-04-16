@@ -181,7 +181,12 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // (is_group=0 short-circuits the per-thread escalation).
       chat.onDirectMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        log.info('Inbound DM received', { adapter: adapter.name, channelId, sender: (message.author as any)?.fullName ?? (message.author as any)?.userId ?? 'unknown', threadId: thread.id });
+        log.info('Inbound DM received', {
+          adapter: adapter.name,
+          channelId,
+          sender: (message.author as any)?.fullName ?? (message.author as any)?.userId ?? 'unknown',
+          threadId: thread.id,
+        });
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
         await thread.subscribe();
       });

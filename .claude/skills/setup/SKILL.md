@@ -15,7 +15,7 @@ Use `AskUserQuestion` with these options:
 2. **No thanks** — description: "I'll approve each command individually as it comes up."
 3. **Show me the list first** — description: "Show me exactly which commands will be pre-approved before I decide."
 
-If they pick option 1: read `.claude/skills/setup/setup-permissions.json` and use the Skill tool to invoke `update-config` with: "Add these permissions to the project settings allow list: <paste the JSON array>".
+If they pick option 1: read `.claude/skills/setup/setup-permissions.json`, then read the project settings file at `.claude/settings.json` (create it if it doesn't exist with `{}`), and directly edit it to add/merge the permissions into the `permissions.allow` array. Do NOT use the `update-config` skill.
 
 If they pick option 3: read and display `.claude/skills/setup/setup-permissions.json`, then re-ask with just options 1 and 2.
 

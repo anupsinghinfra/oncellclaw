@@ -314,4 +314,3 @@ function safeParseContent(raw: string): { text?: string; sender?: string; sender
     return { text: raw };
   }
 }
-
