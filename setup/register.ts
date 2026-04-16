@@ -49,7 +49,7 @@ function parseArgs(args: string[]): RegisterArgs {
     trigger: '',
     folder: '',
     channel: 'discord',
-    requiresTrigger: true,
+    requiresTrigger: false,
     assistantName: 'Andy',
     sessionMode: 'shared',
   };

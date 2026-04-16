@@ -7,6 +7,7 @@ import { migration003 } from './003-pending-approvals.js';
 import { migration004 } from './004-agent-destinations.js';
 import { migration005 } from './005-pending-credentials.js';
 import { migration007 } from './007-pending-approvals-title-options.js';
+import { migration008 } from './008-dropped-messages.js';
 
 export interface Migration {
   version: number;
@@ -14,7 +15,7 @@ export interface Migration {
   up: (db: Database.Database) => void;
 }
 
-const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration007];
+const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration007, migration008];
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`

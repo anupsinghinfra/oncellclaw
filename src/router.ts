@@ -26,6 +26,7 @@ import { log } from './log.js';
 import { resolveSession, writeSessionMessage } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
 import { getSession } from './db/sessions.js';
+import { recordDroppedMessage } from './db/dropped-messages.js';
 import type { MessagingGroup, MessagingGroupAgent } from './types.js';
 
 function generateId(): string {
@@ -94,6 +95,16 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       channelType: event.channelType,
       platformId: event.platformId,
     });
+    const parsed = safeParseContent(event.message.content);
+    recordDroppedMessage({
+      channel_type: event.channelType,
+      platform_id: event.platformId,
+      user_id: parsed.senderId ?? null,
+      sender_name: parsed.sender ?? null,
+      reason: 'no_agent_wired',
+      messaging_group_id: mg.id,
+      agent_group_id: null,
+    });
     return;
   }
 
@@ -104,6 +115,16 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       messagingGroupId: mg.id,
       channelType: event.channelType,
     });
+    const parsed = safeParseContent(event.message.content);
+    recordDroppedMessage({
+      channel_type: event.channelType,
+      platform_id: event.platformId,
+      user_id: parsed.senderId ?? null,
+      sender_name: parsed.sender ?? null,
+      reason: 'no_trigger_match',
+      messaging_group_id: mg.id,
+      agent_group_id: null,
+    });
     return;
   }
 
@@ -111,7 +132,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   if (mg.unknown_sender_policy !== 'public') {
     const gate = enforceAccess(userId, match.agent_group_id);
     if (!gate.allowed) {
-      handleUnknownSender(mg, userId, match.agent_group_id, gate.reason);
+      handleUnknownSender(mg, userId, match.agent_group_id, gate.reason, event);
       return;
     }
   }
@@ -239,7 +260,19 @@ function handleUnknownSender(
   userId: string | null,
   agentGroupId: string,
   accessReason: string,
+  event: InboundEvent,
 ): void {
+  const parsed = safeParseContent(event.message.content);
+  const dropRecord = {
+    channel_type: event.channelType,
+    platform_id: event.platformId,
+    user_id: userId,
+    sender_name: parsed.sender ?? null,
+    reason: `unknown_sender_${mg.unknown_sender_policy}`,
+    messaging_group_id: mg.id,
+    agent_group_id: agentGroupId,
+  };
+
   // In 'strict' mode we just drop. In 'request_approval' mode we log and
   // queue an approval to add the sender as a member — the approval flow
   // itself is a follow-up (needs an action kind like `add_group_member`).
@@ -250,18 +283,18 @@ function handleUnknownSender(
       userId,
       accessReason,
     });
+    recordDroppedMessage(dropRecord);
     return;
   }
 
   if (mg.unknown_sender_policy === 'request_approval') {
-    // Placeholder: drop for now but log as a request. Follow-up wires this
-    // into the approval flow (request admin-of-group / owner to add user).
     log.info('MESSAGE DROPPED — unknown sender (approval flow TODO)', {
       messagingGroupId: mg.id,
       agentGroupId,
       userId,
       accessReason,
     });
+    recordDroppedMessage(dropRecord);
     return;
   }
 
@@ -269,3 +302,12 @@ function handleUnknownSender(
   // Ensure the membership invariant isn't in an odd state.
   void isMember;
 }
+
+function safeParseContent(raw: string): { text?: string; sender?: string; senderId?: string } {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { text: raw };
+  }
+}
+
