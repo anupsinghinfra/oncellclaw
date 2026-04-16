@@ -7,6 +7,8 @@ description: Deploy apps to Vercel. Use when asked to deploy, ship, or publish a
 
 You can deploy web applications to Vercel using the `vercel` CLI.
 
+**HARD RULE: You MUST NOT write HTML, CSS, or JavaScript yourself. When asked to build a website or web app, you MUST delegate to a Frontend Engineer subagent (see "Building Websites" section below). This is not optional. Violation wastes your context window on code that belongs in a separate agent.**
+
 ## Auth
 
 Auth is handled by OneCLI — the HTTPS_PROXY injects the real token into API requests automatically. The Vercel CLI requires a token to be present to skip its local credential check, so **always pass `--token placeholder`** on every command. OneCLI replaces this with the real token at the proxy level.
@@ -100,7 +102,9 @@ echo "value" | vercel env add VAR_NAME production --token placeholder
 
 ## Building Websites — Delegate to Frontend Engineer
 
-When asked to **build, create, or redesign** a website or web app, do NOT build it yourself. Spin up a dedicated frontend-engineer agent that has full context for the job:
+When asked to **build, create, or redesign** a website or web app, do NOT build it yourself. You MUST delegate to a Frontend Engineer agent. This is a two-step process and **both steps are required**:
+
+**Step 1 — Create the agent** (skip if you already have a "frontend-engineer" destination):
 
 ```
 create_agent({
@@ -109,18 +113,15 @@ create_agent({
 })
 ```
 
-Then hand off the task:
+**Step 2 — Send the build request** (MANDATORY — do this immediately after step 1):
 
 ```
-send_message(to: "Frontend Engineer", text: "<what to build, design requirements, any assets or content>")
+send_message(to: "frontend-engineer", text: "<full description of what to build, including design requirements, content, colors, and any assets>")
 ```
 
-The frontend agent will:
-1. Build the site following pro frontend standards
-2. Test visually with `agent-browser` (screenshots as proof)
-3. Deploy to Vercel using `vercel deploy --yes --prod --token placeholder`
-4. Verify the production URL in browser
-5. Send back the live URL + screenshots
+⚠️ **CRITICAL**: If you skip step 2, nothing happens. The agent exists but has no work. You MUST send the message. Do NOT tell the user "it's working on it" until you have actually called send_message.
+
+After sending, tell the user you've handed it off and will share the result when it comes back. The Frontend Engineer will send you the live URL + screenshots when done — forward those to the user.
 
 **When to delegate vs do it yourself:**
 - **Delegate**: building new sites, redesigns, multi-page apps, anything that needs visual testing

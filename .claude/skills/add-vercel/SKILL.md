@@ -85,58 +85,73 @@ Verify:
 onecli secrets list | grep -i vercel
 ```
 
-## Phase 4: Install Vercel CLI in Container
+### Assign the secret to all agents
 
-The Vercel CLI needs to be installed in the agent container image. The agent does this via the self-modification flow:
+OneCLI uses selective secret mode — secrets must be explicitly assigned to each agent. Get the Vercel secret ID from the output above, then assign it to every agent:
 
-1. Agent calls `install_packages(npm: ["vercel"], reason: "Vercel CLI for deploying web applications")`
-2. Admin approves the installation
-3. Agent calls `request_rebuild(reason: "Apply Vercel CLI installation")`
-4. Admin approves the rebuild
-
-If you're setting this up from the host, tell the user to message their agent and ask it to install the Vercel CLI. The agent will use the `vercel-cli` container skill to guide itself.
-
-**Alternative for base image:** If you want Vercel CLI available to ALL agent groups without per-group rebuilds, add it to `container/Dockerfile`:
-
-```dockerfile
-RUN npm install -g vercel
+```bash
+# For each agent, add the Vercel secret to its assigned secrets list.
+# First get current assignments, then set them with the new secret appended.
+VERCEL_SECRET_ID=$(onecli secrets list 2>/dev/null | grep -B2 "Vercel" | grep '"id"' | head -1 | sed 's/.*"id": "//;s/".*//')
+for agent in $(onecli agents list 2>/dev/null | grep '"id"' | sed 's/.*"id": "//;s/".*//'); do
+  CURRENT=$(onecli agents secrets --id "$agent" 2>/dev/null | grep '"' | grep -v hint | grep -v data | sed 's/.*"//;s/".*//' | tr '\n' ',' | sed 's/,$//')
+  onecli agents set-secrets --id "$agent" --secret-ids "${CURRENT:+$CURRENT,}$VERCEL_SECRET_ID"
+done
 ```
 
-Then rebuild the base image:
+## Phase 4: Ensure Vercel CLI in Container Image
+
+Check if `vercel` is already in the Dockerfile:
+
+```bash
+grep -q 'vercel' container/Dockerfile && echo "PRESENT" || echo "MISSING"
+```
+
+If `MISSING`, add `vercel` to the global npm install line in `container/Dockerfile`, then rebuild:
 
 ```bash
 ./container/build.sh
 ```
 
-## Phase 5: Verify
+If `PRESENT`, skip — no rebuild needed.
 
-### Test authentication
+## Phase 5: Patch Agent CLAUDE.md Files
 
-Have the agent run:
+Append the frontend delegation rule to every existing agent group's CLAUDE.md. This ensures the agent treats delegation as a hard rule, not a suggestion.
 
 ```bash
-vercel whoami --token placeholder
+for claudemd in groups/*/CLAUDE.md; do
+  if ! grep -q "Frontend Delegation" "$claudemd" 2>/dev/null; then
+    cat >> "$claudemd" << 'PATCH'
+
+## Frontend Delegation (Vercel)
+
+You MUST NOT write HTML, CSS, or JavaScript yourself. When asked to build a website or web app, delegate to a Frontend Engineer subagent using create_agent then send_message. Both calls are required before telling the user anything is happening.
+PATCH
+    echo "Patched: $claudemd"
+  fi
+done
 ```
 
-This should print the Vercel account name. If it fails:
-- Check OneCLI is running: `onecli version`
-- Check the secret exists: `onecli secrets list | grep -i vercel`
-- Check the credential hostPattern matches `api.vercel.com`
+## Phase 6: Sync Skills to Running Agent Groups
 
-### Test deployment
-
-Have the agent create and deploy a minimal test project:
+Container skills are copied once at group creation and not auto-synced. After installing or updating a container skill, sync it to all existing agent groups:
 
 ```bash
-mkdir -p /tmp/vercel-test && echo '<!DOCTYPE html><html><body><h1>NanoClaw Vercel Test</h1></body></html>' > /tmp/vercel-test/index.html && vercel deploy --yes --prod --token placeholder --cwd /tmp/vercel-test
+for session_dir in data/v2-sessions/ag-*; do
+  if [ -d "$session_dir/.claude-shared/skills" ]; then
+    rsync -a container/skills/ "$session_dir/.claude-shared/skills/"
+    echo "Synced skills to: $session_dir"
+  fi
+done
 ```
 
-The output should include a live URL. Open it to verify the deployment worked.
+## Phase 7: Restart Running Containers
 
-Clean up the test project after verifying:
+Stop all running agent containers so they pick up the new skills and CLAUDE.md changes:
 
 ```bash
-rm -rf /tmp/vercel-test
+docker ps --format "{{.ID}} {{.Names}}" | grep nanoclaw-v2 | awk '{print $1}' | xargs -r docker stop
 ```
 
 ## Done
