@@ -143,6 +143,60 @@ export function resumeTask(db: Database.Database, taskId: string): void {
   ).run(taskId, taskId);
 }
 
+export interface TaskUpdate {
+  prompt?: string;
+  script?: string | null;
+  recurrence?: string | null;
+  processAfter?: string;
+}
+
+// Merges content JSON in-place so callers can update prompt/script without
+// clobbering other fields. Matches by id OR series_id so the live next
+// occurrence of a recurring task is updated, not just the completed row the
+// agent last saw. Returns the number of rows touched.
+export function updateTask(db: Database.Database, taskId: string, update: TaskUpdate): number {
+  const rows = db
+    .prepare(
+      "SELECT id, content FROM messages_in WHERE (id = ? OR series_id = ?) AND kind = 'task' AND status IN ('pending', 'paused')",
+    )
+    .all(taskId, taskId) as Array<{ id: string; content: string }>;
+
+  if (rows.length === 0) return 0;
+
+  const setProcessAfter = update.processAfter !== undefined;
+  const setRecurrence = update.recurrence !== undefined;
+  const mergeContent = update.prompt !== undefined || update.script !== undefined;
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      let content = row.content;
+      if (mergeContent) {
+        const parsed = JSON.parse(row.content) as Record<string, unknown>;
+        if (update.prompt !== undefined) parsed.prompt = update.prompt;
+        if (update.script !== undefined) parsed.script = update.script;
+        content = JSON.stringify(parsed);
+      }
+
+      // Build SET clause dynamically so callers can update fields independently.
+      const sets: string[] = ['content = ?'];
+      const params: unknown[] = [content];
+      if (setProcessAfter) {
+        sets.push('process_after = ?');
+        params.push(update.processAfter);
+      }
+      if (setRecurrence) {
+        sets.push('recurrence = ?');
+        params.push(update.recurrence);
+      }
+      params.push(row.id);
+
+      db.prepare(`UPDATE messages_in SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    }
+  });
+  tx();
+  return rows.length;
+}
+
 export function countDueMessages(db: Database.Database): number {
   return (
     db

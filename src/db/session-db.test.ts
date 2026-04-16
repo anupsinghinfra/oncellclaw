@@ -17,6 +17,7 @@ import {
   cancelTask,
   pauseTask,
   resumeTask,
+  updateTask,
   getCompletedRecurring,
   migrateMessagesInTable,
   type RecurringMessage,
@@ -132,6 +133,127 @@ describe('cancelTask / pauseTask / resumeTask series matching', () => {
     const followUp = db.prepare("SELECT status FROM messages_in WHERE id = 'task-next'").get() as { status: string };
     expect(followUp.status).toBe('pending');
     db.close();
+  });
+});
+
+describe('updateTask', () => {
+  it('merges supplied fields into content JSON without clobbering others', () => {
+    const db = freshDb();
+    insertTask(db, {
+      id: 'task-1',
+      processAfter: new Date().toISOString(),
+      recurrence: null,
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'old', script: 'echo old', extra: 'keep me' }),
+    });
+
+    const touched = updateTask(db, 'task-1', { prompt: 'new' });
+    expect(touched).toBe(1);
+
+    const row = db.prepare('SELECT content FROM messages_in WHERE id = ?').get('task-1') as { content: string };
+    const parsed = JSON.parse(row.content);
+    expect(parsed.prompt).toBe('new');
+    expect(parsed.script).toBe('echo old');
+    expect(parsed.extra).toBe('keep me');
+  });
+
+  it('updates recurrence and process_after when supplied', () => {
+    const db = freshDb();
+    insertTask(db, {
+      id: 'task-1',
+      processAfter: '2026-01-01T00:00:00Z',
+      recurrence: '0 9 * * *',
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'p' }),
+    });
+
+    updateTask(db, 'task-1', { recurrence: '0 18 * * *', processAfter: '2026-02-01T00:00:00Z' });
+
+    const row = db.prepare('SELECT recurrence, process_after FROM messages_in WHERE id = ?').get('task-1') as {
+      recurrence: string;
+      process_after: string;
+    };
+    expect(row.recurrence).toBe('0 18 * * *');
+    expect(row.process_after).toBe('2026-02-01T00:00:00Z');
+  });
+
+  it('clears recurrence when null is passed', () => {
+    const db = freshDb();
+    insertTask(db, {
+      id: 'task-1',
+      processAfter: '2026-01-01T00:00:00Z',
+      recurrence: '0 9 * * *',
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'p' }),
+    });
+
+    updateTask(db, 'task-1', { recurrence: null });
+
+    const row = db.prepare('SELECT recurrence FROM messages_in WHERE id = ?').get('task-1') as {
+      recurrence: string | null;
+    };
+    expect(row.recurrence).toBeNull();
+  });
+
+  it('reaches the live follow-up via series_id when called with the original id', () => {
+    const db = freshDb();
+    insertTask(db, {
+      id: 'task-orig',
+      processAfter: new Date().toISOString(),
+      recurrence: '0 9 * * *',
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'old' }),
+    });
+    db.prepare("UPDATE messages_in SET status = 'completed' WHERE id = 'task-orig'").run();
+
+    const msg: RecurringMessage = {
+      id: 'task-orig',
+      kind: 'task',
+      content: JSON.stringify({ prompt: 'old' }),
+      recurrence: '0 9 * * *',
+      process_after: null,
+      platform_id: null,
+      channel_type: null,
+      thread_id: null,
+      series_id: 'task-orig',
+    };
+    insertRecurrence(db, msg, 'task-next', new Date(Date.now() + 86400000).toISOString());
+
+    const touched = updateTask(db, 'task-orig', { prompt: 'new' });
+    // Only the live follow-up should be touched — completed rows are excluded.
+    expect(touched).toBe(1);
+
+    const live = db.prepare("SELECT content FROM messages_in WHERE id = 'task-next'").get() as { content: string };
+    expect(JSON.parse(live.content).prompt).toBe('new');
+
+    // Original (completed) row left alone.
+    const orig = db.prepare("SELECT content FROM messages_in WHERE id = 'task-orig'").get() as { content: string };
+    expect(JSON.parse(orig.content).prompt).toBe('old');
+  });
+
+  it('returns 0 when no live task matches', () => {
+    const db = freshDb();
+    insertTask(db, {
+      id: 'task-1',
+      processAfter: new Date().toISOString(),
+      recurrence: null,
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'p' }),
+    });
+    db.prepare("UPDATE messages_in SET status = 'completed' WHERE id = 'task-1'").run();
+
+    const touched = updateTask(db, 'task-1', { prompt: 'new' });
+    expect(touched).toBe(0);
   });
 });
 

@@ -33,6 +33,7 @@ import {
   cancelTask,
   pauseTask,
   resumeTask,
+  updateTask,
 } from './db/session-db.js';
 import { log } from './log.js';
 import { normalizeOptions, type RawOption } from './channels/ask-question.js';
@@ -653,6 +654,25 @@ async function handleSystemAction(
       const taskId = content.taskId as string;
       resumeTask(inDb, taskId);
       log.info('Task resumed', { taskId });
+      break;
+    }
+
+    case 'update_task': {
+      const taskId = content.taskId as string;
+      const update: Parameters<typeof updateTask>[2] = {};
+      if (typeof content.prompt === 'string') update.prompt = content.prompt;
+      if (typeof content.processAfter === 'string') update.processAfter = content.processAfter;
+      if (content.recurrence === null || typeof content.recurrence === 'string') {
+        update.recurrence = content.recurrence as string | null;
+      }
+      if (content.script === null || typeof content.script === 'string') {
+        update.script = content.script as string | null;
+      }
+      const touched = updateTask(inDb, taskId, update);
+      log.info('Task updated', { taskId, touched, fields: Object.keys(update) });
+      if (touched === 0) {
+        notifyAgent(session, `update_task: no live task matched id "${taskId}".`);
+      }
       break;
     }
 

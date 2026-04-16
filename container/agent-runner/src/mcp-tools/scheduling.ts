@@ -81,25 +81,46 @@ export const scheduleTask: McpToolDefinition = {
 export const listTasks: McpToolDefinition = {
   tool: {
     name: 'list_tasks',
-    description: 'List scheduled and pending tasks.',
+    description:
+      'List scheduled tasks. Returns one row per series — the live (pending or paused) occurrence. The id shown is the series id, which is what update_task / cancel_task / pause_task / resume_task expect.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        status: { type: 'string', description: 'Filter by status: pending, processing, completed, paused (default: all non-completed)' },
+        status: { type: 'string', description: 'Filter by status: pending or paused (default: both)' },
       },
     },
   },
   async handler(args) {
     const status = args.status as string | undefined;
     const db = getInboundDb();
+    // One row per series — the live (pending or paused) occurrence. Recurring
+    // tasks accumulate one completed row per firing plus one live follow-up;
+    // exposing the whole pile to the agent is noisy and confuses task identity
+    // ("which id do I cancel?"). The series_id is the stable handle.
+    //
+    // SQLite quirk: when MAX(seq) appears in the SELECT list of a GROUP BY
+    // query, the bare columns take values from the row that contains that max
+    // — that's how we pick "the latest live row per series" in one pass.
     let rows;
     if (status) {
       rows = db
-        .prepare("SELECT id, status, process_after, recurrence, content FROM messages_in WHERE kind = 'task' AND status = ? ORDER BY process_after ASC")
+        .prepare(
+          `SELECT series_id AS id, status, process_after, recurrence, content, MAX(seq) AS _seq
+             FROM messages_in
+            WHERE kind = 'task' AND status = ?
+            GROUP BY series_id
+            ORDER BY process_after ASC`,
+        )
         .all(status);
     } else {
       rows = db
-        .prepare("SELECT id, status, process_after, recurrence, content FROM messages_in WHERE kind = 'task' AND status NOT IN ('completed') ORDER BY process_after ASC")
+        .prepare(
+          `SELECT series_id AS id, status, process_after, recurrence, content, MAX(seq) AS _seq
+             FROM messages_in
+            WHERE kind = 'task' AND status IN ('pending', 'paused')
+            GROUP BY series_id
+            ORDER BY process_after ASC`,
+        )
         .all();
     }
 
@@ -197,4 +218,51 @@ export const resumeTask: McpToolDefinition = {
   },
 };
 
-export const schedulingTools: McpToolDefinition[] = [scheduleTask, listTasks, cancelTask, pauseTask, resumeTask];
+export const updateTask: McpToolDefinition = {
+  tool: {
+    name: 'update_task',
+    description:
+      'Update a scheduled task. Pass the series id from list_tasks. Any field omitted is left unchanged. Use this instead of cancel + reschedule when adjusting an existing task.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        taskId: { type: 'string', description: 'Series id of the task to update (as shown by list_tasks)' },
+        prompt: { type: 'string', description: 'New task prompt (optional)' },
+        recurrence: {
+          type: 'string',
+          description: 'New cron expression (optional). Pass empty string to clear and make the task one-shot.',
+        },
+        processAfter: { type: 'string', description: 'New ISO timestamp for the next run (optional)' },
+        script: {
+          type: 'string',
+          description: 'New pre-agent script (optional). Pass empty string to clear.',
+        },
+      },
+      required: ['taskId'],
+    },
+  },
+  async handler(args) {
+    const taskId = args.taskId as string;
+    if (!taskId) return err('taskId is required');
+
+    const update: Record<string, unknown> = { taskId };
+    if (typeof args.prompt === 'string') update.prompt = args.prompt;
+    if (typeof args.processAfter === 'string') update.processAfter = args.processAfter;
+    // Empty string clears recurrence/script; undefined leaves them as-is.
+    if (typeof args.recurrence === 'string') update.recurrence = args.recurrence === '' ? null : args.recurrence;
+    if (typeof args.script === 'string') update.script = args.script === '' ? null : args.script;
+
+    if (Object.keys(update).length === 1) return err('at least one field to update is required');
+
+    writeMessageOut({
+      id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'system',
+      content: JSON.stringify({ action: 'update_task', ...update }),
+    });
+
+    log(`update_task: ${taskId}`);
+    return ok(`Task update requested: ${taskId}`);
+  },
+};
+
+export const schedulingTools: McpToolDefinition[] = [scheduleTask, listTasks, updateTask, cancelTask, pauseTask, resumeTask];

@@ -609,7 +609,7 @@ List active scheduled/recurring tasks.
 
 Implementation: query `messages_in WHERE recurrence IS NOT NULL AND status != 'failed'`.
 
-#### cancel_task / pause_task / resume_task
+#### cancel_task / pause_task / resume_task / update_task
 
 Modify a scheduled task.
 
@@ -620,9 +620,10 @@ Modify a scheduled task.
 }
 // pause_task: set status = 'paused' (new status value for recurring tasks)
 // resume_task: set status = 'pending'
+// update_task: merge { prompt?, recurrence?, processAfter?, script? } into the live row
 ```
 
-Implementation: update the messages_in row directly.
+Implementation: cancel/pause/resume update the live row(s) directly. update_task is sent as a system action — the host reads current content, merges supplied fields, and writes back. All four match by `(id = ? OR series_id = ?) AND kind='task' AND status IN ('pending','paused')`, so they reach the live next occurrence of a recurring task even when the agent passes the original (now-completed) id.
 
 #### register_agent_group
 
