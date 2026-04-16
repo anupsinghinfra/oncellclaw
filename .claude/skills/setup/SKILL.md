@@ -63,13 +63,7 @@ Run `npx tsx setup/index.ts --step environment` and parse the status block.
 
 ### OpenClaw Migration Detection
 
-Check for an existing OpenClaw installation:
-
-```bash
-ls -d ~/.openclaw 2>/dev/null || ls -d ~/.clawdbot 2>/dev/null
-```
-
-If a directory is found, AskUserQuestion:
+If OPENCLAW_PATH is not `none` from the environment check above, AskUserQuestion:
 
 1. **Migrate now** — "Import identity, credentials, and settings from OpenClaw before continuing setup."
 2. **Fresh start** — "Skip migration and set up NanoClaw from scratch."
