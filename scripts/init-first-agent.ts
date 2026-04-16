@@ -50,9 +50,7 @@ interface Args {
 }
 
 const DEFAULT_WELCOME =
-  'System instruction: please send a short, friendly welcome message to the user. ' +
-  'Introduce yourself as their NanoClaw agent, confirm the channel is working, and invite them to chat. ' +
-  'Keep it under three sentences.';
+  'System instruction: run /welcome to introduce yourself to the user on this new channel.';
 
 function parseArgs(argv: string[]): Args {
   const out: Partial<Args> = {};
