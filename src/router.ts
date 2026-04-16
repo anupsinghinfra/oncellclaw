@@ -144,8 +144,12 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   // wiring says, because "thread = session" is the first-class model for
   // threaded platforms. Agent-shared is preserved because it expresses a
   // cross-channel intent the adapter can't know about.
+  //
+  // Exception: DMs (is_group=0). Sub-threads within a DM are a UX affordance,
+  // not a conversation boundary — treat the whole DM as one session and let
+  // threadId flow through to delivery so replies land in the right sub-thread.
   let effectiveSessionMode = match.session_mode;
-  if (adapter && adapter.supportsThreads && effectiveSessionMode !== 'agent-shared') {
+  if (adapter && adapter.supportsThreads && effectiveSessionMode !== 'agent-shared' && mg.is_group !== 0) {
     effectiveSessionMode = 'per-thread';
   }
   const { session, created } = resolveSession(match.agent_group_id, mg.id, event.threadId, effectiveSessionMode);

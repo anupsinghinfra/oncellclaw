@@ -249,13 +249,18 @@ async function processQuery(query: AgentQuery, routing: RoutingContext, config: 
   const pollHandle = setInterval(() => {
     if (done) return;
 
-    // Skip system messages (MCP tool responses) and admin commands (need fresh query)
+    // Skip system messages (MCP tool responses) and admin commands (need fresh query).
+    // Also defer messages whose thread_id differs from the active turn's routing
+    // — mixing threads into one streaming turn would send the reply to the wrong
+    // thread because `routing` is captured at turn start. The next turn will pick
+    // them up with fresh routing.
     const newMessages = getPendingMessages().filter((m) => {
       if (m.kind === 'system') return false;
       if (m.kind === 'chat' || m.kind === 'chat-sdk') {
         const cmd = categorizeMessage(m);
         if (cmd.category === 'admin') return false;
       }
+      if ((m.thread_id ?? null) !== (routing.threadId ?? null)) return false;
       return true;
     });
     if (newMessages.length > 0) {

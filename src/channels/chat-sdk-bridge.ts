@@ -175,11 +175,14 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         await thread.subscribe();
       });
 
-      // DMs — always forward + subscribe
+      // DMs — always forward + subscribe. Pass thread.id so sub-thread
+      // context carries through to delivery (Slack users can open threads
+      // inside a DM). The router collapses DM sub-threads to one session
+      // (is_group=0 short-circuits the per-thread escalation).
       chat.onDirectMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
         log.info('Inbound DM received', { adapter: adapter.name, channelId, sender: (message.author as any)?.fullName ?? (message.author as any)?.userId ?? 'unknown', threadId: thread.id });
-        await setupConfig.onInbound(channelId, null, await messageToInbound(message));
+        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
         await thread.subscribe();
       });
 
