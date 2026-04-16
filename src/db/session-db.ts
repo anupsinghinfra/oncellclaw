@@ -92,8 +92,8 @@ export function insertMessage(
   },
 ): void {
   db.prepare(
-    `INSERT INTO messages_in (id, seq, kind, timestamp, status, platform_id, channel_type, thread_id, content, process_after, recurrence)
-     VALUES (@id, @seq, @kind, @timestamp, 'pending', @platformId, @channelType, @threadId, @content, @processAfter, @recurrence)`,
+    `INSERT INTO messages_in (id, seq, kind, timestamp, status, platform_id, channel_type, thread_id, content, process_after, recurrence, series_id)
+     VALUES (@id, @seq, @kind, @timestamp, 'pending', @platformId, @channelType, @threadId, @content, @processAfter, @recurrence, @id)`,
   ).run({
     ...message,
     seq: nextEvenSeq(db),
@@ -113,30 +113,34 @@ export function insertTask(
   },
 ): void {
   db.prepare(
-    `INSERT INTO messages_in (id, seq, timestamp, status, tries, process_after, recurrence, kind, platform_id, channel_type, thread_id, content)
-     VALUES (@id, @seq, datetime('now'), 'pending', 0, @processAfter, @recurrence, 'task', @platformId, @channelType, @threadId, @content)`,
+    `INSERT INTO messages_in (id, seq, timestamp, status, tries, process_after, recurrence, kind, platform_id, channel_type, thread_id, content, series_id)
+     VALUES (@id, @seq, datetime('now'), 'pending', 0, @processAfter, @recurrence, 'task', @platformId, @channelType, @threadId, @content, @id)`,
   ).run({
     ...task,
     seq: nextEvenSeq(db),
   });
 }
 
+// cancel/pause/resume match any live row in the series, not just the exact id.
+// Recurring tasks get a new row per occurrence (see handleRecurrence), all
+// sharing series_id. Matching by id alone would only hit the completed row
+// the agent remembers, missing the live next occurrence.
 export function cancelTask(db: Database.Database, taskId: string): void {
   db.prepare(
-    "UPDATE messages_in SET status = 'completed' WHERE id = ? AND kind = 'task' AND status IN ('pending', 'paused')",
-  ).run(taskId);
+    "UPDATE messages_in SET status = 'completed', recurrence = NULL WHERE (id = ? OR series_id = ?) AND kind = 'task' AND status IN ('pending', 'paused')",
+  ).run(taskId, taskId);
 }
 
 export function pauseTask(db: Database.Database, taskId: string): void {
-  db.prepare("UPDATE messages_in SET status = 'paused' WHERE id = ? AND kind = 'task' AND status = 'pending'").run(
-    taskId,
-  );
+  db.prepare(
+    "UPDATE messages_in SET status = 'paused' WHERE (id = ? OR series_id = ?) AND kind = 'task' AND status = 'pending'",
+  ).run(taskId, taskId);
 }
 
 export function resumeTask(db: Database.Database, taskId: string): void {
-  db.prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND kind = 'task' AND status = 'paused'").run(
-    taskId,
-  );
+  db.prepare(
+    "UPDATE messages_in SET status = 'pending' WHERE (id = ? OR series_id = ?) AND kind = 'task' AND status = 'paused'",
+  ).run(taskId, taskId);
 }
 
 export function countDueMessages(db: Database.Database): number {
@@ -180,6 +184,7 @@ export interface RecurringMessage {
   platform_id: string | null;
   channel_type: string | null;
   thread_id: string | null;
+  series_id: string;
 }
 
 export function getCompletedRecurring(db: Database.Database): RecurringMessage[] {
@@ -195,8 +200,8 @@ export function insertRecurrence(
   nextRun: string | null,
 ): void {
   db.prepare(
-    `INSERT INTO messages_in (id, seq, kind, timestamp, status, process_after, recurrence, platform_id, channel_type, thread_id, content)
-     VALUES (?, ?, ?, datetime('now'), 'pending', ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages_in (id, seq, kind, timestamp, status, process_after, recurrence, platform_id, channel_type, thread_id, content, series_id)
+     VALUES (?, ?, ?, datetime('now'), 'pending', ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     newId,
     nextEvenSeq(db),
@@ -207,6 +212,7 @@ export function insertRecurrence(
     msg.channel_type,
     msg.thread_id,
     msg.content,
+    msg.series_id,
   );
 }
 
@@ -294,5 +300,20 @@ export function migrateDeliveredTable(db: Database.Database): void {
   }
   if (!cols.has('status')) {
     db.prepare("ALTER TABLE delivered ADD COLUMN status TEXT NOT NULL DEFAULT 'delivered'").run();
+  }
+}
+
+// Adds series_id (groups all occurrences of a recurring task) to pre-existing
+// messages_in tables. No-op on fresh installs where the column is in the schema.
+// Backfills existing rows so cancel/pause/resume queries can rely on
+// series_id IS NOT NULL.
+export function migrateMessagesInTable(db: Database.Database): void {
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info('messages_in')").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!cols.has('series_id')) {
+    db.prepare('ALTER TABLE messages_in ADD COLUMN series_id TEXT').run();
+    db.prepare('UPDATE messages_in SET series_id = id WHERE series_id IS NULL').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_in_series ON messages_in(series_id)').run();
   }
 }

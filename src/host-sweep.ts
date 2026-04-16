@@ -159,12 +159,13 @@ async function handleRecurrence(inDb: Database.Database, session: Session): Prom
       const { CronExpressionParser } = await import('cron-parser');
       const interval = CronExpressionParser.parse(msg.recurrence);
       const nextRun = interval.next().toISOString();
-      const newId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const prefix = msg.kind === 'task' ? 'task' : 'msg';
+      const newId = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       insertRecurrence(inDb, msg, newId, nextRun);
       clearRecurrence(inDb, msg.id);
 
-      log.info('Inserted next recurrence', { originalId: msg.id, newId, nextRun });
+      log.info('Inserted next recurrence', { originalId: msg.id, newId, seriesId: msg.series_id, nextRun });
     } catch (err) {
       log.error('Failed to compute next recurrence', { messageId: msg.id, recurrence: msg.recurrence, err });
     }

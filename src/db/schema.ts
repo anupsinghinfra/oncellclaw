@@ -136,12 +136,14 @@ CREATE TABLE IF NOT EXISTS messages_in (
   status         TEXT DEFAULT 'pending',
   process_after  TEXT,
   recurrence     TEXT,
+  series_id      TEXT,
   tries          INTEGER DEFAULT 0,
   platform_id    TEXT,
   channel_type   TEXT,
   thread_id      TEXT,
   content        TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_messages_in_series ON messages_in(series_id);
 
 -- Host tracks delivery outcomes for messages_out IDs.
 -- Avoids writing to outbound.db (container-owned).

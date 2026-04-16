@@ -26,6 +26,7 @@ import {
   upsertSessionRouting,
   replaceDestinations,
   insertMessage,
+  migrateMessagesInTable,
   type DestinationRow,
 } from './db/session-db.js';
 import { log } from './log.js';
@@ -305,7 +306,9 @@ function extractAttachmentFiles(
 
 /** Open the inbound DB for a session (host reads/writes). */
 export function openInboundDb(agentGroupId: string, sessionId: string): Database.Database {
-  return openInboundDbRaw(inboundDbPath(agentGroupId, sessionId));
+  const db = openInboundDbRaw(inboundDbPath(agentGroupId, sessionId));
+  migrateMessagesInTable(db);
+  return db;
 }
 
 /** Open the outbound DB for a session (host reads only). */
