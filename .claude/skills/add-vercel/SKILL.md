@@ -36,7 +36,7 @@ If `ONECLI_MISSING`, tell the user to run `/init-onecli` first, then retry `/add
 Copy the bundled container skill into the container skills directory:
 
 ```bash
-cp -r .claude/skills/add-vercel/container-skills/* container/skills/
+rsync -a .claude/skills/add-vercel/container-skills/ container/skills/
 ```
 
 Verify:

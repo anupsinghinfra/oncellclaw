@@ -29,7 +29,7 @@ npm run build
 
 ## Credentials
 
-> 1. Go to [Linear Settings > API](https://linear.app/settings/api)
+> 1. Go to [Linear Settings > API Keys](https://linear.app/settings/account/security/api-keys/new)
 > 2. Create a **Personal API Key** (or use an OAuth application for team-wide access)
 > 3. Copy the API key
 > 4. Set up a webhook:

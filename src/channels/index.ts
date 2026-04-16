@@ -14,7 +14,7 @@ import './telegram.js';
 // import './github.js';
 
 // linear
-// import './linear.js';
+import './linear.js';
 
 // google chat
 // import './gchat.js';

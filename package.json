@@ -26,7 +26,7 @@
     "@chat-adapter/discord": "^4.24.0",
     "@chat-adapter/gchat": "^4.24.0",
     "@chat-adapter/github": "^4.24.0",
-    "@chat-adapter/linear": "^4.24.0",
+    "@chat-adapter/linear": "^4.26.0",
     "@chat-adapter/slack": "^4.24.0",
     "@chat-adapter/state-memory": "^4.24.0",
     "@chat-adapter/teams": "^4.24.0",
