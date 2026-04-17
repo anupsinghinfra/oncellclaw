@@ -102,13 +102,13 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 Run commands directly — don't tell the user to run them.
 
 ```bash
-npm run dev          # Host with hot reload
-npm run build        # Compile host TypeScript (src/)
-./container/build.sh # Rebuild agent container image (nanoclaw-agent:latest)
-npm test             # Host tests
+pnpm run dev          # Host with hot reload
+pnpm run build        # Compile host TypeScript (src/)
+./container/build.sh  # Rebuild agent container image (nanoclaw-agent:latest)
+pnpm test             # Host tests
 ```
 
-Container typecheck is a separate tsconfig — if you edit `container/agent-runner/src/`, run `npx tsc -p container/agent-runner/tsconfig.json --noEmit` to check it.
+Container typecheck is a separate tsconfig — if you edit `container/agent-runner/src/`, run `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` to check it.
 
 Service management:
 ```bash
@@ -122,6 +122,15 @@ systemctl --user start|stop|restart nanoclaw
 ```
 
 Host logs: `logs/nanoclaw.log` (normal) and `logs/nanoclaw.error.log` (errors only — some delivery/approval failures only show up here).
+
+## Supply Chain Security (pnpm)
+
+This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspace.yaml`. New package versions must exist on the npm registry for 3 days before pnpm will resolve them.
+
+**Rules — do not bypass without explicit human approval:**
+- **`minimumReleaseAgeExclude`**: Never add entries without human sign-off. If a package must bypass the release age gate, the human must approve and the entry must pin the exact version being excluded (e.g. `package@1.2.3`), never a range.
+- **`onlyBuiltDependencies`**: Never add packages to this list without human approval — build scripts execute arbitrary code during install.
+- **`pnpm install --frozen-lockfile`** should be used in CI, automation, and container builds. Never run bare `pnpm install` in those contexts.
 
 ## v2 Docs Index
 

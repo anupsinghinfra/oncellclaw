@@ -14,7 +14,7 @@ Check if `src/channels/teams.ts` exists and the import is uncommented in `src/ch
 ## Install
 
 ```bash
-npm install @chat-adapter/teams
+pnpm install @chat-adapter/teams
 ```
 
 Uncomment the Teams import in `src/channels/index.ts`:
@@ -26,7 +26,7 @@ import './teams.js';
 Build:
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials

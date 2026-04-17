@@ -16,7 +16,7 @@ Check if `src/channels/whatsapp.ts` exists and the import is uncommented in `src
 ### Install the adapter packages
 
 ```bash
-npm install @whiskeysockets/baileys@^6.7.21 pino@^9.6.0 qrcode@^1.5.4 @types/qrcode@^1.5.6
+pnpm install @whiskeysockets/baileys@^6.7.21 pino@^9.6.0 qrcode@^1.5.4 @types/qrcode@^1.5.6
 ```
 
 ### Enable the channel
@@ -39,7 +39,7 @@ import './whatsapp.js';
 ### Build
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials
@@ -90,7 +90,7 @@ rm -rf store/auth/
 For QR code in browser (recommended):
 
 ```bash
-npx tsx setup/index.ts --step whatsapp-auth -- --method qr-browser
+pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr-browser
 ```
 
 (Bash timeout: 150000ms)
@@ -106,7 +106,7 @@ Tell the user:
 For QR code in terminal:
 
 ```bash
-npx tsx setup/index.ts --step whatsapp-auth -- --method qr-terminal
+pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr-terminal
 ```
 
 (Bash timeout: 150000ms)
@@ -123,7 +123,7 @@ Tell the user to have WhatsApp open on **Settings > Linked Devices > Link a Devi
 Run the auth process in the background and poll `store/pairing-code.txt` for the code:
 
 ```bash
-rm -f store/pairing-code.txt && npx tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone <their-phone-number> > /tmp/wa-auth.log 2>&1 &
+rm -f store/pairing-code.txt && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone <their-phone-number> > /tmp/wa-auth.log 2>&1 &
 ```
 
 Then immediately poll for the code (do NOT wait for the background command to finish):
@@ -199,7 +199,7 @@ Not supported (WhatsApp linked device limitation): edit messages, delete message
 QR codes expire after ~60 seconds. Re-run the auth command:
 
 ```bash
-rm -rf store/auth/ && npx tsx setup/index.ts --step whatsapp-auth -- --method qr-browser
+rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr-browser
 ```
 
 ### Pairing code not working
@@ -207,7 +207,7 @@ rm -rf store/auth/ && npx tsx setup/index.ts --step whatsapp-auth -- --method qr
 Codes expire in ~60 seconds. Delete auth and retry:
 
 ```bash
-rm -rf store/auth/ && npx tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone <phone>
+rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone <phone>
 ```
 
 Ensure: digits only (no `+`), phone has internet, WhatsApp is updated.
@@ -215,7 +215,7 @@ Ensure: digits only (no `+`), phone has internet, WhatsApp is updated.
 If pairing code keeps failing, switch to QR-browser auth instead:
 
 ```bash
-rm -rf store/auth/ && npx tsx setup/index.ts --step whatsapp-auth -- --method qr-browser
+rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr-browser
 ```
 
 ### "waiting for this message" on reactions

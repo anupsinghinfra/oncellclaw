@@ -14,7 +14,7 @@ Check if `src/channels/whatsapp-cloud.ts` exists and the import is uncommented i
 ## Install
 
 ```bash
-npm install @chat-adapter/whatsapp
+pnpm install @chat-adapter/whatsapp
 ```
 
 Uncomment the WhatsApp Cloud API import in `src/channels/index.ts`:
@@ -26,7 +26,7 @@ import './whatsapp-cloud.js';
 Build:
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Credentials
