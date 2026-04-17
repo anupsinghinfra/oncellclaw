@@ -1,6 +1,6 @@
 ---
-name: add-whatsapp-cloud-v2
-description: Add WhatsApp Business Cloud API channel to NanoClaw v2 via Chat SDK. Official Meta API.
+name: add-whatsapp-cloud
+description: Add WhatsApp Business Cloud API channel via Chat SDK. Official Meta API.
 ---
 
 # Add WhatsApp Cloud API Channel
@@ -9,7 +9,7 @@ Connect NanoClaw to WhatsApp via the official Meta WhatsApp Business Cloud API.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the WhatsApp Cloud adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the WhatsApp Cloud adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

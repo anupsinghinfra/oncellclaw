@@ -213,19 +213,19 @@ Channels where the agent gets its own identity (name and avatar) are marked as r
 
 Invoke the matching skill:
 
-- **Discord:** Invoke `/add-discord-v2`
-- **Slack:** Invoke `/add-slack-v2`
-- **Telegram:** Invoke `/add-telegram-v2`
-- **GitHub:** Invoke `/add-github-v2`
-- **Linear:** Invoke `/add-linear-v2`
-- **Microsoft Teams:** Invoke `/add-teams-v2`
-- **Google Chat:** Invoke `/add-gchat-v2`
-- **WhatsApp Cloud API:** Invoke `/add-whatsapp-cloud-v2`
+- **Discord:** Invoke `/add-discord`
+- **Slack:** Invoke `/add-slack`
+- **Telegram:** Invoke `/add-telegram`
+- **GitHub:** Invoke `/add-github`
+- **Linear:** Invoke `/add-linear`
+- **Microsoft Teams:** Invoke `/add-teams`
+- **Google Chat:** Invoke `/add-gchat`
+- **WhatsApp Cloud API:** Invoke `/add-whatsapp-cloud`
 - **WhatsApp Baileys:** Invoke `/add-whatsapp`
-- **Resend:** Invoke `/add-resend-v2`
-- **Matrix:** Invoke `/add-matrix-v2`
-- **Webex:** Invoke `/add-webex-v2`
-- **iMessage:** Invoke `/add-imessage-v2`
+- **Resend:** Invoke `/add-resend`
+- **Matrix:** Invoke `/add-matrix`
+- **Webex:** Invoke `/add-webex`
+- **iMessage:** Invoke `/add-imessage`
 
 The skill will:
 1. Install the Chat SDK adapter package

@@ -1,15 +1,15 @@
 ---
-name: add-gchat-v2
-description: Add Google Chat channel integration to NanoClaw v2 via Chat SDK.
+name: add-gchat
+description: Add Google Chat channel integration via Chat SDK.
 ---
 
 # Add Google Chat Channel
 
-Adds Google Chat support to NanoClaw v2 using the Chat SDK bridge.
+Adds Google Chat support via the Chat SDK bridge.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Google Chat adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Google Chat adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

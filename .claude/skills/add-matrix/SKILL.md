@@ -1,15 +1,15 @@
 ---
-name: add-matrix-v2
-description: Add Matrix channel integration to NanoClaw v2 via Chat SDK. Works with any Matrix homeserver.
+name: add-matrix
+description: Add Matrix channel integration via Chat SDK. Works with any Matrix homeserver.
 ---
 
 # Add Matrix Channel
 
-Adds Matrix support to NanoClaw v2 using the Chat SDK bridge.
+Adds Matrix support via the Chat SDK bridge.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Matrix adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Matrix adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

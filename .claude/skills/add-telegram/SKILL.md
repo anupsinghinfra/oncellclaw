@@ -1,15 +1,15 @@
 ---
-name: add-telegram-v2
-description: Add Telegram channel integration to NanoClaw v2 via Chat SDK.
+name: add-telegram
+description: Add Telegram channel integration via Chat SDK.
 ---
 
 # Add Telegram Channel
 
-Adds Telegram bot support to NanoClaw v2 using the Chat SDK bridge.
+Adds Telegram bot support via the Chat SDK bridge.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Telegram adapter, its formatting/pairing helpers, their tests, and the `pair-telegram` setup step in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Telegram adapter, its formatting/pairing helpers, their tests, and the `pair-telegram` setup step in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

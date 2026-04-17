@@ -1,5 +1,5 @@
 /**
- * NanoClaw v2 — main entry point.
+ * NanoClaw — main entry point.
  *
  * Thin orchestrator: init DB, run migrations, start channel adapters,
  * start delivery polls, start sweep, handle shutdown.
@@ -41,7 +41,7 @@ import type { ChannelAdapter, ChannelSetup, ConversationConfig } from './channel
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
 
 async function main(): Promise<void> {
-  log.info('NanoClaw v2 starting');
+  log.info('NanoClaw starting');
 
   // 1. Init central DB
   const dbPath = path.join(DATA_DIR, 'v2.db');
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
   // 7. Start OneCLI manual-approval handler
   startOneCLIApprovalHandler(deliveryAdapter);
 
-  log.info('NanoClaw v2 running');
+  log.info('NanoClaw running');
 }
 
 /** Build ConversationConfig[] for a channel type from the central DB. */

@@ -1,15 +1,15 @@
 ---
-name: add-slack-v2
-description: Add Slack channel integration to NanoClaw v2 via Chat SDK.
+name: add-slack
+description: Add Slack channel integration via Chat SDK.
 ---
 
 # Add Slack Channel
 
-Adds Slack support to NanoClaw v2 using the Chat SDK bridge.
+Adds Slack support via the Chat SDK bridge.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Slack adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Slack adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

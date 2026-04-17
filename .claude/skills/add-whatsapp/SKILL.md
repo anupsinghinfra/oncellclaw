@@ -1,15 +1,15 @@
 ---
-name: add-whatsapp-v2
-description: Add WhatsApp channel to NanoClaw v2 using native Baileys adapter. Direct connection — no Chat SDK bridge. Uses QR code or pairing code for authentication.
+name: add-whatsapp
+description: Add WhatsApp channel via native Baileys adapter. Direct connection — no Chat SDK bridge. Uses QR code or pairing code for authentication.
 ---
 
 # Add WhatsApp Channel
 
-Adds WhatsApp support to NanoClaw v2 using the native Baileys adapter (no Chat SDK bridge).
+Adds WhatsApp support via the native Baileys adapter (no Chat SDK bridge).
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the native WhatsApp (Baileys) adapter and its `whatsapp-auth` setup step in from the `channels` branch. No Chat SDK bridge.
+NanoClaw doesn't ship channels in trunk. This skill copies the native WhatsApp (Baileys) adapter and its `whatsapp-auth` setup step in from the `channels` branch. No Chat SDK bridge.
 
 ### Pre-flight (idempotent)
 

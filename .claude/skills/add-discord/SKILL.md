@@ -1,15 +1,15 @@
 ---
-name: add-discord-v2
-description: Add Discord bot channel integration to NanoClaw v2 via Chat SDK.
+name: add-discord
+description: Add Discord bot channel integration via Chat SDK.
 ---
 
 # Add Discord Channel
 
-Adds Discord bot support to NanoClaw v2. Discord is built in — no adapter package to install.
+Adds Discord bot support via the Chat SDK bridge.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Discord adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Discord adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

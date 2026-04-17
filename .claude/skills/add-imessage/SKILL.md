@@ -1,15 +1,15 @@
 ---
-name: add-imessage-v2
-description: Add iMessage channel integration to NanoClaw v2 via Chat SDK. Local (macOS) or remote (Photon API) mode.
+name: add-imessage
+description: Add iMessage channel integration via Chat SDK. Local (macOS) or remote (Photon API) mode.
 ---
 
 # Add iMessage Channel
 
-Adds iMessage support to NanoClaw v2 using the Chat SDK bridge. Two modes: local (macOS with Full Disk Access) or remote (Photon API).
+Adds iMessage support via the Chat SDK bridge. Two modes: local (macOS with Full Disk Access) or remote (Photon API).
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the iMessage adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the iMessage adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

@@ -1,15 +1,15 @@
 ---
-name: add-linear-v2
-description: Add Linear channel integration to NanoClaw v2 via Chat SDK. Issue comment threads as conversations.
+name: add-linear
+description: Add Linear channel integration via Chat SDK. Issue comment threads as conversations.
 ---
 
 # Add Linear Channel
 
-Adds Linear support to NanoClaw v2 using the Chat SDK bridge. The agent participates in issue comment threads.
+Adds Linear support via the Chat SDK bridge. The agent participates in issue comment threads.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Linear adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Linear adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

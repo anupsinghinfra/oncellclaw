@@ -1,6 +1,6 @@
 ---
-name: add-resend-v2
-description: Add Resend (email) channel integration to NanoClaw v2 via Chat SDK.
+name: add-resend
+description: Add Resend (email) channel integration via Chat SDK.
 ---
 
 # Add Resend Email Channel
@@ -9,7 +9,7 @@ Connect NanoClaw to email via Resend for async email conversations.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Resend adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Resend adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

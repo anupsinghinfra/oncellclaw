@@ -1,15 +1,15 @@
 ---
-name: add-github-v2
-description: Add GitHub channel integration to NanoClaw v2 via Chat SDK. PR and issue comment threads as conversations.
+name: add-github
+description: Add GitHub channel integration via Chat SDK. PR and issue comment threads as conversations.
 ---
 
 # Add GitHub Channel
 
-Adds GitHub support to NanoClaw v2 using the Chat SDK bridge. The agent participates in PR and issue comment threads.
+Adds GitHub support via the Chat SDK bridge. The agent participates in PR and issue comment threads.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the GitHub adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the GitHub adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

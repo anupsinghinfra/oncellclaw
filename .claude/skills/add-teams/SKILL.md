@@ -1,6 +1,6 @@
 ---
-name: add-teams-v2
-description: Add Microsoft Teams channel integration to NanoClaw v2 via Chat SDK.
+name: add-teams
+description: Add Microsoft Teams channel integration via Chat SDK.
 ---
 
 # Add Microsoft Teams Channel
@@ -9,7 +9,7 @@ Connect NanoClaw to Microsoft Teams for interactive chat in team channels, group
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Teams adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Teams adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 

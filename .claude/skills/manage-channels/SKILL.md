@@ -5,13 +5,13 @@ description: Wire channels to agent groups, manage isolation levels, add new cha
 
 # Manage Channels
 
-Wire messaging channels to agent groups. See `docs/v2-isolation-model.md` for the full isolation model.
+Wire messaging channels to agent groups. See `docs/isolation-model.md` for the full isolation model.
 
 Privilege is a **user-level** concept, not a channel-level one (see `src/db/user-roles.ts`, `src/access.ts`). There is no "main channel" / "main group" — any user can be granted `owner` or `admin` (global or scoped to an agent group) via `grantRole()`, and messages from unknown senders are gated per-messaging-group by `unknown_sender_policy` (`strict` | `request_approval` | `public`).
 
 ## Assess Current State
 
-Read the v2 central DB (`data/v2.db`) — query `agent_groups`, `messaging_groups`, `messaging_group_agents`, `users`, and `user_roles` tables. Also check `.env` for channel tokens and `src/channels/index.ts` for uncommented imports.
+Read the central DB (`data/v2.db`) — query `agent_groups`, `messaging_groups`, `messaging_group_agents`, `users`, and `user_roles` tables. Also check `.env` for channel tokens and `src/channels/index.ts` for uncommented imports.
 
 Categorize channels as: **wired** (has DB entities + messaging_group_agents row), **configured but unwired** (has credentials + barrel import, no DB entities), or **not configured**.
 
@@ -38,7 +38,7 @@ Present a multiple-choice with a contextual recommendation. The three options:
 - **Same agent, separate conversations** (`--session-mode "shared"` + existing folder) — shared workspace/memory, independent threads. Recommend for same user across platforms.
 - **Separate agent** (new `--folder`) — full isolation. Recommend when different people are involved.
 
-Use the channel's `typical-use` and `default-isolation` fields to pick the recommendation. Offer to explain more if the user is unsure — reference `docs/v2-isolation-model.md` for the detailed explanation.
+Use the channel's `typical-use` and `default-isolation` fields to pick the recommendation. Offer to explain more if the user is unsure — reference `docs/isolation-model.md` for the detailed explanation.
 
 ### Register Command
 

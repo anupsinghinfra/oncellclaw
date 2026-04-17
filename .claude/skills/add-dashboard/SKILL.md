@@ -1,6 +1,6 @@
 ---
 name: add-dashboard
-description: Add a monitoring dashboard to NanoClaw v2. Installs @nanoco/nanoclaw-dashboard and a pusher that sends periodic JSON snapshots.
+description: Add a monitoring dashboard to NanoClaw. Installs @nanoco/nanoclaw-dashboard and a pusher that sends periodic JSON snapshots.
 ---
 
 # /add-dashboard — NanoClaw Dashboard
@@ -65,7 +65,7 @@ Add the `readEnvFile` import at the top if not already present:
 import { readEnvFile } from './env.js';
 ```
 
-Add after step 7 (OneCLI approval handler), before the `log.info('NanoClaw v2 running')` line:
+Add after step 7 (OneCLI approval handler), before the `log.info('NanoClaw running')` line:
 
 ```typescript
   // 8. Dashboard (optional)

@@ -1,15 +1,15 @@
 ---
-name: add-webex-v2
-description: Add Webex channel integration to NanoClaw v2 via Chat SDK.
+name: add-webex
+description: Add Webex channel integration via Chat SDK.
 ---
 
 # Add Webex Channel
 
-Adds Cisco Webex support to NanoClaw v2 using the Chat SDK bridge.
+Adds Cisco Webex support via the Chat SDK bridge.
 
 ## Install
 
-v2 trunk doesn't ship channels. This skill copies the Webex adapter in from the `channels` branch.
+NanoClaw doesn't ship channels in trunk. This skill copies the Webex adapter in from the `channels` branch.
 
 ### Pre-flight (idempotent)
 
