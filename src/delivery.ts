@@ -60,6 +60,21 @@ const MAX_DELIVERY_ATTEMPTS = 3;
 /** Track delivery attempt counts. Resets on process restart (gives failed messages a fresh chance). */
 const deliveryAttempts = new Map<string, number>();
 
+/**
+ * Sessions whose outbound queue is currently being drained.
+ *
+ * The active poll (1s, running sessions) and the sweep poll (60s, all
+ * active sessions) both call deliverSessionMessages, and a running session
+ * is in *both* result sets. Without this guard, the two timer chains can
+ * race on the same outbound row: both read it as undelivered, both call
+ * the channel adapter, both markDelivered (idempotent in the DB via
+ * INSERT OR IGNORE — but the user has already seen the message twice).
+ *
+ * Skipping (vs. queueing) is correct: any message left over when the
+ * second caller skips will be picked up on the next poll tick (~1s).
+ */
+const inflightDeliveries = new Set<string>();
+
 export interface ChannelDeliveryAdapter {
   deliver(
     channelType: string,
@@ -365,7 +380,20 @@ async function pollSweep(): Promise<void> {
   setTimeout(pollSweep, SWEEP_POLL_MS);
 }
 
-async function deliverSessionMessages(session: Session): Promise<void> {
+export async function deliverSessionMessages(session: Session): Promise<void> {
+  // Reject re-entry from a concurrent poll on the same session — see the
+  // comment on inflightDeliveries above.
+  if (inflightDeliveries.has(session.id)) return;
+  inflightDeliveries.add(session.id);
+
+  try {
+    await drainSession(session);
+  } finally {
+    inflightDeliveries.delete(session.id);
+  }
+}
+
+async function drainSession(session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) return;
 
@@ -594,9 +622,16 @@ async function deliverMessage(
     fileCount: files?.length,
   });
 
-  // Clean up outbox directory after successful delivery
+  // Clean up outbox best-effort — the message is already on the user's
+  // screen, so a cleanup failure must NOT propagate. If it did, the
+  // caller would treat the whole delivery as failed, retry on the next
+  // poll, and the user would see the message twice.
   if (fs.existsSync(outboxDir)) {
-    fs.rmSync(outboxDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(outboxDir, { recursive: true, force: true });
+    } catch (err) {
+      log.warn('Outbox cleanup failed (message already delivered)', { messageId: msg.id, err });
+    }
   }
 
   return platformMsgId;
