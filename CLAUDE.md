@@ -1,14 +1,14 @@
 # NanoClaw
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. Architecture lives in `docs/v2-*.md`.
+Personal Claude assistant. See [README.md](README.md) for philosophy and setup. Architecture lives in `docs/`.
 
-## Quick Context (v2)
-
-v2 is the current branch and codebase. v1 still exists under `src/v1/` and `container/agent-runner/src/v1/` for reference but is no longer the runtime. If a file mentions v1 in its comments, it is probably stale.
+## Quick Context
 
 The host is a single Node process that orchestrates per-session agent containers. Platform messages land via channel adapters, route through an entity model (users → messaging groups → agent groups → sessions), get written into the session's inbound DB, and wake a container. The agent-runner inside the container polls the DB, calls Claude, and writes back to the outbound DB. The host polls the outbound DB and delivers through the same adapter.
 
 **Everything is a message.** There is no IPC, no file watcher, no stdin piping between host and container. The two session DBs are the sole IO surface.
+
+A `src/v1/` tree exists for historical reference and is not part of the runtime — ignore it unless you're explicitly working on a migration.
 
 ## Entity Model
 
@@ -25,7 +25,7 @@ messaging_groups (one chat/channel on one platform; unknown_sender_policy)
 sessions (agent_group_id + messaging_group_id + thread_id → per-session container)
 ```
 
-Privilege is user-level (owner/admin), not agent-group-level. See [docs/v2-isolation-model.md](docs/v2-isolation-model.md) for the three isolation levels (`agent-shared`, `shared`, separate agents).
+Privilege is user-level (owner/admin), not agent-group-level. See [docs/isolation-model.md](docs/isolation-model.md) for the three isolation levels (`agent-shared`, `shared`, separate agents).
 
 ## Two-DB Session Split
 
@@ -56,11 +56,21 @@ Exactly one writer per file — no cross-mount lock contention. Heartbeat is a f
 | `src/user-dm.ts` | Cold-DM resolution + `user_dms` cache |
 | `src/group-init.ts` | Per-agent-group filesystem scaffold (CLAUDE.md, skills, agent-runner-src overlay) |
 | `src/db/` | DB layer — agent_groups, messaging_groups, sessions, user_roles, user_dms, pending_*, migrations |
-| `src/channels/` | Channel adapters + Chat SDK bridge |
+| `src/channels/` | Channel adapter infra (registry, Chat SDK bridge); specific channel adapters are skill-installed from the `channels` branch |
+| `src/providers/` | Host-side provider container-config (`claude` baked in; `opencode` etc. installed from the `providers` branch) |
 | `container/agent-runner/src/` | Agent-runner: poll loop, formatter, provider abstraction, MCP tools, destinations |
 | `container/skills/` | Container skills mounted into every agent session |
 | `groups/<folder>/` | Per-agent-group filesystem (CLAUDE.md, skills, per-group `agent-runner-src/` overlay) |
 | `scripts/init-first-agent.ts` | Bootstrap the first DM-wired agent (used by `/init-first-agent` skill) |
+
+## Channels and Providers (skill-installed)
+
+Trunk does not ship any specific channel adapter or non-default agent provider. The codebase is the registry/infra; the actual adapters and providers live on long-lived sibling branches and get copied in by skills:
+
+- **`channels` branch** — Discord, Slack, Telegram, WhatsApp, Teams, Linear, GitHub, iMessage, Webex, Resend, Matrix, Google Chat, WhatsApp Cloud (+ helpers, tests, channel-specific setup steps). Installed via `/add-<channel>` skills.
+- **`providers` branch** — OpenCode (and any future non-default agent providers). Installed via `/add-opencode`.
+
+Each `/add-<name>` skill is idempotent: `git fetch origin <branch>` → copy module(s) into the standard paths → append a self-registration import to the relevant barrel → `pnpm install <pkg>@<pinned-version>` → build.
 
 ## Self-Modification
 
@@ -78,10 +88,10 @@ API keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway. 
 
 Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy.
 
-- **Feature skills** — `skill/*` branches merged via `scripts/apply-skill.ts` (e.g. `/add-discord-v2`, `/add-slack-v2`, `/add-whatsapp-v2`)
-- **Utility skills** — ship code files alongside `SKILL.md` (e.g. `/claw`)
-- **Operational skills** — instruction-only workflows (`/setup`, `/debug`, `/customize`, `/init-first-agent`, `/manage-channels`, `/init-onecli`, `/update-nanoclaw`)
-- **Container skills** — loaded inside agent containers at runtime (`container/skills/`: `welcome`, `self-customize`, `agent-browser`, `slack-formatting`)
+- **Channel/provider install skills** — copy the relevant module(s) in from the `channels` or `providers` branch, wire imports, install pinned deps (e.g. `/add-discord`, `/add-slack`, `/add-whatsapp`, `/add-opencode`).
+- **Utility skills** — ship code files alongside `SKILL.md` (e.g. `/claw`).
+- **Operational skills** — instruction-only workflows (`/setup`, `/debug`, `/customize`, `/init-first-agent`, `/manage-channels`, `/init-onecli`, `/update-nanoclaw`).
+- **Container skills** — loaded inside agent containers at runtime (`container/skills/`: `welcome`, `self-customize`, `agent-browser`, `slack-formatting`).
 
 | Skill | When to Use |
 |-------|-------------|
@@ -137,21 +147,21 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 - **`onlyBuiltDependencies`**: Never add packages to this list without human approval — build scripts execute arbitrary code during install.
 - **`pnpm install --frozen-lockfile`** should be used in CI, automation, and container builds. Never run bare `pnpm install` in those contexts.
 
-## v2 Docs Index
+## Docs Index
 
 | Doc | Purpose |
 |-----|---------|
-| [docs/v2-architecture-draft.md](docs/v2-architecture-draft.md) | Full architecture writeup |
-| [docs/v2-api-details.md](docs/v2-api-details.md) | Host API + DB schema details |
-| [docs/v2-db.md](docs/v2-db.md) | DB architecture overview: three-DB model, cross-mount rules, readers/writers map |
-| [docs/v2-db-central.md](docs/v2-db-central.md) | Central DB (`data/v2.db`) — every table + migration system |
-| [docs/v2-db-session.md](docs/v2-db-session.md) | Per-session `inbound.db` + `outbound.db` schemas + seq parity |
-| [docs/v2-agent-runner-details.md](docs/v2-agent-runner-details.md) | Agent-runner internals + MCP tool interface |
-| [docs/v2-isolation-model.md](docs/v2-isolation-model.md) | Three-level channel isolation model |
-| [docs/v2-setup-wiring.md](docs/v2-setup-wiring.md) | What's wired, what's open in the setup flow |
-| [docs/v2-checklist.md](docs/v2-checklist.md) | Rolling status checklist across all subsystems |
-| [docs/v2-architecture-diagram.md](docs/v2-architecture-diagram.md) | Diagram version of the architecture |
-| [docs/v2-build-and-runtime.md](docs/v2-build-and-runtime.md) | Runtime split (Node host + Bun container), lockfiles, image build surface, CI, key invariants |
+| [docs/architecture.md](docs/architecture.md) | Full architecture writeup |
+| [docs/api-details.md](docs/api-details.md) | Host API + DB schema details |
+| [docs/db.md](docs/db.md) | DB architecture overview: three-DB model, cross-mount rules, readers/writers map |
+| [docs/db-central.md](docs/db-central.md) | Central DB (`data/v2.db`) — every table + migration system |
+| [docs/db-session.md](docs/db-session.md) | Per-session `inbound.db` + `outbound.db` schemas + seq parity |
+| [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface |
+| [docs/isolation-model.md](docs/isolation-model.md) | Three-level channel isolation model |
+| [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
+| [docs/checklist.md](docs/checklist.md) | Rolling status checklist across all subsystems |
+| [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture |
+| [docs/build-and-runtime.md](docs/build-and-runtime.md) | Runtime split (Node host + Bun container), lockfiles, image build surface, CI, key invariants |
 
 ## Container Build Cache
 
@@ -159,7 +169,7 @@ The container buildkit caches the build context aggressively. `--no-cache` alone
 
 ## Container Runtime (Bun)
 
-The agent container runs on **Bun**; the host runs on **Node** (pnpm). They communicate only via session DBs — no shared modules. Details and rationale: [docs/v2-build-and-runtime.md](docs/v2-build-and-runtime.md).
+The agent container runs on **Bun**; the host runs on **Node** (pnpm). They communicate only via session DBs — no shared modules. Details and rationale: [docs/build-and-runtime.md](docs/build-and-runtime.md).
 
 **Gotchas — trigger + action:**
 

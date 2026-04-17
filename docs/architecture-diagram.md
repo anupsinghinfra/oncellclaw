@@ -1,4 +1,4 @@
-# NanoClaw v2 Architecture Diagram
+# NanoClaw Architecture Diagram
 
 ## System Overview
 

@@ -1,17 +1,17 @@
-# NanoClaw v2 Database Architecture — Overview
+# NanoClaw Database Architecture — Overview
 
-Orientation for the v2 data model: the three databases, how they fit together, and the invariants that hold across them. For table-level schemas, follow the links below.
+Orientation for the data model: the three databases, how they fit together, and the invariants that hold across them. For table-level schemas, follow the links below.
 
-- **[v2-db-central.md](v2-db-central.md)** — every table in `data/v2.db` (identity, wiring, approvals, Chat SDK state) plus the migration system.
-- **[v2-db-session.md](v2-db-session.md)** — the per-session `inbound.db` + `outbound.db` pair, seq parity, and session folder layout.
+- **[db-central.md](db-central.md)** — every table in `data/v2.db` (identity, wiring, approvals, Chat SDK state) plus the migration system.
+- **[db-session.md](db-session.md)** — the per-session `inbound.db` + `outbound.db` pair, seq parity, and session folder layout.
 
-Related: [v2-architecture-draft.md](v2-architecture-draft.md) for the high-level design; [v2-api-details.md](v2-api-details.md) for inbound/outbound message content shapes; [v2-isolation-model.md](v2-isolation-model.md) for channel-to-agent wiring modes.
+Related: [architecture.md](architecture.md) for the high-level design; [api-details.md](api-details.md) for inbound/outbound message content shapes; [isolation-model.md](isolation-model.md) for channel-to-agent wiring modes.
 
 ---
 
 ## 1. The three databases
 
-v2 uses **three kinds of SQLite database**, all on the host filesystem:
+NanoClaw uses **three kinds of SQLite database**, all on the host filesystem:
 
 | DB | Location | Writer | Readers | Purpose |
 |----|----------|--------|---------|---------|
@@ -73,7 +73,7 @@ Session DBs are bind-mounted into the container. A few rules you need to know be
 
 - **`journal_mode = DELETE`, not WAL.** WAL files don't reliably cross the mount and the container can read stale pages. DELETE mode forces each writer to flush the main file.
 - **Open-write-close on the host.** Host-side writes to `inbound.db` open a connection, write, and close it. Keeping a handle open makes cached pages invisible to the container.
-- **Container reads read-only.** The container opens `inbound.db` with `readonly: true` and never writes — all container→host state goes through `outbound.db` (see `processing_ack` in [v2-db-session.md](v2-db-session.md#52-processing_ack)).
+- **Container reads read-only.** The container opens `inbound.db` with `readonly: true` and never writes — all container→host state goes through `outbound.db` (see `processing_ack` in [db-session.md](db-session.md#52-processing_ack)).
 - **Heartbeat is a file touch.** `.heartbeat` mtime is the liveness signal, not a DB column. A DB write per heartbeat would serialize behind other writers.
 
 These rules are enforced by convention in `src/session-manager.ts` and `container/agent-runner/src/db/`. If you change how the DBs are opened, re-read that code first.
@@ -83,7 +83,7 @@ These rules are enforced by convention in `src/session-manager.ts` and `containe
 ## 5. Design patterns at a glance
 
 1. **Two-DB session split.** `inbound.db` and `outbound.db` each have one writer, one direction of flow — no cross-mount lock contention.
-2. **Seq parity.** Even = host, odd = container. Disjoint namespace across both tables lets the agent reference any message by `seq` alone. Details in [v2-db-session.md §3](v2-db-session.md#3-sequence-numbering-invariant).
+2. **Seq parity.** Even = host, odd = container. Disjoint namespace across both tables lets the agent reference any message by `seq` alone. Details in [db-session.md §3](db-session.md#3-sequence-numbering-invariant).
 3. **Projection pattern.** `agent_destinations` and `session_routing` are projected from the central DB into each session's `inbound.db` on container wake — the container gets a fast, local read path without querying across the mount.
 4. **Ack via reverse channel.** Container never writes to `inbound.db`. Status sync happens through `processing_ack` in `outbound.db`, which the host polls and reconciles.
 5. **Heartbeat out of band.** File `touch` on `.heartbeat`, not a DB write, so liveness doesn't serialize behind other writers.

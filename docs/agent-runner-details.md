@@ -1,6 +1,6 @@
-# NanoClaw v2 Agent-Runner Details
+# NanoClaw Agent-Runner Details
 
-Implementation-level details for the agent-runner inside the container. See [v2-architecture-draft.md](v2-architecture-draft.md) for the high-level design.
+Implementation-level details for the agent-runner inside the container. See [architecture.md](architecture.md) for the high-level design.
 
 ## Separation of Concerns
 
@@ -8,7 +8,7 @@ The agent-runner has two layers:
 
 1. **Agent-runner core** — owns the poll loop, message formatting, DB reads/writes, MCP tool implementations, routing, status management, media handling. This is NanoClaw-specific and shared across all providers.
 
-2. **Agent provider** — owns the SDK interaction. Takes formatted prompts, pushes them to the SDK, yields events back. Each SDK (Claude, Codex, OpenCode) gets its own provider implementation.
+2. **Agent provider** — owns the SDK interaction. Takes formatted prompts, pushes them to the SDK, yields events back. Trunk ships the `claude` provider; additional providers (OpenCode, Codex, etc.) are installed by `/add-<provider>` skills from the `providers` branch.
 
 The boundary: the agent-runner decides **what** to send and **what to do** with results. The provider decides **how** to talk to the SDK.
 
@@ -90,6 +90,8 @@ type ProviderEvent =
 - **`progress`** — optional, for logging. The agent-runner logs these but doesn't act on them.
 
 ## Provider Implementations
+
+Only the `claude` provider ships in trunk. The Codex and OpenCode sections below document the provider interface for reference and for skills that install additional providers — they are not baked into the core image.
 
 ### Claude Provider
 
@@ -445,7 +447,7 @@ pending → processing → completed
 
 ### MCP Tools
 
-The agent-runner runs an MCP server (same as v1) that exposes NanoClaw tools to the agent. In v2, all tools write to the session DB instead of IPC files.
+The agent-runner runs an MCP server that exposes NanoClaw tools to the agent. All tools write to the session DB.
 
 **DB path:** The MCP server receives the session DB path via environment variable. It opens a second connection to the same SQLite file (WAL mode allows concurrent access).
 
@@ -691,8 +693,6 @@ For `task` kind messages with a `script` field in the content:
 4. If `wakeAgent === false`: mark message as completed, don't invoke the provider
 5. If `wakeAgent === true`: enrich the prompt with script output, then invoke the provider
 
-Same as v1 behavior.
-
 ### Transcript Archiving
 
 The agent-runner archives conversation transcripts before context compaction. For Claude, this is handled via the PreCompact hook (provider-internal). For other providers that don't have hooks, the agent-runner archives after each query completes based on the provider's output.
@@ -721,15 +721,13 @@ The agent-runner reads config, creates the provider, and enters the poll loop. N
 ### Provider Factory
 
 ```typescript
-type ProviderName = 'claude' | 'codex' | 'opencode';
+type ProviderName = 'claude' | string;
 
 function createProvider(name: ProviderName, config: ProviderConfig): AgentProvider {
-  switch (name) {
-    case 'claude':  return new ClaudeProvider(config);
-    case 'codex':   return new CodexProvider(config);
-    case 'opencode': return new OpenCodeProvider(config);
-    default: throw new Error(`Unknown provider: ${name}`);
-  }
+  // Trunk registers 'claude'; additional providers self-register when installed via skills.
+  const factory = providerRegistry.get(name);
+  if (!factory) throw new Error(`Unknown provider: ${name}`);
+  return factory(config);
 }
 ```
 
@@ -737,7 +735,7 @@ The provider name comes from the container's environment (`AGENT_PROVIDER` env v
 
 `ProviderConfig` contains provider-specific settings (API keys, model overrides, etc.) passed via environment variables — not via the interface. Each provider reads what it needs from `env`.
 
-## What Stays From v1
+## Agent-Runner Properties
 
 - MCP server is a separate Node process spawned by the provider (via `mcpServers` config)
 - The MCP server binary is shared across providers — same tools, same DB access
@@ -745,21 +743,7 @@ The provider name comes from the container's environment (`AGENT_PROVIDER` env v
 - Additional directories discovery (`/workspace/extra/*`)
 - Logging via stderr (`[agent-runner] ...`)
 
-## What Changes From v1
-
-| v1 | v2 |
-|----|----|
-| stdin JSON envelope | Poll session DB |
-| IPC input files for follow-ups | Same DB poll + `provider.push()` |
-| stdout markers for output | Write messages_out rows |
-| MCP tools write IPC files | MCP tools write DB rows |
-| `_close` sentinel for shutdown | Host kills container externally |
-| `runQuery()` function with inline Claude SDK | `AgentProvider` interface + per-SDK implementations |
-| Single provider (Claude) | Pluggable providers (Claude, Codex, OpenCode, future) |
-| `ContainerInput` via stdin | Provider config via env vars + session DB for messages |
-| IPC polling for follow-ups | DB polling + provider.push() |
-
 ## Related Documents
 
-- **[v2-architecture-draft.md](v2-architecture-draft.md)** — High-level architecture (session DB schema, central DB, channel adapters, message flow)
-- **[v2-api-details.md](v2-api-details.md)** — Channel adapter interface, message content examples, host delivery logic
+- **[architecture.md](architecture.md)** — High-level architecture (session DB schema, central DB, channel adapters, message flow)
+- **[api-details.md](api-details.md)** — Channel adapter interface, message content examples, host delivery logic

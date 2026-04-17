@@ -1,4 +1,4 @@
-# NanoClaw v2 Checklist
+# NanoClaw Checklist
 
 Status: [x] done, [~] partial, [ ] not started
 
@@ -55,7 +55,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [~] iMessage via Chat SDK (adapter + skill written, not tested)
 - [x] Backward compatibility with native channels (old adapters still work)
 - [x] Channel barrel wired (src/index.ts imports barrel, skills uncomment)
-- [x] Setup flow wired to v2 channels (channel skills + /manage-channels for registration + verify.ts checks all tokens)
+- [x] Setup flow wired to channels (channel skills + /manage-channels for registration + verify.ts checks all tokens)
 - [x] Channel Info metadata in each channel skill (type, terminology, how-to-find-id, isolation defaults)
 - [x] /manage-channels skill (wire channels to agent groups with three isolation levels)
 - [x] /init-first-agent skill (standalone first-agent bootstrap; walks the operator through channel pick → identity lookup → DM platform_id resolution → wire → welcome DM; fallback to telegram pair-code or "DM the bot first" lookup for channels without cold DM)
@@ -253,9 +253,6 @@ Container skills live inside agent containers at runtime (`container/skills/`) a
 
 ## Migration
 
-- [ ] v1 -> v2 migration skill
-- [ ] Database migration (v1 SQLite -> v2 central DB + session DBs)
-- [ ] Channel credential preservation
 - [ ] Custom skill/code porting
 - [ ] OneCLI migration check — determine if existing installs need OneCLI re-init (credentials re-scoped to new `agent_group.id` identifier, new SDK version, approval handler registered). If needed, add a migration step to `/update-nanoclaw` or a dedicated skill.
 

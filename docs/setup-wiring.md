@@ -1,6 +1,6 @@
-# v2 Setup Wiring — Status & Remaining Work
+# Setup Wiring — Status & Remaining Work
 
-Last updated: 2026-04-09, branch `v2`, commit `1dc5750`
+Last updated: 2026-04-09
 
 ## What's Done
 
@@ -13,7 +13,7 @@ Last updated: 2026-04-09, branch `v2`, commit `1dc5750`
 - Host sweep reads `processing_ack` table + heartbeat file mtime for stale detection
 - Container clears stale `processing_ack` entries on startup (crash recovery)
 - Files: `src/db/schema.ts` (INBOUND_SCHEMA + OUTBOUND_SCHEMA), `src/session-manager.ts`, `src/delivery.ts`, `src/host-sweep.ts`, `container/agent-runner/src/db/connection.ts`, `messages-in.ts`, `messages-out.ts`, `poll-loop.ts`, `mcp-tools/scheduling.ts`, `mcp-tools/interactive.ts`
-- Container image rebuilt with tsconfig excluding v1 (`container/agent-runner/tsconfig.json`)
+- Container image rebuilt with tsconfig (`container/agent-runner/tsconfig.json`)
 - E2E verified: host → Docker container → Claude responds → "E2E works!" ✓
 
 ### OneCLI Integration
@@ -23,14 +23,14 @@ Last updated: 2026-04-09, branch `v2`, commit `1dc5750`
 
 ### Channel Barrel
 - `src/index.ts` imports `./channels/index.js` (the barrel)
-- Channel skills uncomment lines in the barrel to enable channels
-- Discord is uncommented by default (it was previously a direct import in index.ts)
+- Trunk ships the barrel + Chat SDK bridge only; `/add-<channel>` skills drop adapter files in and register them via the barrel slot
+- No channel adapters ship in trunk
 
 ### Setup Registration (partially)
-- `setup/register.ts` rewritten to create v2 entities (`agent_groups`, `messaging_groups`, `messaging_group_agents`) in `data/v2.db`
-- Accepts `--platform-id` (v2) and `--jid` (v1 compat) flags
-- Added `getMessagingGroupAgentByPair()` to prevent duplicate wiring
-- `setup/verify.ts` updated to check v2 central DB (counts agent groups with wiring)
+- `setup/register.ts` creates entities (`agent_groups`, `messaging_groups`, `messaging_group_agents`) in `data/v2.db`
+- Accepts `--platform-id` flag
+- `getMessagingGroupAgentByPair()` prevents duplicate wiring
+- `setup/verify.ts` checks the central DB (counts agent groups with wiring)
 
 ### Router Logging
 - `src/router.ts` logs `MESSAGE DROPPED` at WARN level when no agents wired, with actionable guidance
@@ -39,27 +39,23 @@ Last updated: 2026-04-09, branch `v2`, commit `1dc5750`
 
 ## Previously Open — Now Resolved
 
-### 1. ~~v2 Channel Skills Don't Register Groups~~ ✅
+### 1. ~~Channel Skills Don't Register Groups~~ ✅
 
 Channel skills now point to `/manage-channels` in their "Next Steps" section. Registration is handled by the `/manage-channels` skill, which reads each channel's `## Channel Info` section for platform-specific guidance. Channel skills stay lean (credentials only).
 
-### 2. ~~v1 add-discord Skill is Incompatible~~ ✅
-
-Created `/add-discord-v2` skill matching the v2 pattern. Setup SKILL.md updated to reference `/add-discord-v2`.
-
-### 3. ~~Setup SKILL.md Missing Group Registration Step~~ ✅
+### 2. ~~Setup SKILL.md Missing Group Registration Step~~ ✅
 
 Added step 5a "Wire Channels to Agent Groups" between channel installation (step 5) and mount allowlist (step 6). This step invokes `/manage-channels` which handles agent group creation, isolation level decisions, and wiring.
 
-### 4. ~~Channel Skills Should Know Channel Type~~ ✅
+### 3. ~~Channel Skills Should Know Channel Type~~ ✅
 
-Each v2 channel skill now has a `## Channel Info` structured section with: type, terminology, how-to-find-id, supports-threads, typical-use, default-isolation. The `/manage-channels` skill reads this for contextual recommendations.
+Each channel skill has a `## Channel Info` structured section with: type, terminology, how-to-find-id, supports-threads, typical-use, default-isolation. The `/manage-channels` skill reads this for contextual recommendations.
 
-### 5. ~~Verify Step Channel Auth Check~~ ✅
+### 4. ~~Verify Step Channel Auth Check~~ ✅
 
-`setup/verify.ts` now checks all v2 channel tokens: DISCORD_BOT_TOKEN, TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN+SLACK_APP_TOKEN, GITHUB_TOKEN, LINEAR_API_KEY, GCHAT_CREDENTIALS, TEAMS_APP_ID+TEAMS_APP_PASSWORD, WEBEX_BOT_TOKEN, MATRIX_ACCESS_TOKEN, RESEND_API_KEY, WHATSAPP_ACCESS_TOKEN, IMESSAGE_ENABLED, plus WhatsApp Baileys auth dir.
+`setup/verify.ts` checks all channel tokens: DISCORD_BOT_TOKEN, TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN+SLACK_APP_TOKEN, GITHUB_TOKEN, LINEAR_API_KEY, GCHAT_CREDENTIALS, TEAMS_APP_ID+TEAMS_APP_PASSWORD, WEBEX_BOT_TOKEN, MATRIX_ACCESS_TOKEN, RESEND_API_KEY, WHATSAPP_ACCESS_TOKEN, IMESSAGE_ENABLED, plus WhatsApp Baileys auth dir.
 
-### 6. Agent-Shared Session Mode ✅
+### 5. Agent-Shared Session Mode ✅
 
 Added `session_mode: 'agent-shared'` for cross-channel shared sessions (e.g. GitHub + Slack in one conversation). Session resolution looks up by agent_group_id instead of messaging_group_id when this mode is set.
 
@@ -67,7 +63,7 @@ Added `session_mode: 'agent-shared'` for cross-channel shared sessions (e.g. Git
 
 ## Architecture Reference
 
-### v2 Entity Model
+### Entity Model
 ```
 agent_groups (id, name, folder, agent_provider, container_config)
     ↕ many-to-many
@@ -93,13 +89,13 @@ Channel adapter → routeInbound() → resolve messaging_group → resolve agent
 ### Key Files
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | v2 entry point, imports channel barrel |
-| `src/channels/index.ts` | Channel barrel — uncomment to enable |
+| `src/index.ts` | Entry point, imports channel barrel |
+| `src/channels/index.ts` | Channel barrel — registry/Chat SDK bridge only in trunk; skills drop adapters in |
 | `src/router.ts` | Inbound routing, auto-creates messaging groups |
 | `src/session-manager.ts` | Creates inbound.db + outbound.db per session |
 | `src/delivery.ts` | Polls outbound.db, delivers, handles system actions |
 | `src/host-sweep.ts` | Syncs processing_ack, stale detection, recurrence |
 | `src/container-runner.ts` | Spawns containers, OneCLI ensureAgent + applyContainerConfig |
-| `setup/register.ts` | Creates v2 entities (agent_group, messaging_group, wiring) |
-| `setup/verify.ts` | Checks v2 central DB for registered groups |
+| `setup/register.ts` | Creates entities (agent_group, messaging_group, wiring) |
+| `setup/verify.ts` | Checks central DB for registered groups |
 | `container/agent-runner/src/db/connection.ts` | Two-DB connection layer (inbound read-only, outbound read-write) |

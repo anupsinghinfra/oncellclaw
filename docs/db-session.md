@@ -1,6 +1,6 @@
-# NanoClaw v2 — Per-Session DB Schema
+# NanoClaw — Per-Session DB Schema
 
-Reference for the two SQLite files each session owns: `inbound.db` (host writes, container reads) and `outbound.db` (container writes, host reads). Start with [v2-db.md](v2-db.md) for the three-DB overview, the single-writer rule, and the cross-mount visibility constraints.
+Reference for the two SQLite files each session owns: `inbound.db` (host writes, container reads) and `outbound.db` (container writes, host reads). Start with [db.md](db.md) for the three-DB overview, the single-writer rule, and the cross-mount visibility constraints.
 
 Schemas live in `src/db/schema.ts` as the `INBOUND_SCHEMA` and `OUTBOUND_SCHEMA` constants. Both files are created by `ensureSchema()` in `src/session-manager.ts` when a new session folder is provisioned.
 
@@ -50,7 +50,7 @@ CREATE TABLE messages_in (
 CREATE INDEX idx_messages_in_series ON messages_in(series_id);
 ```
 
-Content shapes: see [v2-api-details.md §Session DB Schema Details](v2-api-details.md#session-db-schema-details).
+Content shapes: see [api-details.md §Session DB Schema Details](api-details.md#session-db-schema-details).
 
 **Writers (host):** `insertMessage()`, `insertTask()`, `insertRecurrence()` — all in `src/db/session-db.ts`. Each calls `nextEvenSeq()`.
 **Reader (container):** `container/agent-runner/src/db/messages-in.ts` — polls `status='pending' AND (process_after IS NULL OR process_after <= now)`.
@@ -72,7 +72,7 @@ Writer: `markDelivered()` / `markDeliveryFailed()` in `src/db/session-db.ts`. Ol
 
 ### 2.3 `destinations`
 
-Projection of the central `agent_destinations` table (see [v2-db-central.md §1.10](v2-db-central.md#110-agent_destinations)) for this session's agent. The container resolves `to="name"` against this table; if the row is absent, the send is rejected as `unknown destination`.
+Projection of the central `agent_destinations` table (see [db-central.md §1.10](db-central.md#110-agent_destinations)) for this session's agent. The container resolves `to="name"` against this table; if the row is absent, the send is rejected as `unknown destination`.
 
 ```sql
 CREATE TABLE destinations (
@@ -141,7 +141,7 @@ CREATE TABLE messages_out (
 );
 ```
 
-Content shapes: see [v2-api-details.md §Session DB Schema Details](v2-api-details.md#session-db-schema-details).
+Content shapes: see [api-details.md §Session DB Schema Details](api-details.md#session-db-schema-details).
 
 **Writer (container):** `writeMessageOut()` in `container/agent-runner/src/db/messages-out.ts`.
 **Readers (host):** `src/delivery.ts` (polling delivery), `getMessageIdBySeq()` / `getRoutingBySeq()` for edit/reaction targeting.

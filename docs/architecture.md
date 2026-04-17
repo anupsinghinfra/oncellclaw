@@ -1,4 +1,4 @@
-# NanoClaw v2 Architecture (Draft)
+# NanoClaw Architecture (Draft)
 
 ## Core Idea
 
@@ -176,7 +176,7 @@ messages_out content references filenames only:
 
 No paths in the DB — the convention is the contract. The host reads files from `outbox/{message_id}/` in the mounted session folder and delivers them via the adapter (Chat SDK `FileUpload` with buffer data, or platform-specific upload for native channels). Host cleans up the outbox directory after successful delivery.
 
-Outbound files use a dedicated `send_file` MCP tool (separate from `send_message`). See [v2-agent-runner-details.md](v2-agent-runner-details.md) for the tool interface.
+Outbound files use a dedicated `send_file` MCP tool (separate from `send_message`). See [agent-runner-details.md](agent-runner-details.md) for the tool interface.
 
 ### Message Deduplication
 
@@ -390,28 +390,21 @@ The receiving agent gets a normal chat message. It doesn't need to know the sour
 
 This is documented as a pattern, not a built-in feature.
 
-## What Stays the Same
+## Core Properties
 - Container isolation via filesystem mounts
 - Credential proxy (OneCLI)
 - Per-agent-group workspace (folder, CLAUDE.md, skills)
 - Polling-based (not event-driven)
 - Per-agent-group agent-runner recompilation on container startup (agent can modify its own source, request rebuild/restart, changes persist across teardowns)
-
-## What Changes
-
-| Component | v1 | v2 |
-|-----------|----|----|
-| Host ↔ container IO | stdin + IPC files | Mounted session DB (messages_in / messages_out) |
-| Container input | Prompt string piped to stdin | Agent-runner polls messages_in |
-| Container output | stdout markers | Agent-runner writes to messages_out |
-| Agent commands | IPC JSON files | messages_out with `kind: 'system'` |
-| Agent-to-agent | Not supported | messages_out with target agent routing |
-| Scheduling | Separate scheduler + task table | `process_after` / `deliver_after` + `recurrence` on messages |
-| Media | Not supported | Signed URLs, downloaded in container |
-| Channel adapters | Custom per-platform | Chat SDK bridge + standard interface |
-| Routing | Host checks registeredGroups map | Channel adapter extracts IDs, host maps to entities |
-| Concurrency | GroupQueue (in-memory) | Chat SDK per-channel + container limits |
-| Session scoping | One session per agent group folder | Per-session DB, multiple sessions per agent group |
+- Host ↔ container IO through mounted session DBs (`messages_in` / `messages_out`) — no stdin piping, no IPC files
+- Agent commands are `messages_out` rows with `kind: 'system'`
+- Agent-to-agent supported via target-agent routing on `messages_out`
+- Scheduling uses `process_after` / `deliver_after` + `recurrence` on the same message tables
+- Media via signed URLs, downloaded in the container
+- Channel adapters use the Chat SDK bridge + a standard interface (trunk ships only the bridge/registry; platform adapters install via `/add-<channel>` skills)
+- Routing: channel adapter extracts IDs, host maps to entities
+- Concurrency: Chat SDK per-channel + container limits
+- Session scoping: per-session DB, multiple sessions per agent group
 
 ## Design Decisions
 
@@ -463,7 +456,7 @@ Typing indicators: host sets typing when a container is active for a session, cl
 
 ### Message Batching
 
-When multiple messages arrive while the container is down, they accumulate as `handled = 0` rows in messages_in. When the container wakes up, the agent-runner queries all unhandled messages and processes them as a batch — same as v1 where multiple messages are formatted into a single `<messages>` XML block.
+When multiple messages arrive while the container is down, they accumulate as `handled = 0` rows in messages_in. When the container wakes up, the agent-runner queries all unhandled messages and processes them as a batch — multiple messages are formatted into a single `<messages>` XML block.
 
 ### Message Lifecycle
 
@@ -523,11 +516,11 @@ NanoClaw is customized via skills — branches that get merged into the user's i
 - One line in the barrel file (`channels/index.ts`) to import the self-registering module
 - Zero changes to routing, formatting, delivery, or container code
 
-### v1 Conflict Hotspots and v2 Solutions
+### Conflict Hotspots and Solutions
 
 Analysis of 33 skill branches shows these files cause the most merge conflicts:
 
-| v1 hotspot | Why it conflicts | v2 solution |
+| Hotspot | Why it conflicts | Solution |
 |-----------|-----------------|-------------|
 | `src/index.ts` (2000 LOC) | Every skill patches the main loop, imports, init logic | Thin index that wires modules. Logic lives in purpose-specific files (router, delivery, session-manager, host-sweep). |
 | `src/config.ts` | Every skill adds env vars to a central file | Config declared where it's used. Each module reads its own env vars. No central config registry that every skill edits. |
@@ -566,9 +559,9 @@ Shared config (DATA_DIR, TIMEZONE, MAX_CONCURRENT_CONTAINERS) stays in `config.t
 
 ### Code Style
 
-**Line width: 120 characters.** v1 uses the prettier default of 80, which breaks simple log calls and function signatures across 3-4 lines. v2 uses 120 — most statements fit on one line without sacrificing readability.
+**Line width: 120 characters.** Most statements fit on one line without sacrificing readability.
 
-**Concise logging.** v1 has 138 log calls, many spanning 3-4 lines due to pino's structured API + 80-char wrapping. v2 uses a thin wrapper so every log call is one line:
+**Concise logging.** A thin wrapper keeps every log call on one line:
 
 ```typescript
 log.info('IPC message sent', { chatJid, sourceGroup });
@@ -578,7 +571,7 @@ log.error('Error processing', { file, err });
 
 ### DB File Structure
 
-v1's DB is one 750-line file with all tables, all CRUD functions, and all migrations inline. v2 splits by entity:
+The DB layer is split by entity rather than kept in one monolithic file:
 
 ```
 src/db/
@@ -586,7 +579,7 @@ src/db/
   schema.ts                  ← CREATE TABLE statements (current state, for reference)
   migrations/
     index.ts                 ← runner: checks version, applies pending
-    001-initial.ts           ← v2 initial schema
+    001-initial.ts           ← initial schema
     002-pending-questions.ts ← example: adds pending_questions table
     ...                      ← skills append new numbered files
   agent-groups.ts            ← CRUD for agent_groups
@@ -598,7 +591,7 @@ src/db/
 **Principles:**
 - **Split by entity, not by layer.** Each entity file has its own CRUD functions (~50-100 lines). A skill that adds a column to messaging_groups edits `messaging-groups.ts` — doesn't touch sessions or agent groups.
 - **Schema as current state + migrations as history.** `schema.ts` documents what the DB looks like now (read this to understand the schema). Migrations are append-only numbered files that describe how we got here.
-- **No inline ALTER TABLE.** v1 accumulates `try { ALTER TABLE } catch { /* exists */ }` blocks forever. v2 uses a migration runner with a `schema_version` table. On startup, it checks the current version and applies pending migrations in order. Each migration is a function: `(db: Database) => void`.
+- **No inline ALTER TABLE.** A migration runner with a `schema_version` table replaces `try { ALTER TABLE } catch { /* exists */ }` blocks. On startup, it checks the current version and applies pending migrations in order. Each migration is a function: `(db: Database) => void`.
 - **Skills add migrations.** A skill that needs a new column adds a new numbered migration file. No conflicts with other skills' migrations as long as numbers don't collide (use timestamps or high-enough numbers for skill branches).
 
 **Agent-runner session DB** uses the same pattern but lighter — no migrations needed since session DBs are created fresh by the host:
@@ -795,18 +788,6 @@ stopped → running → idle → stopped
 - **idle**: Done processing, container still warm (up to 30 min timeout). Polled at 1s so new messages are picked up quickly.
 - After idle timeout → host kills container → stopped.
 
-### Migration from v1
-
-| v1 table | v2 |
-|----------|-----|
-| `registered_groups` | Split into `agent_groups` + `messaging_groups` + `messaging_group_agents` |
-| `chats` | Absorbed into `messaging_groups` |
-| `messages` | Content moves to per-session DBs (messages_in) |
-| `sessions` (folder → sdk_session_id) | New `sessions` table (folder derived from ID) |
-| `scheduled_tasks` | Moved to per-session DBs (messages_in with recurrence) |
-| `task_run_logs` | Dropped — results are in session DB messages_out |
-| `router_state` | Dropped — replaced by message status in session DBs |
-
 ## Agent-Runner Architecture
 
 The agent-runner is the process inside the container. It mediates between the session DB and the Claude SDK — polling for work, formatting messages for the agent, translating tool calls into DB rows, and managing the agent lifecycle.
@@ -815,13 +796,10 @@ The agent-runner is the process inside the container. It mediates between the se
 
 All IO goes through the session DB. No stdin, no stdout markers, no IPC files.
 
-| v1 | v2 |
-|----|----|
-| Initial input from stdin (JSON envelope) | Poll `messages_in` |
-| Follow-up messages from IPC files | Same poll — new rows appear |
-| Output via stdout markers | Write `messages_out` rows |
-| MCP tools write IPC files | MCP tools write DB rows |
-| `_close` sentinel signals shutdown | Host kills container (idle timeout) or agent-runner exits when no pending work |
+- Initial input and follow-ups: poll `messages_in`
+- Output: write `messages_out` rows
+- MCP tools: write DB rows (no IPC files)
+- Shutdown: host kills the container on idle timeout, or the agent-runner exits when there's no pending work
 
 ### Poll Loop
 
@@ -837,9 +815,9 @@ All IO goes through the session DB. No stdin, no stdout markers, no IPC files.
 
 Agent-runner strips routing fields (`platform_id`, `channel_type`, `thread_id`) before formatting. The agent never sees routing info — it only sees content.
 
-- **`chat`** — format into `<messages>` XML block (same as v1)
+- **`chat`** — format into `<messages>` XML block
 - **`chat-sdk`** — extract text, author, attachments from serialized message; format into `<messages>` XML
-- **`task`** — format as `[SCHEDULED TASK]` prefix + prompt. Run pre-script if present (same as v1).
+- **`task`** — format as `[SCHEDULED TASK]` prefix + prompt. Run pre-script if present.
 - **`webhook`** — format as `[WEBHOOK: source/event]` + JSON payload
 - **`system`** — host action results (e.g., "register_group succeeded"). Format as system context, not chat.
 
@@ -847,9 +825,9 @@ Mixed batches (e.g., a chat message + a system result both pending) are combined
 
 ### MCP Tools
 
-All v1 IPC-file-based tools are replaced with direct DB writes.
+MCP tools write directly to the session DB.
 
-**Carried over (new implementation):**
+**Core tools:**
 
 | Tool | What it does |
 |------|-------------|
@@ -870,7 +848,7 @@ All v1 IPC-file-based tools are replaced with direct DB writes.
 | `send_to_agent` | Write `messages_out` with `channel_type: 'agent'`, `platform_id: '{target}'` |
 | `send_card` | Write `messages_out` with card structure |
 
-See [v2-agent-runner-details.md](v2-agent-runner-details.md) for full MCP tool parameter definitions.
+See [agent-runner-details.md](agent-runner-details.md) for full MCP tool parameter definitions.
 
 ### Cards
 
@@ -904,7 +882,7 @@ The command lists are hardcoded in the agent-runner. Admin verification: the hos
 
 The agent-runner processes recurring task messages like any other messages_in row. After the agent-runner marks a recurring message as `completed`, the **host** handles inserting the next occurrence (new messages_in row with `process_after` advanced to next cron time). The agent-runner doesn't manage recurrence — it just processes what it finds.
 
-Pre-scripts work the same as v1: if a task message has a `script` field, run it first. If `wakeAgent = false`, mark completed without invoking Claude.
+Pre-scripts: if a task message has a `script` field, run it first. If `wakeAgent = false`, mark completed without invoking Claude.
 
 ### Agent-to-Agent Messaging
 
@@ -912,9 +890,9 @@ Pre-scripts work the same as v1: if a task message has a `script` field, run it 
 
 **Inbound:** Messages from other agents arrive as normal `chat` messages_in rows. The content includes `sender` and `senderId` (e.g., `"senderId": "agent:pr-admin"`). No special formatting — the agent sees it as a chat message.
 
-### What Stays From v1
+### Agent-Runner Properties
 
-- AgentProvider interface wraps SDK-specific query logic (Claude, Codex, OpenCode)
+- AgentProvider interface wraps SDK-specific query logic (trunk ships the `claude` provider; additional providers like OpenCode install via `/add-<provider>` skills)
 - Session resume via provider-specific mechanisms
 - System prompt loading from CLAUDE.md files
 - PreCompact hook for transcript archiving (Claude provider)
@@ -929,5 +907,5 @@ Pre-scripts work the same as v1: if a task message has a `script` field, run it 
 
 ## Related Documents
 
-- **[v2-api-details.md](v2-api-details.md)** — Channel adapter interface (NanoClaw + Chat SDK bridge), message content examples, host delivery logic
-- **[v2-agent-runner-details.md](v2-agent-runner-details.md)** — AgentProvider interface, MCP tools, message formatting, media handling, provider implementations (Claude, Codex, OpenCode)
+- **[api-details.md](api-details.md)** — Channel adapter interface (NanoClaw + Chat SDK bridge), message content examples, host delivery logic
+- **[agent-runner-details.md](agent-runner-details.md)** — AgentProvider interface, MCP tools, message formatting, media handling, provider implementations

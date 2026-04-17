@@ -1,6 +1,6 @@
-# NanoClaw v2 — Central DB Schema
+# NanoClaw — Central DB Schema
 
-Complete reference for `data/v2.db`, the host-owned admin-plane database. Start with [v2-db.md](v2-db.md) for the three-DB overview, the map, and the cross-mount rules.
+Complete reference for `data/v2.db`, the host-owned admin-plane database. Start with [db.md](db.md) for the three-DB overview, the map, and the cross-mount rules.
 
 Access layer: `src/db/`. Authoritative schema reference: `src/db/schema.ts` (comments only — actual creation runs via migrations in `src/db/migrations/`).
 
@@ -48,7 +48,7 @@ CREATE TABLE messaging_groups (
 
 ### 1.3 `messaging_group_agents`
 
-Wiring: which agent group handles which messaging group. Many-to-many — the same channel can route to multiple agents (see [v2-isolation-model.md](v2-isolation-model.md)).
+Wiring: which agent group handles which messaging group. Many-to-many — the same channel can route to multiple agents (see [isolation-model.md](isolation-model.md)).
 
 ```sql
 CREATE TABLE messaging_group_agents (
@@ -157,7 +157,7 @@ CREATE INDEX idx_sessions_lookup     ON sessions(messaging_group_id, thread_id);
 ```
 
 - **Resolved by:** `resolveSession()` in `src/session-manager.ts`.
-- Creating a session also provisions the session folder and both session DBs via `initSessionFolder()` — see [v2-db-session.md](v2-db-session.md).
+- Creating a session also provisions the session folder and both session DBs via `initSessionFolder()` — see [db-session.md](db-session.md).
 
 ### 1.9 `pending_questions`
 
@@ -193,7 +193,7 @@ CREATE TABLE agent_destinations (
 CREATE INDEX idx_agent_dest_target ON agent_destinations(target_type, target_id);
 ```
 
-**Projection invariant (load-bearing).** The central table is the source of truth, but each running container reads from a projection in its own `inbound.db` (see [v2-db-session.md §2.3](v2-db-session.md#23-destinations)). Any code that mutates `agent_destinations` while a container is running must also call `writeDestinations()` (`src/session-manager.ts`) or the container will reject sends with stale data. Known call sites: `createMessagingGroupAgent()` in `src/db/messaging-groups.ts`, the `create_agent` system action in `src/delivery.ts`.
+**Projection invariant (load-bearing).** The central table is the source of truth, but each running container reads from a projection in its own `inbound.db` (see [db-session.md §2.3](db-session.md#23-destinations)). Any code that mutates `agent_destinations` while a container is running must also call `writeDestinations()` (`src/session-manager.ts`) or the container will reject sends with stale data. Known call sites: `createMessagingGroupAgent()` in `src/db/messaging-groups.ts`, the `create_agent` system action in `src/delivery.ts`.
 
 Access layer: `src/db/agent-destinations.ts`.
 
@@ -253,7 +253,7 @@ Writer: `recordDroppedMessage()` in `src/db/dropped-messages.ts`. On conflict, b
 
 ### 1.13 Chat SDK bridge tables
 
-State backing the `SqliteStateAdapter` used by the Chat SDK bridge (see [v2-api-details.md](v2-api-details.md)). NanoClaw code rarely touches these directly — they're owned by `src/state-sqlite.ts`.
+State backing the `SqliteStateAdapter` used by the Chat SDK bridge (see [api-details.md](api-details.md)). NanoClaw code rarely touches these directly — they're owned by `src/state-sqlite.ts`.
 
 ```sql
 CREATE TABLE chat_sdk_kv (
@@ -306,7 +306,7 @@ Migrations live in `src/db/migrations/`, one file per migration. Runner: `runMig
 
 | # | File | Introduces |
 |---|------|------------|
-| 001 | `001-initial.ts` | Core v2 tables: `agent_groups`, `messaging_groups`, `messaging_group_agents`, `users`, `user_roles`, `agent_group_members`, `user_dms`, `sessions`, `pending_questions` |
+| 001 | `001-initial.ts` | Core tables: `agent_groups`, `messaging_groups`, `messaging_group_agents`, `users`, `user_roles`, `agent_group_members`, `user_dms`, `sessions`, `pending_questions` |
 | 002 | `002-chat-sdk-state.ts` | `chat_sdk_kv`, `chat_sdk_subscriptions`, `chat_sdk_locks`, `chat_sdk_lists` |
 | 003 | `003-pending-approvals.ts` | `pending_approvals` (session-bound + OneCLI fields) |
 | 004 | `004-agent-destinations.ts` | `agent_destinations` + backfill from existing `messaging_group_agents` wirings |
@@ -314,6 +314,6 @@ Migrations live in `src/db/migrations/`, one file per migration. Runner: `runMig
 | 008 | `008-dropped-messages.ts` | `unregistered_senders` |
 | 009 | `009-drop-pending-credentials.ts` | Drop the defunct `pending_credentials` table |
 
-Numbers 005 and 006 are intentionally absent — migrations were renumbered during v2 development.
+Numbers 005 and 006 are intentionally absent — migrations were renumbered during early development.
 
-Session DB schemas (`INBOUND_SCHEMA`, `OUTBOUND_SCHEMA`) are **not** versioned here. They're `CREATE TABLE IF NOT EXISTS` so new columns land via the session-DB lazy migration helpers (`migrateDeliveredTable()` etc.) when a session file from an older build is reopened. See [v2-db-session.md](v2-db-session.md).
+Session DB schemas (`INBOUND_SCHEMA`, `OUTBOUND_SCHEMA`) are **not** versioned here. They're `CREATE TABLE IF NOT EXISTS` so new columns land via the session-DB lazy migration helpers (`migrateDeliveredTable()` etc.) when a session file from an older build is reopened. See [db-session.md](db-session.md).

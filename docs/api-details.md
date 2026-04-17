@@ -1,10 +1,10 @@
-# NanoClaw v2 API Details
+# NanoClaw API Details
 
-Implementation-level details for the v2 architecture. See [v2-architecture-draft.md](v2-architecture-draft.md) for the high-level design.
+Implementation-level details for the architecture. See [architecture.md](architecture.md) for the high-level design.
 
 ## Channel Adapter Interface
 
-### NanoClaw Channel Interface (v2)
+### NanoClaw Channel Interface
 
 ```typescript
 interface ChannelSetup {
@@ -59,7 +59,7 @@ interface OutboundMessage {
 
 ### Chat SDK Bridge
 
-Wraps a Chat SDK adapter + Chat instance to conform to the NanoClaw ChannelAdapter interface.
+Wraps a Chat SDK adapter + Chat instance to conform to the NanoClaw ChannelAdapter interface. Trunk ships the bridge and the channel registry only — platform-specific Chat SDK adapters (Discord, Slack, Telegram, etc.) and native adapters (WhatsApp/Baileys) are installed by the `/add-<channel>` skills from the `channels` branch.
 
 ```typescript
 function createChatSdkBridge(
@@ -170,7 +170,7 @@ function createChatSdkBridge(
 
 ### Native NanoClaw Channel (no Chat SDK)
 
-Native channels implement the ChannelAdapter interface directly. Example structure for WhatsApp/Baileys:
+Native channels implement the ChannelAdapter interface directly. The WhatsApp/Baileys adapter is the canonical example — it ships via the `/add-whatsapp` skill, not in trunk:
 
 ```typescript
 function createWhatsAppChannel(): ChannelAdapter {
@@ -293,14 +293,14 @@ function createWhatsAppChannel(): ChannelAdapter {
     "type": "card",
     "title": "Deployment Approval",
     "children": [
-      { "type": "text", "content": "Deploy v2.1.0 to production?" },
+      { "type": "text", "content": "Deploy 2.1.0 to production?" },
       { "type": "actions", "children": [
         { "type": "button", "id": "approve", "label": "Approve", "style": "primary" },
         { "type": "button", "id": "reject", "label": "Reject", "style": "danger" }
       ]}
     ]
   },
-  "fallbackText": "Deployment Approval: Deploy v2.1.0 to production? [Approve] [Reject]"
+  "fallbackText": "Deployment Approval: Deploy 2.1.0 to production? [Approve] [Reject]"
 }
 ```
 
