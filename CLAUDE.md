@@ -138,6 +138,9 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 |-----|---------|
 | [docs/v2-architecture-draft.md](docs/v2-architecture-draft.md) | Full architecture writeup |
 | [docs/v2-api-details.md](docs/v2-api-details.md) | Host API + DB schema details |
+| [docs/v2-db.md](docs/v2-db.md) | DB architecture overview: three-DB model, cross-mount rules, readers/writers map |
+| [docs/v2-db-central.md](docs/v2-db-central.md) | Central DB (`data/v2.db`) — every table + migration system |
+| [docs/v2-db-session.md](docs/v2-db-session.md) | Per-session `inbound.db` + `outbound.db` schemas + seq parity |
 | [docs/v2-agent-runner-details.md](docs/v2-agent-runner-details.md) | Agent-runner internals + MCP tool interface |
 | [docs/v2-isolation-model.md](docs/v2-isolation-model.md) | Three-level channel isolation model |
 | [docs/v2-setup-wiring.md](docs/v2-setup-wiring.md) | What's wired, what's open in the setup flow |
