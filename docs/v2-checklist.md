@@ -26,7 +26,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Command categorization (admin, filtered, passthrough)
 - [x] Transcript archiving (pre-compact hook)
 - [x] XML message formatting with sender, timestamp
-- [~] Media handling inbound (formatter references attachments, no download-from-URL)
+- [~] Media handling inbound (native files support for claude)
 
 ## Agent Providers
 
@@ -42,8 +42,6 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Chat SDK bridge (generic, works with any Chat SDK adapter)
 - [x] Chat SDK SQLite state adapter (KV, subscriptions, locks, lists)
 - [x] Discord via Chat SDK
-  - [ ] First inbound message requires @mention before Chat SDK subscribes the channel/thread. Subsequent messages flow without @. Fix: pre-subscribe known conversations at bridge startup (iterate `setupConfig.conversations` → `thread.subscribe()`), or upstream a "listen to all messages in known channels" mode in Chat SDK.
-  - [ ] @mention in a root Discord channel causes the adapter to materialize a sub-thread as its subscription surface. Either (a) live with it and treat each mention-rooted sub-thread as its own session, or (b) flip Discord to `supportsThreads: false` so replies always land in the root channel, or (c) change the adapter's subscribe behavior so root-channel subscription doesn't spawn a Discord thread.
 - [~] Slack via Chat SDK (adapter + skill written, not tested)
 - [x] Telegram via Chat SDK (E2E verified: inbound, routing, typing, delivery)
 - [~] Microsoft Teams via Chat SDK (adapter + skill written, not tested)
@@ -64,6 +62,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Cold-DM infrastructure — `ChannelAdapter.openDM?(handle)` optional method, resolved via Chat SDK `chat.openDM` for resolution-required channels (Discord, Slack, Teams, Webex, gChat) and fall-through to the handle directly for direct-addressable channels (Telegram, WhatsApp, iMessage, Matrix, Resend). `src/user-dm.ts::ensureUserDm` caches every resolution in `user_dms` so subsequent cold DMs are a DB read.
 - [x] Agent-shared session mode (cross-channel shared sessions, e.g. GitHub + Slack)
 - [x] Auto-onboarding on channel registration (/welcome skill triggered on first wiring)
+- [ ] Wire different chat modes - mentions, whitelist, approve, etc
 
 ## Chat-First Setup Flow
 
@@ -154,8 +153,6 @@ Status: [x] done, [~] partial, [ ] not started
 - [x] Admin-only command filtering in container — host passes `NANOCLAW_ADMIN_USER_IDS` (owners + global admins + scoped admins for the agent group) to the agent-runner; `poll-loop.ts` gates slash commands against that set.
 - [x] Approval routing — `pickApprover` (scoped admin → global admin → owner, dedup) + `pickApprovalDelivery` (first reachable, same-channel-kind tie-break); delivery lands in the approver's DM via `ensureUserDm` / `user_dms` cache. See `src/access.ts`, `src/onecli-approvals.ts`.
 - [x] Per-messaging-group unknown-sender gating — `messaging_groups.unknown_sender_policy` (`strict` | `request_approval` | `public`), enforced in `src/router.ts`.
-- [ ] `/remote-control` and `/remote-control-end` are v1 host-level commands not ported to v2 — listed in `ADMIN_COMMANDS` (formatter.ts:13) but unhandled in poll-loop, so they fall through to the Claude SDK which replies "Unknown skill".
-- [ ] Self-approval UX: when the user requesting a sensitive action IS an owner/admin, the agent still posts an Approve button back to that same person and narrates "waiting on admin approval" — confusing and redundant.
 - [x] Approval flow (sensitive action -> card to admin -> approve/reject -> execute) — `pending_approvals` table, `requestApproval()` helper, reuses interactive card infra
 - [x] Agent requests dependency/package install (install_packages, admin approval, rebuild on approval)
 - [x] Self-modification — direct tools:
@@ -165,7 +162,6 @@ Status: [x] done, [~] partial, [ ] not started
   - [x] Fire-and-forget model (write request, return immediately; chat notification on approval; container killed so next wake picks up new config/image)
 - [~] OneCLI integration for human-loop approvals on credentialed requests (agent touching a credentialed resource → OneCLI gates → approval card to admin → OneCLI releases credential) — SDK 0.3.1 `configureManualApproval` wired into host, routes to admin via existing `pending_approvals` infra
 - [ ] Tunneled OneCLI dashboard for credential addition (Telegram Mini Apps aside, iMessage without Apple Business Register, Matrix, email). Signed short-lived URL → browser form served by OneCLI at 10254 → tunnel via cloudflare durable object. Value never touches the chat surface.
-- [ ] Sensitive data access flow (agent requests PII / secrets / private files → approval card → scoped, time-limited access)
 - [ ] Self-modification via direct source edits — planned draft/activate flow: RO baseline mount at `/app/src`, RW draft at `/workspace/src-draft`, atomic snapshot into `pending`, admin approval, `cp -a` into baseline, restart + deadman rollback. Unifies runner src, host src, migrations, package.json, container config through one edit path. Collapses the abandoned `create_dev_agent`/`request_swap` dev-agent-in-worktree approach.
 
 ## Named Destinations + ACL
@@ -203,7 +199,7 @@ Status: [x] done, [~] partial, [ ] not started
 - [~] /usage (passes through, no rich formatting)
 - [~] /cost (passes through, no rich formatting)
 - [ ] Smooth session transitions: load context into new sessions, solve cold start problem
-- [ ] MCP/package installation from chat
+- [x] MCP/package installation from chat
 - [ ] Browse MCP marketplace / skills repository from chat
 
 ## Skills & Marketplace
@@ -222,7 +218,6 @@ Container skills live inside agent containers at runtime (`container/skills/`) a
 
 - [ ] Customize container skill — agent-driven customization flow (add channel, integration, behavior change) usable from inside any agent session, not just the main repo
 - [ ] Debug container skill — inspect logs, session DB, MCP server state, container env, recent errors from inside the agent
-- [ ] Setup container skill — first-time setup flow triggered from inside the agent (ties to host-side /setup)
 - [ ] Build-system container skills:
   - [ ] Karpathy LLM Wiki builder (agent scaffolds a persistent wiki knowledge base for a group)
   - [ ] Generic build-system framework for agent-authored sub-systems
@@ -247,8 +242,8 @@ Container skills live inside agent containers at runtime (`container/skills/`) a
 
 ## Integrations
 
-- [ ] Vercel CLI integration in setup process
-- [ ] Skills for deploying and managing Vercel websites from chat
+- [x] Vercel CLI integration in setup process
+- [x] Skills for deploying and managing Vercel websites from chat
 - [ ] Office 365 integration (create/edit documents with inline suggestions)
 
 ## Memory
