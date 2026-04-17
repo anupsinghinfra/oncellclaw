@@ -210,5 +210,5 @@ To remove Telegram integration:
 2. Remove `import './telegram.js'` from `src/channels/index.ts`
 3. Remove `TELEGRAM_BOT_TOKEN` from `.env`
 4. Remove Telegram registrations from SQLite: `sqlite3 store/messages.db "DELETE FROM registered_groups WHERE jid LIKE 'tg:%'"`
-5. Uninstall: `ppnpm uninstall grammy`
+5. Uninstall: `pnpm uninstall grammy`
 6. Rebuild: `pnpm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `pnpm run build && systemctl --user restart nanoclaw` (Linux)

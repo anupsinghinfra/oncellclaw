@@ -322,7 +322,12 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
     dockerfile += `RUN apt-get update && apt-get install -y ${aptPackages.join(' ')} && rm -rf /var/lib/apt/lists/*\n`;
   }
   if (npmPackages.length > 0) {
-    dockerfile += `RUN pnpm install -g ${npmPackages.join(' ')}\n`;
+    // pnpm skips build scripts unless packages are allowlisted. Append each
+    // to /root/.npmrc (base image sets it up for agent-browser) so packages
+    // with postinstall — e.g. playwright, puppeteer, native addons — don't
+    // install silently broken.
+    const allowlist = npmPackages.map((p) => `echo 'only-built-dependencies[]=${p}' >> /root/.npmrc`).join(' && ');
+    dockerfile += `RUN ${allowlist} && pnpm install -g ${npmPackages.join(' ')}\n`;
   }
   dockerfile += 'USER node\n';
 

@@ -230,7 +230,7 @@ pnpm dlx @gongrzhe/server-gmail-autoauth-mcp
 2. Remove `import './gmail.js'` from `src/channels/index.ts`
 3. Remove `~/.gmail-mcp` mount from `src/container-runner.ts`
 4. Remove `gmail` MCP server and `mcp__gmail__*` from `container/agent-runner/src/index.ts`
-5. Uninstall: `ppnpm uninstall googleapis`
+5. Uninstall: `pnpm uninstall googleapis`
 6. Rebuild and restart
 7. Clear stale agent-runner copies: `rm -r data/sessions/*/agent-runner-src 2>/dev/null || true`
 8. Rebuild: `cd container && ./build.sh && cd .. && pnpm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux)
