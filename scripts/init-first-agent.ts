@@ -10,7 +10,7 @@
  * channel adapters, so there's no Gateway conflict.
  *
  * Usage:
- *   npx tsx scripts/init-first-agent.ts \
+ *   pnpm exec tsx scripts/init-first-agent.ts \
  *     --channel discord \
  *     --user-id discord:1470183333427675709 \
  *     --platform-id discord:@me:1491573333382523708 \

@@ -25,7 +25,7 @@ NanoClaw (pusher)              Dashboard (npm package)
 ### 1. Install the npm package
 
 ```bash
-npm install @nanoco/nanoclaw-dashboard
+pnpm install @nanoco/nanoclaw-dashboard
 ```
 
 ### 2. Copy the pusher module
@@ -94,7 +94,7 @@ Generate the secret: `node -e "console.log('nc-' + require('crypto').randomBytes
 ### 6. Build and restart
 
 ```bash
-npm run build
+pnpm run build
 systemctl --user restart nanoclaw   # Linux
 # or: launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 ```
@@ -130,9 +130,9 @@ Open `http://localhost:3100/dashboard` in a browser.
 ## Removal
 
 ```bash
-npm uninstall @nanoco/nanoclaw-dashboard
+pnpm uninstall @nanoco/nanoclaw-dashboard
 rm src/dashboard-pusher.ts
 # Remove the dashboard block from src/index.ts
 # Remove DASHBOARD_SECRET and DASHBOARD_PORT from .env
-npm run build
+pnpm run build
 ```
