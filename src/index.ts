@@ -33,9 +33,54 @@ import { writeSessionMessage } from './session-manager.js';
 import { wakeContainer, buildAgentGroupImage, killContainer } from './container-runner.js';
 import { log } from './log.js';
 
+/**
+ * Response handler registry.
+ *
+ * Button-click / question responses arrive via the channel adapter's
+ * `onAction` callback. Core iterates registered handlers in registration
+ * order; the first one that returns `true` claims the response.
+ * Unclaimed responses fall through to the inline `handleQuestionResponse`
+ * below (which handles OneCLI credential approvals, pending_approvals,
+ * and pending_questions). As those modules are extracted, the inline
+ * function will shrink and the registry will own the full dispatch.
+ */
+export interface ResponsePayload {
+  questionId: string;
+  value: string;
+  userId: string | null;
+  channelType: string;
+  platformId: string;
+  threadId: string | null;
+}
+
+export type ResponseHandler = (payload: ResponsePayload) => Promise<boolean>;
+
+const responseHandlers: ResponseHandler[] = [];
+
+export function registerResponseHandler(handler: ResponseHandler): void {
+  responseHandlers.push(handler);
+}
+
+async function dispatchResponse(payload: ResponsePayload): Promise<void> {
+  for (const handler of responseHandlers) {
+    try {
+      const claimed = await handler(payload);
+      if (claimed) return;
+    } catch (err) {
+      log.error('Response handler threw', { questionId: payload.questionId, err });
+    }
+  }
+  // Unclaimed — fall through to inline handler.
+  await handleQuestionResponse(payload.questionId, payload.value, payload.userId ?? '');
+}
+
 // Channel barrel — each enabled channel self-registers on import.
 // Channel skills uncomment lines in channels/index.ts to enable them.
 import './channels/index.js';
+
+// Modules barrel — default modules (typing, mount-security) ship here; skills
+// append registry-based modules. Imported for side effects (registrations).
+import './modules/index.js';
 
 import type { ChannelAdapter, ChannelSetup, ConversationConfig } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
@@ -82,7 +127,18 @@ async function main(): Promise<void> {
         });
       },
       onAction(questionId, selectedOption, userId) {
-        handleQuestionResponse(questionId, selectedOption, userId).catch((err) => {
+        dispatchResponse({
+          questionId,
+          value: selectedOption,
+          userId,
+          channelType: adapter.channelType,
+          // platformId/threadId aren't surfaced by the current onAction
+          // signature — the inline fallback looks them up from the
+          // pending_question / pending_approval row. Registered handlers
+          // typically do the same.
+          platformId: '',
+          threadId: null,
+        }).catch((err) => {
           log.error('Failed to handle question response', { questionId, err });
         });
       },

@@ -9,8 +9,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { MOUNT_ALLOWLIST_PATH } from './config.js';
-import { log } from './log.js';
+import { MOUNT_ALLOWLIST_PATH } from '../../config.js';
+import { log } from '../../log.js';
 
 export interface AdditionalMount {
   hostPath: string;
