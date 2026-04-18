@@ -13,4 +13,6 @@
  * Registry-based modules (installed via /add-<name> skills, pulled from the
  * `modules` branch): append imports below.
  */
-export {};
+import './interactive/index.js';
+import './approvals/index.js';
+

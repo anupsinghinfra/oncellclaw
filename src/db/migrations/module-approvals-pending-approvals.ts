@@ -12,7 +12,10 @@ import type { Migration } from './index.js';
  * `platform_message_id`, `expires_at`, `status`) let the host edit the admin
  * card when a request expires and sweep stale rows on startup.
  */
-export const migration003: Migration = {
+// Retains the original `name` ('pending-approvals') so existing DBs that
+// already recorded this migration under that name don't re-run it. The
+// module- prefix lives on the filename / export identifier only.
+export const moduleApprovalsPendingApprovals: Migration = {
   version: 3,
   name: 'pending-approvals',
   up(db) {
