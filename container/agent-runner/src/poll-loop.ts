@@ -156,11 +156,18 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Pre-task scripts: for any task rows with a `script`, run it before the
     // provider call. Scripts returning wakeAgent=false (or erroring) gate
     // their own task row only — surviving messages still go to the agent.
+    //
+    // MODULE-HOOK:scheduling-pre-task:start
+    // When scheduling is extracted (PR #4), `applyPreTaskScripts` moves
+    // to the scheduling module and the `/add-scheduling` skill replaces
+    // this block with a call to the module. Without scheduling installed,
+    // the block is empty (no script gating) and `keep = normalMessages`.
     const { keep, skipped } = await applyPreTaskScripts(normalMessages);
     if (skipped.length > 0) {
       markCompleted(skipped);
       log(`Pre-task script skipped ${skipped.length} task(s): ${skipped.join(', ')}`);
     }
+    // MODULE-HOOK:scheduling-pre-task:end
 
     if (keep.length === 0) {
       log(`All ${normalMessages.length} non-command message(s) gated by script, skipping query`);

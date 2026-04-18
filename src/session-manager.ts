@@ -17,6 +17,7 @@ import path from 'path';
 import { DATA_DIR } from './config.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDestinations } from './db/agent-destinations.js';
+import { getDb, hasTable } from './db/connection.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import { createSession, findSession, findSessionByAgentGroup, getSession, updateSession } from './db/sessions.js';
 import {
@@ -182,6 +183,11 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
 export function writeDestinations(agentGroupId: string, sessionId: string): void {
   const dbPath = inboundDbPath(agentGroupId, sessionId);
   if (!fs.existsSync(dbPath)) return;
+
+  // Guarded: when the agent-to-agent module isn't installed, the
+  // `agent_destinations` table doesn't exist. Skip silently — core
+  // container spawn continues without projecting destinations.
+  if (!hasTable(getDb(), 'agent_destinations')) return;
 
   const rows = getDestinations(agentGroupId);
   const resolved: DestinationRow[] = [];

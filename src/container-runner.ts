@@ -13,11 +13,12 @@ import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZO
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { getDb, hasTable } from './db/connection.js';
 import { getAdminsOfAgentGroup, getGlobalAdmins, getOwners } from './db/user-roles.js';
 import { initGroupFilesystem } from './group-init.js';
-import { stopTypingRefresh } from './delivery.js';
+import { stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
-import { validateAdditionalMounts } from './mount-security.js';
+import { validateAdditionalMounts } from './modules/mount-security/index.js';
 // Provider host-side config barrel — each provider that needs host-side
 // container setup self-registers on import.
 import './providers/index.js';
@@ -286,10 +287,16 @@ async function buildContainerArgs(
   // Users allowed to run admin commands (e.g. /clear) inside this container.
   // Computed at wake time: owners + global admins + admins scoped to this
   // agent group. Role changes take effect on next container spawn.
+  //
+  // Guarded: if the permissions module isn't installed, `user_roles`
+  // doesn't exist and the set stays empty — the formatter treats an
+  // empty admin set as permissionless (every sender is admin).
   const adminUserIds = new Set<string>();
-  for (const r of getOwners()) adminUserIds.add(r.user_id);
-  for (const r of getGlobalAdmins()) adminUserIds.add(r.user_id);
-  for (const r of getAdminsOfAgentGroup(agentGroup.id)) adminUserIds.add(r.user_id);
+  if (hasTable(getDb(), 'user_roles')) {
+    for (const r of getOwners()) adminUserIds.add(r.user_id);
+    for (const r of getGlobalAdmins()) adminUserIds.add(r.user_id);
+    for (const r of getAdminsOfAgentGroup(agentGroup.id)) adminUserIds.add(r.user_id);
+  }
   if (adminUserIds.size > 0) {
     args.push('-e', `NANOCLAW_ADMIN_USER_IDS=${Array.from(adminUserIds).join(',')}`);
   }

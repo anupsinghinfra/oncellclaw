@@ -21,7 +21,7 @@ import { getChannelAdapter } from './channels/channel-registry.js';
 import { isMember } from './db/agent-group-members.js';
 import { getMessagingGroupByPlatform, createMessagingGroup, getMessagingGroupAgents } from './db/messaging-groups.js';
 import { upsertUser, getUser } from './db/users.js';
-import { startTypingRefresh } from './delivery.js';
+import { startTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
@@ -43,6 +43,34 @@ export interface InboundEvent {
     content: string; // JSON blob
     timestamp: string;
   };
+}
+
+/**
+ * Inbound gate registry.
+ *
+ * A module (permissions, today) can register a single gate function that
+ * owns sender resolution + access decision. Without a registered gate,
+ * core falls back to the inline `extractAndUpsertUser` +
+ * `enforceAccess` + `handleUnknownSender` chain.
+ *
+ * Takes the raw event so the gate can read sender fields from
+ * `event.message.content`. Returns either allowed=true with a `userId`
+ * (null if unresolved) or allowed=false with a reason; core drops the
+ * message on refusal.
+ */
+export type InboundGateResult =
+  | { allowed: true; userId: string | null }
+  | { allowed: false; userId: string | null; reason: string };
+
+export type InboundGateFn = (event: InboundEvent, mg: MessagingGroup, agentGroupId: string) => InboundGateResult;
+
+let inboundGate: InboundGateFn | null = null;
+
+export function setInboundGate(fn: InboundGateFn): void {
+  if (inboundGate) {
+    log.warn('Inbound gate overwritten');
+  }
+  inboundGate = fn;
 }
 
 /**
@@ -81,13 +109,8 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     });
   }
 
-  // 2. Resolve sender → user id. Upsert into users table on first sight so
-  //    subsequent messages find an existing row. `userId` is null if the
-  //    adapter didn't give us enough to identify a sender (the gate will
-  //    then apply unknown_sender_policy).
-  const userId = extractAndUpsertUser(event);
-
-  // 3. Resolve agent groups wired to this messaging group
+  // 2. Resolve agent groups wired to this messaging group. (The gate runs
+  //    after this so it can decide based on the target agent group.)
   const agents = getMessagingGroupAgents(mg.id);
   if (agents.length === 0) {
     log.warn('MESSAGE DROPPED — no agent groups wired to this channel. Run setup register step to configure.', {
@@ -128,12 +151,30 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     return;
   }
 
-  // 4. Access gate. Public channels skip the gate entirely.
-  if (mg.unknown_sender_policy !== 'public') {
-    const gate = enforceAccess(userId, match.agent_group_id);
-    if (!gate.allowed) {
-      handleUnknownSender(mg, userId, match.agent_group_id, gate.reason, event);
+  // 3. Inbound gate: sender resolution + access decision. If a module
+  //    registered a gate, it owns the whole thing (it can upsert users,
+  //    check roles, etc.). Otherwise fall back to the inline chain.
+  let userId: string | null;
+  if (inboundGate) {
+    const result = inboundGate(event, mg, match.agent_group_id);
+    userId = result.userId;
+    if (!result.allowed) {
+      log.info('MESSAGE DROPPED — inbound gate refused', {
+        messagingGroupId: mg.id,
+        agentGroupId: match.agent_group_id,
+        userId,
+        reason: result.reason,
+      });
       return;
+    }
+  } else {
+    userId = extractAndUpsertUser(event);
+    if (mg.unknown_sender_policy !== 'public') {
+      const gate = enforceAccess(userId, match.agent_group_id);
+      if (!gate.allowed) {
+        handleUnknownSender(mg, userId, match.agent_group_id, gate.reason, event);
+        return;
+      }
     }
   }
 
