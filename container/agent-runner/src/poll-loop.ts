@@ -192,7 +192,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
     try {
-      const result = await processQuery(query, routing, config, processingIds);
+      const result = await processQuery(query, routing);
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setStoredSessionId(continuation);
@@ -264,7 +264,7 @@ interface QueryResult {
   continuation?: string;
 }
 
-async function processQuery(query: AgentQuery, routing: RoutingContext, config: PollLoopConfig, processingIds: string[]): Promise<QueryResult> {
+async function processQuery(query: AgentQuery, routing: RoutingContext): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
   let lastEventTime = Date.now();

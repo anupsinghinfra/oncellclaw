@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import type { OutboundFile } from './channels/adapter.js';
 import { DATA_DIR } from './config.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import { createSession, findSession, findSessionByAgentGroup, getSession, updateSession } from './db/sessions.js';
@@ -287,6 +288,53 @@ export function writeSystemResponse(
       result,
     }),
   });
+}
+
+/**
+ * Load outbox attachments for a delivered message.
+ *
+ * Symmetric with `extractAttachmentFiles` on the inbound side: the container
+ * writes files into the session's `outbox/<messageId>/` directory alongside
+ * its `messages_out` row, and the host reads them back at delivery time.
+ *
+ * Returns undefined when the outbox dir is missing or no declared file was
+ * actually on disk — delivery continues without attachments rather than
+ * failing the whole message.
+ */
+export function readOutboxFiles(
+  agentGroupId: string,
+  sessionId: string,
+  messageId: string,
+  filenames: string[],
+): OutboundFile[] | undefined {
+  const outboxDir = path.join(sessionDir(agentGroupId, sessionId), 'outbox', messageId);
+  if (!fs.existsSync(outboxDir)) return undefined;
+  const files: OutboundFile[] = [];
+  for (const filename of filenames) {
+    const filePath = path.join(outboxDir, filename);
+    if (fs.existsSync(filePath)) {
+      files.push({ filename, data: fs.readFileSync(filePath) });
+    } else {
+      log.warn('Outbox file not found', { messageId, filename });
+    }
+  }
+  return files.length > 0 ? files : undefined;
+}
+
+/**
+ * Remove a message's outbox directory after successful delivery. Best-effort:
+ * failures log and swallow. A cleanup failure must NOT propagate to the
+ * delivery caller — the message is already on the user's screen, and a
+ * thrown error would trigger the delivery retry path and deliver twice.
+ */
+export function clearOutbox(agentGroupId: string, sessionId: string, messageId: string): void {
+  const outboxDir = path.join(sessionDir(agentGroupId, sessionId), 'outbox', messageId);
+  if (!fs.existsSync(outboxDir)) return;
+  try {
+    fs.rmSync(outboxDir, { recursive: true, force: true });
+  } catch (err) {
+    log.warn('Outbox cleanup failed (message already delivered)', { messageId, err });
+  }
 }
 
 /** Mark a container as running for a session. */

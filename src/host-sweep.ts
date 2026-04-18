@@ -10,7 +10,7 @@
 import type Database from 'better-sqlite3';
 import fs from 'fs';
 
-import { getActiveSessions, updateSession } from './db/sessions.js';
+import { getActiveSessions } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import {
   countDueMessages,
@@ -21,7 +21,7 @@ import {
   retryWithBackoff,
 } from './db/session-db.js';
 import { log } from './log.js';
-import { openInboundDb, openOutboundDb, inboundDbPath, outboundDbPath, heartbeatPath } from './session-manager.js';
+import { openInboundDb, openOutboundDb, inboundDbPath, heartbeatPath } from './session-manager.js';
 import { wakeContainer, isContainerRunning } from './container-runner.js';
 import type { Session } from './types.js';
 
