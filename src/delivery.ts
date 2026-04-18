@@ -8,10 +8,8 @@
  *   - Never writes to outbound.db — preserves single-writer-per-file invariant
  */
 import type Database from 'better-sqlite3';
-import fs from 'fs';
-import path from 'path';
 
-import { getRunningSessions, getActiveSessions, createPendingQuestion, getSession } from './db/sessions.js';
+import { getRunningSessions, getActiveSessions, createPendingQuestion } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
@@ -24,8 +22,8 @@ import {
 } from './db/session-db.js';
 import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
-import { openInboundDb, openOutboundDb, sessionDir, writeSessionMessage } from './session-manager.js';
-import { resetContainerIdleTimer, wakeContainer } from './container-runner.js';
+import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
+import { resetContainerIdleTimer } from './container-runner.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { Session } from './types.js';
@@ -346,21 +344,13 @@ async function deliverMessage(
     return;
   }
 
-  // Read file attachments from outbox if the content declares files
-  let files: OutboundFile[] | undefined;
-  const outboxDir = path.join(sessionDir(session.agent_group_id, session.id), 'outbox', msg.id);
-  if (Array.isArray(content.files) && content.files.length > 0 && fs.existsSync(outboxDir)) {
-    files = [];
-    for (const filename of content.files as string[]) {
-      const filePath = path.join(outboxDir, filename);
-      if (fs.existsSync(filePath)) {
-        files.push({ filename, data: fs.readFileSync(filePath) });
-      } else {
-        log.warn('Outbox file not found', { messageId: msg.id, filename });
-      }
-    }
-    if (files.length === 0) files = undefined;
-  }
+  // Read file attachments from outbox if the content declares files.
+  // File I/O lives in session-manager.ts (symmetric with inbound
+  // extractAttachmentFiles) — delivery just hands buffers to the adapter.
+  const files =
+    Array.isArray(content.files) && content.files.length > 0
+      ? readOutboxFiles(session.agent_group_id, session.id, msg.id, content.files as string[])
+      : undefined;
 
   const platformMsgId = await deliveryAdapter.deliver(
     msg.channel_type,
@@ -378,17 +368,7 @@ async function deliverMessage(
     fileCount: files?.length,
   });
 
-  // Clean up outbox best-effort — the message is already on the user's
-  // screen, so a cleanup failure must NOT propagate. If it did, the
-  // caller would treat the whole delivery as failed, retry on the next
-  // poll, and the user would see the message twice.
-  if (fs.existsSync(outboxDir)) {
-    try {
-      fs.rmSync(outboxDir, { recursive: true, force: true });
-    } catch (err) {
-      log.warn('Outbox cleanup failed (message already delivered)', { messageId: msg.id, err });
-    }
-  }
+  clearOutbox(session.agent_group_id, session.id, msg.id);
 
   return platformMsgId;
 }
