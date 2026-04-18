@@ -15,7 +15,10 @@ import type { Migration } from './index.js';
  * while admin calls the child "worker-1". The (agent_group_id, local_name)
  * PK enforces uniqueness within a single agent's namespace only.
  */
-export const migration004: Migration = {
+// Retains the original `name` ('agent-destinations') so existing DBs that
+// already recorded this migration under that name don't re-run it. The
+// module- prefix lives on the filename / export identifier only.
+export const moduleAgentToAgentDestinations: Migration = {
   version: 4,
   name: 'agent-destinations',
   up(db: Database.Database) {

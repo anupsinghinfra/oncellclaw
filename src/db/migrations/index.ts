@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { log } from '../../log.js';
 import { migration001 } from './001-initial.js';
 import { migration002 } from './002-chat-sdk-state.js';
-import { migration004 } from './004-agent-destinations.js';
+import { moduleAgentToAgentDestinations } from './module-agent-to-agent-destinations.js';
 import { migration008 } from './008-dropped-messages.js';
 import { migration009 } from './009-drop-pending-credentials.js';
 import { moduleApprovalsPendingApprovals } from './module-approvals-pending-approvals.js';
@@ -19,7 +19,7 @@ const migrations: Migration[] = [
   migration001,
   migration002,
   moduleApprovalsPendingApprovals,
-  migration004,
+  moduleAgentToAgentDestinations,
   moduleApprovalsTitleOptions,
   migration008,
   migration009,

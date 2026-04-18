@@ -32,8 +32,8 @@
  *   - src/delivery.ts::handleSystemAction case 'create_agent'
  *   - src/db/messaging-groups.ts::createMessagingGroupAgent
  */
-import type { AgentDestination } from '../types.js';
-import { getDb } from './connection.js';
+import type { AgentDestination } from '../../../types.js';
+import { getDb } from '../../../db/connection.js';
 
 /**
  * ⚠️  Caller responsibility: after this returns, call
