@@ -68,30 +68,42 @@ export function registerDeliveryAction(action: string, handler: ActionHandler): 
 
 **Current consumers:** scheduling (5 actions — `schedule_task`, `cancel_task`, `pause_task`, `resume_task`, `update_task`), approvals (3 actions — `install_packages`, `request_rebuild`, `add_mcp_server`), agent-to-agent (`create_agent`, and the agent-routing branch keyed as a pseudo-action `agent_route`).
 
-### 2. Router inbound gate
+### 2. Router sender resolver + access gate
+
+Two separate setters, called at different points in `routeInbound`. Preserves the pre-refactor ordering: sender-upsert side effects fire even when the message is ultimately dropped by wiring or trigger rules.
 
 ```typescript
 // src/router.ts
-type InboundGateResult =
-  | { allowed: true; userId: string | null }
-  | { allowed: false; userId: string | null; reason: string };
+type SenderResolverFn = (event: InboundEvent) => string | null;
 
-type InboundGateFn = (
+export function setSenderResolver(fn: SenderResolverFn): void;
+
+type AccessGateResult =
+  | { allowed: true }
+  | { allowed: false; reason: string };
+
+type AccessGateFn = (
   event: InboundEvent,
+  userId: string | null,
   mg: MessagingGroup,
   agentGroupId: string,
-) => InboundGateResult;
+) => AccessGateResult;
 
-export function setInboundGate(fn: InboundGateFn): void;
+export function setAccessGate(fn: AccessGateFn): void;
 ```
 
-**Purpose:** single-setter gate that owns both sender resolution (user upsert) and access decision. Takes the raw event because the permissions module needs the sender fields inside `event.message.content`.
+**Call order in `routeInbound`:**
+1. Resolve messaging group.
+2. **Sender resolver** (if set). Permissions upserts the users row here so the record exists even if agent resolution drops the message.
+3. Resolve wired agents; `no_agent_wired` → record + drop. (Core writes the dropped_messages row.)
+4. Pick agent by trigger rules; `no_trigger_match` → record + drop.
+5. **Access gate** (if set). On refusal it writes its own `dropped_messages` row keyed by policy reason.
 
-**Default when unset:** `{ allowed: true, userId: null }`. Every message routes through, no users table is needed, downstream must tolerate `userId=null`.
+**Defaults when unset:** resolver returns null; gate defaults to `{ allowed: true }`. Every message routes through, no users table is needed, downstream tolerates `userId=null`.
 
-**Current consumer:** permissions module.
+**Current consumer:** permissions module (registers both).
 
-**Not a registry, a setter.** There is one decision per inbound message and one module that owns it. Calling `setInboundGate` twice overwrites; core does not iterate.
+**Not registries, setters.** There is one sender and one access decision per inbound message and one module that owns both. Calling `setSenderResolver` / `setAccessGate` twice overwrites; core does not iterate.
 
 ### 3. Response dispatcher
 

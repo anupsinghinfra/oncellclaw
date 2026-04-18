@@ -1,25 +1,25 @@
 /**
  * Permissions module — sender resolution + access gate.
  *
- * Registers a single inbound-gate via setInboundGate(). The gate owns:
- *   1. Sender resolution: parse the channel adapter's payload, derive a
- *      namespaced user id, and upsert the `users` row on first sight so
- *      role/access lookups land on a real record thereafter.
- *   2. Access decision: owners → global admins → scoped admins → members.
- *   3. Unknown-sender policy: strict drops; request_approval is a TODO
- *      (pending the `add_group_member` action kind).
- *   4. Audit trail: drops get logged into `dropped_messages`.
+ * Registers two hooks into the core router:
+ *   1. setSenderResolver — runs before agent resolution. Parses the payload,
+ *      derives a namespaced user id, and upserts the `users` row on first
+ *      sight. Returns null when the payload doesn't carry enough to identify
+ *      a sender.
+ *   2. setAccessGate — runs after agent resolution. Enforces the
+ *      unknown_sender_policy (strict/request_approval/public) and the
+ *      owner/global-admin/scoped-admin/member access hierarchy. Records its
+ *      own `dropped_messages` row on refusal (structural drops are recorded
+ *      by core).
  *
- * Without this module: core's router defaults to allow-all (PR #2), every
- * message routes through, and no users table is needed. Drops are not
- * recorded anywhere. Admin commands inside the container fall back to
- * permissionless mode (see formatter.ts).
+ * Without this module: sender resolution is a no-op (userId=null); the
+ * access gate is not registered and core defaults to allow-all.
  */
-import { setInboundGate, type InboundEvent, type InboundGateResult } from '../../router.js';
+import { recordDroppedMessage } from '../../db/dropped-messages.js';
+import { setAccessGate, setSenderResolver, type AccessGateResult, type InboundEvent } from '../../router.js';
 import { log } from '../../log.js';
 import type { MessagingGroup } from '../../types.js';
 import { canAccessAgentGroup } from './access.js';
-import { recordDroppedMessage } from './db/dropped-messages.js';
 import { getUser, upsertUser } from './db/users.js';
 
 function extractAndUpsertUser(event: InboundEvent): string | null {
@@ -111,24 +111,24 @@ function handleUnknownSender(
   // 'public' should have been handled before the gate; fall through silently.
 }
 
-setInboundGate((event, mg, agentGroupId): InboundGateResult => {
-  const userId = extractAndUpsertUser(event);
+setSenderResolver(extractAndUpsertUser);
 
+setAccessGate((event, userId, mg, agentGroupId): AccessGateResult => {
   // Public channels skip the access check entirely.
   if (mg.unknown_sender_policy === 'public') {
-    return { allowed: true, userId };
+    return { allowed: true };
   }
 
   if (!userId) {
     handleUnknownSender(mg, null, agentGroupId, 'unknown_user', event);
-    return { allowed: false, userId: null, reason: 'unknown_user' };
+    return { allowed: false, reason: 'unknown_user' };
   }
 
   const decision = canAccessAgentGroup(userId, agentGroupId);
   if (decision.allowed) {
-    return { allowed: true, userId };
+    return { allowed: true };
   }
 
   handleUnknownSender(mg, userId, agentGroupId, decision.reason, event);
-  return { allowed: false, userId, reason: decision.reason };
+  return { allowed: false, reason: decision.reason };
 });

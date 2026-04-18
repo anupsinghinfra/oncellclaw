@@ -80,10 +80,6 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     // Handle commands: categorize chat messages
     const adminUserIds = config.adminUserIds ?? new Set<string>();
-    // Permissionless mode: when the permissions module isn't installed on
-    // the host, NANOCLAW_ADMIN_USER_IDS arrives empty. Treat every sender
-    // with an identifiable senderId as admin so admin commands still work.
-    const permissionless = adminUserIds.size === 0;
     const normalMessages = [];
     const commandIds: string[] = [];
 
@@ -103,8 +99,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       }
 
       if (cmdInfo.category === 'admin') {
-        const authorized = permissionless ? !!cmdInfo.senderId : !!cmdInfo.senderId && adminUserIds.has(cmdInfo.senderId);
-        if (!authorized) {
+        if (!cmdInfo.senderId || !adminUserIds.has(cmdInfo.senderId)) {
           log(`Admin command denied: ${cmdInfo.command} from ${cmdInfo.senderId} (msg: ${msg.id})`);
           writeMessageOut({
             id: generateId(),

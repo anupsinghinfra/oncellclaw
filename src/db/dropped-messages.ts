@@ -1,4 +1,4 @@
-import { getDb } from '../../../db/connection.js';
+import { getDb } from './connection.js';
 
 export interface UnregisteredSender {
   channel_type: string;

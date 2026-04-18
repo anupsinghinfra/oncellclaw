@@ -1,16 +1,24 @@
 /**
  * Inbound message routing.
  *
- * Channel adapter event → resolve messaging group → pick agent → inbound
- * gate (if set) → resolve/create session → write messages_in → wake
- * container.
+ * Channel adapter event → resolve messaging group → sender resolver →
+ * resolve/pick agent → access gate → resolve/create session → write
+ * messages_in → wake container.
  *
- * Access model lives in the permissions module via `setInboundGate`. Without
- * the module, the gate is unset and every message routes through
- * (downstream code tolerates `userId=null`). Drops by policy are only
- * recorded when the permissions module is loaded; core just logs.
+ * Two module hooks (registered by the permissions module):
+ *   - `setSenderResolver` runs BEFORE agent resolution so user rows get
+ *     upserted even if the message ends up dropped by agent wiring.
+ *     Without the module, userId is null and downstream code tolerates it.
+ *   - `setAccessGate` runs AFTER agent resolution so policy decisions can
+ *     branch on the target agent group. Without the module, access is
+ *     allow-all.
+ *
+ * `dropped_messages` is core audit infra. Core writes rows for structural
+ * drops (no agent wired, no trigger match); the access gate writes rows
+ * for policy refusals.
  */
 import { getChannelAdapter } from './channels/channel-registry.js';
+import { recordDroppedMessage } from './db/dropped-messages.js';
 import { getMessagingGroupByPlatform, createMessagingGroup, getMessagingGroupAgents } from './db/messaging-groups.js';
 import { startTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
@@ -36,29 +44,57 @@ export interface InboundEvent {
 }
 
 /**
- * Inbound gate hook.
+ * Sender-resolver hook. Runs before agent resolution.
  *
- * The permissions module registers a gate that owns sender resolution +
- * access decision + unknown-sender policy + drop-audit recording. Without
- * a gate, core defaults to allow-all with `userId=null`.
- *
- * Takes the raw event so the gate can read sender fields from
- * `event.message.content`. Returns either allowed=true with a `userId`
- * (null if unresolved) or allowed=false with a reason; core drops on refusal.
+ * The permissions module registers this to extract the sender's namespaced
+ * user id and upsert the users row. Returns null when the payload doesn't
+ * carry enough info to identify a sender. Without the hook, every message
+ * arrives at the gate with userId=null.
  */
-export type InboundGateResult =
-  | { allowed: true; userId: string | null }
-  | { allowed: false; userId: string | null; reason: string };
+export type SenderResolverFn = (event: InboundEvent) => string | null;
 
-export type InboundGateFn = (event: InboundEvent, mg: MessagingGroup, agentGroupId: string) => InboundGateResult;
+let senderResolver: SenderResolverFn | null = null;
 
-let inboundGate: InboundGateFn | null = null;
-
-export function setInboundGate(fn: InboundGateFn): void {
-  if (inboundGate) {
-    log.warn('Inbound gate overwritten');
+export function setSenderResolver(fn: SenderResolverFn): void {
+  if (senderResolver) {
+    log.warn('Sender resolver overwritten');
   }
-  inboundGate = fn;
+  senderResolver = fn;
+}
+
+/**
+ * Access-gate hook. Runs after agent resolution.
+ *
+ * The permissions module registers this; without it, core defaults to
+ * allow-all. The gate receives the raw event so it can extract the sender
+ * name for audit-trail purposes, and it is responsible for recording its
+ * own `dropped_messages` row on refusal (structural drops are already
+ * recorded by core before the gate runs).
+ */
+export type AccessGateResult = { allowed: true } | { allowed: false; reason: string };
+
+export type AccessGateFn = (
+  event: InboundEvent,
+  userId: string | null,
+  mg: MessagingGroup,
+  agentGroupId: string,
+) => AccessGateResult;
+
+let accessGate: AccessGateFn | null = null;
+
+export function setAccessGate(fn: AccessGateFn): void {
+  if (accessGate) {
+    log.warn('Access gate overwritten');
+  }
+  accessGate = fn;
+}
+
+function safeParseContent(raw: string): { text?: string; sender?: string; senderId?: string } {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { text: raw };
+  }
 }
 
 /**
@@ -95,13 +131,29 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     });
   }
 
-  // 2. Resolve agent groups wired to this messaging group.
+  // 2. Sender resolution (permissions module upserts the users row as a
+  //    side effect so later role/access lookups find a real record).
+  //    Without the module, userId is null — downstream tolerates it.
+  const userId: string | null = senderResolver ? senderResolver(event) : null;
+
+  // 3. Resolve agent groups wired to this messaging group. Structural
+  //    drops record to dropped_messages for audit.
   const agents = getMessagingGroupAgents(mg.id);
   if (agents.length === 0) {
     log.warn('MESSAGE DROPPED — no agent groups wired to this channel. Run setup register step to configure.', {
       messagingGroupId: mg.id,
       channelType: event.channelType,
       platformId: event.platformId,
+    });
+    const parsed = safeParseContent(event.message.content);
+    recordDroppedMessage({
+      channel_type: event.channelType,
+      platform_id: event.platformId,
+      user_id: userId,
+      sender_name: parsed.sender ?? null,
+      reason: 'no_agent_wired',
+      messaging_group_id: mg.id,
+      agent_group_id: null,
     });
     return;
   }
@@ -112,17 +164,25 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       messagingGroupId: mg.id,
       channelType: event.channelType,
     });
+    const parsed = safeParseContent(event.message.content);
+    recordDroppedMessage({
+      channel_type: event.channelType,
+      platform_id: event.platformId,
+      user_id: userId,
+      sender_name: parsed.sender ?? null,
+      reason: 'no_trigger_match',
+      messaging_group_id: mg.id,
+      agent_group_id: null,
+    });
     return;
   }
 
-  // 3. Inbound gate (if the permissions module is loaded). Otherwise
-  //    allow-all with userId=null — downstream code tolerates null.
-  let userId: string | null = null;
-  if (inboundGate) {
-    const result = inboundGate(event, mg, match.agent_group_id);
-    userId = result.userId;
+  // 4. Access gate (if the permissions module is loaded). Otherwise
+  //    allow-all.
+  if (accessGate) {
+    const result = accessGate(event, userId, mg, match.agent_group_id);
     if (!result.allowed) {
-      log.info('MESSAGE DROPPED — inbound gate refused', {
+      log.info('MESSAGE DROPPED — access gate refused', {
         messagingGroupId: mg.id,
         agentGroupId: match.agent_group_id,
         userId,
@@ -132,7 +192,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     }
   }
 
-  // 4. Resolve or create session.
+  // 5. Resolve or create session.
   //
   // Adapter thread policy overrides the wiring's session_mode: if the adapter
   // is threaded, each thread gets its own session regardless of what the
@@ -148,7 +208,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   }
   const { session, created } = resolveSession(match.agent_group_id, mg.id, event.threadId, effectiveSessionMode);
 
-  // 5. Write message to session DB
+  // 6. Write message to session DB
   writeSessionMessage(session.agent_group_id, session.id, {
     id: event.message.id || generateId(),
     kind: event.message.kind,
@@ -167,10 +227,10 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     created,
   });
 
-  // 6. Show typing indicator while the agent processes.
+  // 7. Show typing indicator while the agent processes.
   startTypingRefresh(session.id, session.agent_group_id, event.channelType, event.platformId, event.threadId);
 
-  // 7. Wake container
+  // 8. Wake container
   const freshSession = getSession(session.id);
   if (freshSession) {
     await wakeContainer(freshSession);
