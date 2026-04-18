@@ -1,0 +1,186 @@
+# Module Contract
+
+This doc is the authoritative reference for how core and modules connect. Everything downstream — extraction PRs, install skills, module authors — keys off these signatures and defaults. See [REFACTOR_PLAN.md](../REFACTOR_PLAN.md) for the broader plan; this doc is the narrow interface spec.
+
+## Principles
+
+- Core runs standalone. The `src/modules/index.ts` barrel can be empty and NanoClaw still routes messages in and delivers responses out.
+- Modules are independent. No module imports from another module. Cross-module coordination goes through a core dispatcher.
+- Registries exist only when multiple modules plug into the same decision point. Single-consumer integrations use skill edits (`MODULE-HOOK` markers) or stay inline with `sqlite_master` guards.
+- Removing a module = delete files + remove barrel imports + revert any `MODULE-HOOK` content. Migration files stay (data is preserved).
+
+## Module taxonomy
+
+Three categories:
+
+1. **Default modules** — ship on `main`, live in `src/modules/` for signaling, core imports them directly. No hook, no registry. Removing requires editing core imports (deliberately less frictionless than registry modules — the friction signals "not really core, but you probably want it").
+2. **Registry-based modules** — live on the `modules` branch, installed via `/add-<name>` skills. Plug into core through one of the four registries below.
+3. **Channel adapters** — live on the `channels` branch, installed via `/add-<channel>` skills. Not covered by this contract; they use the pre-existing `ChannelAdapter` interface and `registerChannelAdapter()`.
+
+Current default modules:
+
+- `src/modules/typing/` — typing indicator refresh
+- `src/modules/mount-security/` — container mount allowlist validation
+
+## The four registries
+
+Each registry has an explicit default for when no module registers. Core must run when all four are empty.
+
+### 1. Delivery action handlers
+
+```typescript
+// src/delivery.ts
+type ActionHandler = (
+  content: Record<string, unknown>,
+  session: Session,
+  inDb: Database.Database,
+) => Promise<void>;
+
+export function registerDeliveryAction(action: string, handler: ActionHandler): void;
+```
+
+**Purpose:** system-kind outbound messages (`msg.kind === 'system'`) carry an `action` string. Core dispatches to the registered handler.
+
+**Default when action is unknown:** log `"Unknown system action"` at `warn` and return. Message is still marked delivered (it was consumed by the host, not sent to a channel).
+
+**Current consumers:** scheduling (5 actions — `schedule_task`, `cancel_task`, `pause_task`, `resume_task`, `update_task`), approvals (3 actions — `install_packages`, `request_rebuild`, `add_mcp_server`), agent-to-agent (`create_agent`, and the agent-routing branch keyed as a pseudo-action `agent_route`).
+
+### 2. Router inbound gate
+
+```typescript
+// src/router.ts
+type InboundGateResult =
+  | { allowed: true; userId: string | null }
+  | { allowed: false; userId: string | null; reason: string };
+
+type InboundGateFn = (
+  event: InboundEvent,
+  mg: MessagingGroup,
+  agentGroupId: string,
+) => InboundGateResult;
+
+export function setInboundGate(fn: InboundGateFn): void;
+```
+
+**Purpose:** single-setter gate that owns both sender resolution (user upsert) and access decision. Takes the raw event because the permissions module needs the sender fields inside `event.message.content`.
+
+**Default when unset:** `{ allowed: true, userId: null }`. Every message routes through, no users table is needed, downstream must tolerate `userId=null`.
+
+**Current consumer:** permissions module.
+
+**Not a registry, a setter.** There is one decision per inbound message and one module that owns it. Calling `setInboundGate` twice overwrites; core does not iterate.
+
+### 3. Response dispatcher
+
+```typescript
+// src/index.ts (or src/response-dispatch.ts if it grows)
+interface ResponsePayload {
+  questionId: string;
+  value: string;
+  userId: string | null;
+  channelType: string;
+  platformId: string;
+  threadId: string | null;
+}
+
+type ResponseHandler = (payload: ResponsePayload) => Promise<boolean>;
+
+export function registerResponseHandler(handler: ResponseHandler): void;
+```
+
+**Purpose:** button-click / question responses arrive via the channel adapter's `onAction` callback. Core iterates registered handlers in registration order. The first one that returns `true` claims the response.
+
+**Default when empty:** log `"Unclaimed response"` at `warn` and drop.
+
+**Current consumers:** interactive (matches `pending_questions`), approvals (matches `pending_approvals`). The two tables have disjoint `question_id` / `approval_id` namespaces in practice (`q-*` vs `appr-*`), so first-match-wins is safe.
+
+### 4. Container MCP tool self-registration
+
+```typescript
+// container/agent-runner/src/mcp-tools/server.ts
+export function registerTools(tools: McpToolDefinition[]): void;
+```
+
+**Purpose:** each tool module calls `registerTools([...])` at import time. The MCP server uses whatever was registered.
+
+**Default:** only `mcp-tools/core.ts` (`send_message`) registered.
+
+**Current consumers:** all container-side modules (scheduling, interactive, agents, self-mod).
+
+## Skill edits to core
+
+For one-off integrations with a single consumer, install skills edit core directly between `MODULE-HOOK` markers. No registry.
+
+Marker format:
+
+```typescript
+// MODULE-HOOK:<module>-<site>:start
+// MODULE-HOOK:<module>-<site>:end
+```
+
+The skill inserts between markers on install and clears between them on uninstall. Markers live in core from day one (empty until a skill fills them).
+
+**Current uses:**
+
+- `src/host-sweep.ts` → `MODULE-HOOK:scheduling-recurrence` — call to scheduling module's `handleRecurrence`.
+- `container/agent-runner/src/poll-loop.ts` → `MODULE-HOOK:scheduling-pre-task` — call to scheduling module's `applyPreTaskScripts`.
+
+**Promotion rule:** if a third consumer appears for any marker, promote to a registry.
+
+## Guarded inline (core)
+
+Some code stays in core but references module-owned tables. These use `sqlite_master` checks to degrade cleanly when the owning module isn't installed.
+
+| Site | Owning module | Fallback |
+|------|---------------|----------|
+| `container-runner.ts` admin-ID query (`user_roles`, `agent_group_members`) | permissions | returns `[]` |
+| `container-runner.ts` `writeDestinations` (`agent_destinations`) | agent-to-agent | no-op |
+| `delivery.ts` channel-permission check (`agent_destinations`) | agent-to-agent | permit (origin-chat always OK) |
+| `delivery.ts` `createPendingQuestion` (`pending_questions`) | interactive | no-op (log warning) |
+
+`container/agent-runner/src/formatter.ts` has a related non-DB fallback: when `NANOCLAW_ADMIN_USER_IDS` is empty, every sender is treated as admin (permissionless mode). This is the one-line change from the current deny-all behavior.
+
+## Migrations
+
+All migrations live in `src/db/migrations/` as TypeScript files exporting a `Migration` object:
+
+```typescript
+export interface Migration {
+  version: number;
+  name: string;
+  up: (db: Database.Database) => void;
+}
+```
+
+The barrel `src/db/migrations/index.ts` imports each and lists them in an ordered array.
+
+**Uniqueness key is `name`, not `version`.** The migrator applies any migration whose `name` isn't in `schema_version`. Version stays as an ordering hint; integer collisions across modules are allowed.
+
+**Module migration naming:**
+
+- File: `src/db/migrations/module-<module>-<short>.ts`
+- `Migration.name`: `'<module>-<short>'` (e.g. `'approvals-pending-approvals'`)
+
+**Uninstall behavior:** migration files and barrel entries stay. Tables persist across reinstalls. No down migrations.
+
+## What a registry-based module provides
+
+Each `src/modules/<name>/` module must supply:
+
+- `index.ts` — imported by `src/modules/index.ts` for side-effect registration (calls `registerDeliveryAction` / `setInboundGate` / `registerResponseHandler` at module load time).
+- `project.md` — appended to project `CLAUDE.md` by the install skill. Describes module architecture for anyone reading the codebase.
+- `agent.md` — appended to `groups/global/CLAUDE.md` by the install skill. Describes the module's tools for the agent.
+- Migration file in `src/db/migrations/` if the module owns any tables.
+- Barrel entry in `src/db/migrations/index.ts` for that migration.
+
+Optionally:
+
+- Container-side additions to `container/agent-runner/src/mcp-tools/<name>.ts` that call `registerTools([...])`, with a barrel entry in `container/agent-runner/src/mcp-tools/index.ts`.
+- `MODULE-HOOK` edits to specific core files, applied by the install skill.
+
+## What a module must not do
+
+- Import from another module.
+- Write to core-owned tables (`sessions`, `agent_groups`, `messaging_groups`, `schema_version`, etc.) outside of migrations.
+- Depend on a specific channel adapter being installed.
+- Break core behavior when unloaded. If a module's absence leaves a core feature non-functional, that feature belongs in core, not the module.
