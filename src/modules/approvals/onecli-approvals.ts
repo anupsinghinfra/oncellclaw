@@ -19,18 +19,18 @@
  */
 import { OneCLI, type ApprovalRequest, type ManualApprovalHandle } from '@onecli-sh/sdk';
 
-import { pickApprovalDelivery, pickApprover } from './access.js';
-import { ONECLI_URL } from './config.js';
-import { getAgentGroup } from './db/agent-groups.js';
+import { pickApprovalDelivery, pickApprover } from '../../access.js';
+import { ONECLI_URL } from '../../config.js';
+import { getAgentGroup } from '../../db/agent-groups.js';
 import {
   createPendingApproval,
   deletePendingApproval,
   getPendingApprovalsByAction,
   updatePendingApprovalStatus,
-} from './db/sessions.js';
-import type { ChannelDeliveryAdapter } from './delivery.js';
-import { log } from './log.js';
-import type { PendingApproval } from './types.js';
+} from '../../db/sessions.js';
+import type { ChannelDeliveryAdapter } from '../../delivery.js';
+import { log } from '../../log.js';
+import type { PendingApproval } from '../../types.js';
 
 export const ONECLI_ACTION = 'onecli_credential';
 
@@ -64,7 +64,7 @@ function shortApprovalId(): string {
   return `oa-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Called from the main `handleQuestionResponse` path when a card button is clicked. */
+/** Called from the approvals response handler when a card button is clicked. */
 export function resolveOneCLIApproval(approvalId: string, selectedOption: string): boolean {
   const state = pending.get(approvalId);
   if (!state) return false;

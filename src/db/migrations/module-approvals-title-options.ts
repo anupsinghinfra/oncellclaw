@@ -12,7 +12,10 @@ import type { Migration } from './index.js';
  * the ALTER statements will fail harmlessly (column already exists) and
  * we swallow the error per-column.
  */
-export const migration007: Migration = {
+// Retains the original `name` ('pending-approvals-title-options') so
+// existing DBs that already recorded this migration don't re-run it. The
+// module- prefix lives on the filename / export identifier only.
+export const moduleApprovalsTitleOptions: Migration = {
   version: 7,
   name: 'pending-approvals-title-options',
   up(db) {
