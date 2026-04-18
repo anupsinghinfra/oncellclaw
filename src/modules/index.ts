@@ -15,4 +15,5 @@
  */
 import './interactive/index.js';
 import './approvals/index.js';
+import './scheduling/index.js';
 

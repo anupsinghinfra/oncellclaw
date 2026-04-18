@@ -23,11 +23,6 @@ import {
   markDelivered,
   markDeliveryFailed,
   migrateDeliveredTable,
-  insertTask,
-  cancelTask,
-  pauseTask,
-  resumeTask,
-  updateTask,
 } from './db/session-db.js';
 import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
@@ -501,66 +496,6 @@ async function handleSystemAction(
   }
 
   switch (action) {
-    case 'schedule_task': {
-      const taskId = content.taskId as string;
-      const prompt = content.prompt as string;
-      const script = content.script as string | null;
-      const processAfter = content.processAfter as string;
-      const recurrence = (content.recurrence as string) || null;
-
-      insertTask(inDb, {
-        id: taskId,
-        processAfter,
-        recurrence,
-        platformId: (content.platformId as string) ?? null,
-        channelType: (content.channelType as string) ?? null,
-        threadId: (content.threadId as string) ?? null,
-        content: JSON.stringify({ prompt, script }),
-      });
-      log.info('Scheduled task created', { taskId, processAfter, recurrence });
-      break;
-    }
-
-    case 'cancel_task': {
-      const taskId = content.taskId as string;
-      cancelTask(inDb, taskId);
-      log.info('Task cancelled', { taskId });
-      break;
-    }
-
-    case 'pause_task': {
-      const taskId = content.taskId as string;
-      pauseTask(inDb, taskId);
-      log.info('Task paused', { taskId });
-      break;
-    }
-
-    case 'resume_task': {
-      const taskId = content.taskId as string;
-      resumeTask(inDb, taskId);
-      log.info('Task resumed', { taskId });
-      break;
-    }
-
-    case 'update_task': {
-      const taskId = content.taskId as string;
-      const update: Parameters<typeof updateTask>[2] = {};
-      if (typeof content.prompt === 'string') update.prompt = content.prompt;
-      if (typeof content.processAfter === 'string') update.processAfter = content.processAfter;
-      if (content.recurrence === null || typeof content.recurrence === 'string') {
-        update.recurrence = content.recurrence as string | null;
-      }
-      if (content.script === null || typeof content.script === 'string') {
-        update.script = content.script as string | null;
-      }
-      const touched = updateTask(inDb, taskId, update);
-      log.info('Task updated', { taskId, touched, fields: Object.keys(update) });
-      if (touched === 0) {
-        notifyAgent(session, `update_task: no live task matched id "${taskId}".`);
-      }
-      break;
-    }
-
     case 'create_agent': {
       const requestId = content.requestId as string;
       const name = content.name as string;

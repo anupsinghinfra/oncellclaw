@@ -19,9 +19,6 @@ import {
   getMessageForRetry,
   markMessageFailed,
   retryWithBackoff,
-  getCompletedRecurring,
-  insertRecurrence,
-  clearRecurrence,
 } from './db/session-db.js';
 import { log } from './log.js';
 import { openInboundDb, openOutboundDb, inboundDbPath, outboundDbPath, heartbeatPath } from './session-manager.js';
@@ -102,10 +99,7 @@ async function sweepSession(session: Session): Promise<void> {
 
     // 4. Handle recurrence for completed messages.
     // MODULE-HOOK:scheduling-recurrence:start
-    // When scheduling is extracted (PR #4), `handleRecurrence` moves to
-    // `src/modules/scheduling/` and the `/add-scheduling` skill replaces
-    // this block with a call to the module. Without scheduling
-    // installed, the block is empty and recurrence is a no-op.
+    const { handleRecurrence } = await import('./modules/scheduling/recurrence.js');
     await handleRecurrence(inDb, session);
     // MODULE-HOOK:scheduling-recurrence:end
   } finally {
@@ -156,24 +150,3 @@ function detectStaleContainers(
   }
 }
 
-/** Insert next occurrence for completed recurring messages. */
-async function handleRecurrence(inDb: Database.Database, session: Session): Promise<void> {
-  const recurring = getCompletedRecurring(inDb);
-
-  for (const msg of recurring) {
-    try {
-      const { CronExpressionParser } = await import('cron-parser');
-      const interval = CronExpressionParser.parse(msg.recurrence);
-      const nextRun = interval.next().toISOString();
-      const prefix = msg.kind === 'task' ? 'task' : 'msg';
-      const newId = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      insertRecurrence(inDb, msg, newId, nextRun);
-      clearRecurrence(inDb, msg.id);
-
-      log.info('Inserted next recurrence', { originalId: msg.id, newId, seriesId: msg.series_id, nextRun });
-    } catch (err) {
-      log.error('Failed to compute next recurrence', { messageId: msg.id, recurrence: msg.recurrence, err });
-    }
-  }
-}
