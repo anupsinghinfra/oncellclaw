@@ -16,51 +16,24 @@ import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 
-/**
- * Response handler registry.
- *
- * Button-click / question responses arrive via the channel adapter's
- * `onAction` callback. Core iterates registered handlers in registration
- * order; the first one that returns `true` claims the response. Unclaimed
- * responses are logged and dropped.
- *
- * Current consumers: interactive module (pending_questions), approvals
- * module (pending_approvals + OneCLI). If neither is loaded, every click
- * logs "Unclaimed response".
- */
-export interface ResponsePayload {
-  questionId: string;
-  value: string;
-  userId: string | null;
-  channelType: string;
-  platformId: string;
-  threadId: string | null;
-}
-
-export type ResponseHandler = (payload: ResponsePayload) => Promise<boolean>;
-
-const responseHandlers: ResponseHandler[] = [];
-
-export function registerResponseHandler(handler: ResponseHandler): void {
-  responseHandlers.push(handler);
-}
-
-/**
- * Shutdown callbacks. Modules with teardown needs (timers, outbound sockets)
- * register here. Called in registration order during SIGTERM / SIGINT
- * before core's delivery/sweep/channel teardown.
- *
- * Not a general-purpose registry — narrow lifecycle hook only.
- */
-type ShutdownCallback = () => void | Promise<void>;
-const shutdownCallbacks: ShutdownCallback[] = [];
-
-export function onShutdown(cb: ShutdownCallback): void {
-  shutdownCallbacks.push(cb);
-}
+// Response + shutdown registries live in response-registry.ts to break the
+// circular import cycle: src/index.ts imports src/modules/index.js for side
+// effects, and the modules call registerResponseHandler/onShutdown at top
+// level — which would hit a TDZ error if the arrays lived here. Re-exported
+// here so existing callers see the same surface.
+import {
+  registerResponseHandler,
+  getResponseHandlers,
+  onShutdown,
+  getShutdownCallbacks,
+  type ResponsePayload,
+  type ResponseHandler,
+} from './response-registry.js';
+export { registerResponseHandler, onShutdown };
+export type { ResponsePayload, ResponseHandler };
 
 async function dispatchResponse(payload: ResponsePayload): Promise<void> {
-  for (const handler of responseHandlers) {
+  for (const handler of getResponseHandlers()) {
     try {
       const claimed = await handler(payload);
       if (claimed) return;
@@ -202,7 +175,7 @@ function buildConversationConfigs(channelType: string): ConversationConfig[] {
 /** Graceful shutdown. */
 async function shutdown(signal: string): Promise<void> {
   log.info('Shutdown signal received', { signal });
-  for (const cb of shutdownCallbacks) {
+  for (const cb of getShutdownCallbacks()) {
     try {
       await cb();
     } catch (err) {

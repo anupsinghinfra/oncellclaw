@@ -11,7 +11,7 @@
  *   - A shutdown callback that stops the OneCLI handler cleanly.
  */
 import { registerDeliveryAction, onDeliveryAdapterReady } from '../../delivery.js';
-import { registerResponseHandler, onShutdown } from '../../index.js';
+import { registerResponseHandler, onShutdown } from '../../response-registry.js';
 import { handleAddMcpServer, handleInstallPackages, handleRequestRebuild } from './request-approval.js';
 import { handleApprovalsResponse } from './response-handler.js';
 import { startOneCLIApprovalHandler, stopOneCLIApprovalHandler } from './onecli-approvals.js';

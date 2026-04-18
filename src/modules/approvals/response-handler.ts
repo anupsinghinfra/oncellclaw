@@ -16,7 +16,7 @@ import { updateContainerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { deletePendingApproval, getPendingApproval, getSession } from '../../db/sessions.js';
-import type { ResponsePayload } from '../../index.js';
+import type { ResponsePayload } from '../../response-registry.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import type { PendingApproval } from '../../types.js';

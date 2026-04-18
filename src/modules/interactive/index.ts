@@ -13,7 +13,7 @@
 import { getDb, hasTable } from '../../db/connection.js';
 import { deletePendingQuestion, getPendingQuestion, getSession } from '../../db/sessions.js';
 import { wakeContainer } from '../../container-runner.js';
-import { registerResponseHandler, type ResponsePayload } from '../../index.js';
+import { registerResponseHandler, type ResponsePayload } from '../../response-registry.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
 
