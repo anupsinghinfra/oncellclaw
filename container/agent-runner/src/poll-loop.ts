@@ -4,7 +4,6 @@ import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
 import { formatMessages, extractRouting, categorizeMessage, type RoutingContext } from './formatter.js';
-import { applyPreTaskScripts } from './task-script.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -156,13 +155,15 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Pre-task scripts: for any task rows with a `script`, run it before the
     // provider call. Scripts returning wakeAgent=false (or erroring) gate
     // their own task row only — surviving messages still go to the agent.
-    //
+    // Without the scheduling module, the marker block is empty, `keep`
+    // falls back to `normalMessages`, and no gating happens.
+    let keep: MessageInRow[] = normalMessages;
+    let skipped: string[] = [];
     // MODULE-HOOK:scheduling-pre-task:start
-    // When scheduling is extracted (PR #4), `applyPreTaskScripts` moves
-    // to the scheduling module and the `/add-scheduling` skill replaces
-    // this block with a call to the module. Without scheduling installed,
-    // the block is empty (no script gating) and `keep = normalMessages`.
-    const { keep, skipped } = await applyPreTaskScripts(normalMessages);
+    const { applyPreTaskScripts } = await import('./scheduling/task-script.js');
+    const preTask = await applyPreTaskScripts(normalMessages);
+    keep = preTask.keep;
+    skipped = preTask.skipped;
     if (skipped.length > 0) {
       markCompleted(skipped);
       log(`Pre-task script skipped ${skipped.length} task(s): ${skipped.join(', ')}`);
