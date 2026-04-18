@@ -31,7 +31,6 @@ import {
   markContainerRunning,
   markContainerStopped,
   sessionDir,
-  writeDestinations,
   writeSessionRouting,
 } from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
@@ -90,8 +89,12 @@ async function spawnContainer(session: Session): Promise<void> {
   }
 
   // Refresh the destination map and default reply routing so any admin
-  // changes take effect on wake.
-  writeDestinations(agentGroup.id, session.id);
+  // changes take effect on wake. Destinations come from the agent-to-agent
+  // module — skip when the module isn't installed (table absent).
+  if (hasTable(getDb(), 'agent_destinations')) {
+    const { writeDestinations } = await import('./modules/agent-to-agent/write-destinations.js');
+    writeDestinations(agentGroup.id, session.id);
+  }
   writeSessionRouting(agentGroup.id, session.id);
 
   // Resolve the effective provider + any host-side contribution it declares

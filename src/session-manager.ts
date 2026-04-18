@@ -15,9 +15,6 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR } from './config.js';
-import { getAgentGroup } from './db/agent-groups.js';
-import { getDestinations } from './db/agent-destinations.js';
-import { getDb, hasTable } from './db/connection.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import { createSession, findSession, findSessionByAgentGroup, getSession, updateSession } from './db/sessions.js';
 import {
@@ -25,10 +22,8 @@ import {
   openInboundDb as openInboundDbRaw,
   openOutboundDb as openOutboundDbRaw,
   upsertSessionRouting,
-  replaceDestinations,
   insertMessage,
   migrateMessagesInTable,
-  type DestinationRow,
 } from './db/session-db.js';
 import { log } from './log.js';
 import type { Session } from './types.js';
@@ -131,24 +126,15 @@ export function initSessionFolder(agentGroupId: string, sessionId: string): void
 }
 
 /**
- * Write the session's destination map into its inbound.db `destinations` table.
- *
- * Called before every container wake so admin changes take effect on next start —
- * but the container also re-queries on demand, so mid-session admin changes
- * (e.g. spawning a new child agent) can also call this to push the new map
- * without restarting the container.
- *
- * Uses DELETE + INSERT in a transaction for a clean overwrite.
- */
-/**
  * Write the default reply routing for a session into its inbound.db.
  *
  * The container reads this as the default (channel_type, platform_id, thread_id)
  * for outbound messages when the agent doesn't specify an explicit destination.
  * Derived from session.messaging_group_id → messaging_groups row + session.thread_id.
  *
- * Called on every container wake alongside writeDestinations() so the latest
- * routing is always in place, including after admin rewiring.
+ * Called on every container wake alongside the agent-to-agent module's
+ * writeDestinations() (when installed) so the latest routing is always in
+ * place, including after admin rewiring.
  */
 export function writeSessionRouting(agentGroupId: string, sessionId: string): void {
   const dbPath = inboundDbPath(agentGroupId, sessionId);
@@ -178,53 +164,6 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
     db.close();
   }
   log.debug('Session routing written', { sessionId, channelType, platformId, threadId: session.thread_id });
-}
-
-export function writeDestinations(agentGroupId: string, sessionId: string): void {
-  const dbPath = inboundDbPath(agentGroupId, sessionId);
-  if (!fs.existsSync(dbPath)) return;
-
-  // Guarded: when the agent-to-agent module isn't installed, the
-  // `agent_destinations` table doesn't exist. Skip silently — core
-  // container spawn continues without projecting destinations.
-  if (!hasTable(getDb(), 'agent_destinations')) return;
-
-  const rows = getDestinations(agentGroupId);
-  const resolved: DestinationRow[] = [];
-
-  for (const row of rows) {
-    if (row.target_type === 'channel') {
-      const mg = getMessagingGroup(row.target_id);
-      if (!mg) continue;
-      resolved.push({
-        name: row.local_name,
-        display_name: mg.name ?? row.local_name,
-        type: 'channel',
-        channel_type: mg.channel_type,
-        platform_id: mg.platform_id,
-        agent_group_id: null,
-      });
-    } else if (row.target_type === 'agent') {
-      const ag = getAgentGroup(row.target_id);
-      if (!ag) continue;
-      resolved.push({
-        name: row.local_name,
-        display_name: ag.name,
-        type: 'agent',
-        channel_type: null,
-        platform_id: null,
-        agent_group_id: ag.id,
-      });
-    }
-  }
-
-  const db = openInboundDb(agentGroupId, sessionId);
-  try {
-    replaceDestinations(db, resolved);
-  } finally {
-    db.close();
-  }
-  log.debug('Destination map written', { sessionId, count: resolved.length });
 }
 
 /**
