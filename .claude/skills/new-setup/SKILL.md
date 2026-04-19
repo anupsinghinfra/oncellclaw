@@ -14,7 +14,7 @@ Before each step, narrate to the user in your own words what's about to happen �
 
 Each step is invoked as `pnpm exec tsx setup/index.ts --step <name>` and emits a structured status block Claude parses to decide what to do next.
 
-Start with a probe: a single parallel scan that snapshots every prerequisite and dependency. The rest of the flow reads this snapshot to decide what to run, skip, or ask about — no per-step re-checking. The probe is plain ESM JS (`setup/probe.mjs`) with no external deps so it can run before step 1 has installed `pnpm`/`node_modules`.
+Start with a probe: a single upfront scan that snapshots every prerequisite and dependency. The rest of the flow reads this snapshot to decide what to run, skip, or ask about — no per-step re-checking. The probe is pure bash (`setup/probe.sh`) with no external deps so it runs correctly before Node has been installed.
 
 ## Current state
 
@@ -22,9 +22,7 @@ Start with a probe: a single parallel scan that snapshots every prerequisite and
 
 ## Flow
 
-Parse the probe block above. For each step below, consult the named probe fields and skip, ask, or run accordingly.
-
-If the probe reports `STATUS: unavailable` (Node isn't installed yet), ignore all `skip if …` probe conditions and run every step from 1 onward — each step has its own idempotency check, so re-running is safe.
+Parse the probe block above. For each step below, consult the named probe fields and skip, ask, or run accordingly. The probe always returns a real snapshot — there is no "node not installed" fallback; `HOST_DEPS=missing` is how you know Node/pnpm haven't been bootstrapped yet.
 
 ## Ordering and parallelism
 
@@ -40,12 +38,12 @@ One permitted parallelism:
 
 Check probe results and skip if `HOST_DEPS=ok` — Node, pnpm, `node_modules`, and `better-sqlite3`'s native binding are already in place.
 
-If the probe reported `STATUS: unavailable` (Node isn't installed yet — probe itself couldn't run), install Node 22 **before** running `bash setup.sh`, otherwise the first bootstrap run is guaranteed to fail:
+If `HOST_DEPS=missing` and `node --version` fails (Node isn't installed at all), install Node 22 **before** running `bash setup.sh`, otherwise the first bootstrap run is guaranteed to fail:
 
 - macOS: `brew install node@22`
 - Linux / WSL: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`
 
-Then run `bash setup.sh`. If the probe succeeded but `HOST_DEPS=missing`, run `bash setup.sh` directly — Node is there, deps aren't.
+Then run `bash setup.sh`. If Node is already present and only `HOST_DEPS=missing`, run `bash setup.sh` directly — deps just haven't been installed yet.
 
 Parse the status block:
 
@@ -117,8 +115,6 @@ Start the NanoClaw background service — it relays messages between the user an
 `pnpm exec tsx setup/index.ts --step service`
 
 ### 6. First CLI agent
-
-Check probe results and skip if `CLI_AGENT_WIRED=true`.
 
 If step 2's container build is still running in the background, join it here before proceeding — the agent needs the image.
 

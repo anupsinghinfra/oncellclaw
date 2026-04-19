@@ -106,7 +106,7 @@ function installOnecli(): { stdout: string; ok: boolean } {
 }
 
 async function pollHealth(url: string, timeoutMs: number): Promise<boolean> {
-  // `/api/health` matches the path probe.mjs uses — keep them aligned.
+  // `/api/health` matches the path probe.sh uses — keep them aligned.
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
