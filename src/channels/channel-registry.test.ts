@@ -10,7 +10,6 @@ import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } fr
 // Mock container runner
 vi.mock('../container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
-  resetContainerIdleTimer: vi.fn(),
   isContainerRunning: vi.fn().mockReturnValue(false),
   getActiveContainerCount: vi.fn().mockReturnValue(0),
   killContainer: vi.fn(),

@@ -161,6 +161,47 @@ export function getStuckProcessingIds(outDb: Database.Database): string[] {
   ).map((r) => r.message_id);
 }
 
+export interface ProcessingClaim {
+  message_id: string;
+  status_changed: string;
+}
+
+/** Return processing_ack rows still in 'processing' with their claim timestamps. */
+export function getProcessingClaims(outDb: Database.Database): ProcessingClaim[] {
+  return outDb
+    .prepare(
+      "SELECT message_id, status_changed FROM processing_ack WHERE status = 'processing'",
+    )
+    .all() as ProcessingClaim[];
+}
+
+export interface ContainerState {
+  current_tool: string | null;
+  tool_declared_timeout_ms: number | null;
+  tool_started_at: string | null;
+}
+
+/**
+ * Read the container's current tool-in-flight state, if any. Returns null
+ * when either the table doesn't exist yet (older session DB) or no tool is
+ * active. Host sweep reads this to widen stuck-detection tolerance while
+ * Bash is running with a long declared timeout.
+ */
+export function getContainerState(outDb: Database.Database): ContainerState | null {
+  try {
+    const row = outDb
+      .prepare(
+        `SELECT current_tool, tool_declared_timeout_ms, tool_started_at
+           FROM container_state WHERE id = 1`,
+      )
+      .get() as ContainerState | undefined;
+    return row ?? null;
+  } catch {
+    // Table not present on older session DBs — treat as "no tool in flight".
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // messages_out (read-only from host)
 // ---------------------------------------------------------------------------

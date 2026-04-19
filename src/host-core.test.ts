@@ -30,7 +30,6 @@ import type { InboundEvent } from './router.js';
 // Mock container runner to prevent actual Docker spawning
 vi.mock('./container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
-  resetContainerIdleTimer: vi.fn(),
   isContainerRunning: vi.fn().mockReturnValue(false),
   getActiveContainerCount: vi.fn().mockReturnValue(0),
   killContainer: vi.fn(),

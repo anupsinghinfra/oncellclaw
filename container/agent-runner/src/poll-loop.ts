@@ -8,7 +8,6 @@ import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types
 
 const POLL_INTERVAL_MS = 1000;
 const ACTIVE_POLL_INTERVAL_MS = 500;
-const IDLE_END_MS = 20_000; // End stream after 20s with no SDK events
 
 function log(msg: string): void {
   console.error(`[poll-loop] ${msg}`);
@@ -267,9 +266,13 @@ interface QueryResult {
 async function processQuery(query: AgentQuery, routing: RoutingContext): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
-  let lastEventTime = Date.now();
 
-  // Concurrent polling: push follow-ups, checkpoint WAL, detect idle
+  // Concurrent polling: push follow-ups into the active query as they arrive.
+  // We do NOT force-end the stream on silence — keeping the query open is
+  // strictly cheaper than close+reopen (no cold prompt cache, no reconnect).
+  // Stream liveness is decided host-side via the heartbeat file + processing
+  // claim age (see src/host-sweep.ts); if something is truly stuck, the host
+  // will kill the container and messages get reset to pending.
   const pollHandle = setInterval(() => {
     if (done) return;
 
@@ -296,19 +299,11 @@ async function processQuery(query: AgentQuery, routing: RoutingContext): Promise
       query.push(prompt);
 
       markCompleted(newIds);
-      lastEventTime = Date.now(); // new input counts as activity
-    }
-
-    // End stream when agent is idle: no SDK events and no pending messages
-    if (Date.now() - lastEventTime > IDLE_END_MS) {
-      log(`No SDK events for ${IDLE_END_MS / 1000}s, ending query`);
-      query.end();
     }
   }, ACTIVE_POLL_INTERVAL_MS);
 
   try {
     for await (const event of query.events) {
-      lastEventTime = Date.now();
       handleEvent(event, routing);
       touchHeartbeat();
 
