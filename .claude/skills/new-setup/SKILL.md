@@ -10,7 +10,7 @@ Purpose of this skill is to take any user — technical or not — from zero to 
 
 Only run the steps strictly required for the NanoClaw process to start and respond to the user end-to-end. Everything else is deferred to post-setup skills.
 
-For each step, print a one-liner to the user explaining what it does and why it's needed. Keep the tone friendly and lightly informative — context, not jargon.
+Before each step, narrate to the user in your own words what's about to happen — one short, friendly sentence, no jargon. Don't read a scripted line; use the step context below to speak naturally.
 
 Each step is invoked as `pnpm exec tsx setup/index.ts --step <name>` and emits a structured status block Claude parses to decide what to do next.
 
@@ -22,13 +22,21 @@ Start with a probe: a single parallel scan that snapshots every prerequisite and
 
 ## Flow
 
-Parse the probe block above. For each step below, consult the named probe fields and skip, ask, or run accordingly. Before running any step, say the quoted one-liner to the user.
+Parse the probe block above. For each step below, consult the named probe fields and skip, ask, or run accordingly.
 
 If the probe reports `STATUS: unavailable` (Node isn't installed yet), ignore all `skip if …` probe conditions and run every step from 1 onward — each step has its own idempotency check, so re-running is safe.
 
-### 1. Node bootstrap
+## Ordering and parallelism
 
-> *"Now I'm installing Node and your project's dependencies, so the rest of setup has what it needs to run."*
+Run steps sequentially by default: invoke the step, wait for its status block, act on the result, move to the next.
+
+One permitted parallelism:
+
+- **Step 2 (container image build) and step 3 (OneCLI install)** are independent — they may start together in the background.
+- **Step 4 (auth) must NOT start until step 3 has completed.** Auth writes the secret into the OneCLI vault; if OneCLI isn't installed and healthy yet, the user gets asked for a credential the system can't store. Do not open an `AskUserQuestion` for step 4 while OneCLI is still installing.
+- Step 2's image build may continue running past step 4 — the image isn't consumed until step 6 (first CLI agent). Join before step 6.
+
+### 1. Node bootstrap
 
 If the probe reported `STATUS: unavailable` (Node isn't installed yet), install Node 22 **before** running `bash setup.sh` — otherwise the first bootstrap run is guaranteed to fail and you'll pay for it twice:
 
@@ -49,12 +57,10 @@ Parse the status block:
 Check probe results and skip if `DOCKER=running` AND `IMAGE_PRESENT=true`.
 
 **Runtime:**
-- `DOCKER=not_found` →
-  > *"Now I'm installing Docker so your agents can work safely in a contained environment."*
+- `DOCKER=not_found` → Docker itself is missing — install it so agent containers have an isolated place to run.
   - macOS: `brew install --cask docker && open -a Docker`
   - Linux: `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER` (tell user they may need to log out/in for group membership)
-- `DOCKER=installed_not_running` →
-  > *"Starting Docker up so the agent containers can come online."*
+- `DOCKER=installed_not_running` → Docker is installed but the daemon is down — start it.
   - macOS: `open -a Docker`
   - Linux: `sudo systemctl start docker`
 
@@ -62,9 +68,7 @@ Wait ~15s after either, then proceed.
 
 > **Loose commands:** Docker install/start. Justification: platform-specific package-manager invocations. Wrapping them in a `--step` would just move the same branching into TypeScript with no added value.
 
-**Image (run if `IMAGE_PRESENT=false`):**
-
-> *"Next I'm building the agent container image — takes a few minutes the first time, but it's a one-off."*
+**Image (run if `IMAGE_PRESENT=false`):** build the agent container image — takes a few minutes the first time, one-off cost.
 
 `pnpm exec tsx setup/index.ts --step container -- --runtime docker`
 
@@ -72,7 +76,7 @@ Wait ~15s after either, then proceed.
 
 Check probe results and skip if `ONECLI_STATUS=healthy`.
 
-> *"Now I'm installing OneCLI — a local vault that keeps your API keys safe and hands them to your agents only when they need them."*
+OneCLI is the local vault that holds API keys and only releases them to agents when they need them.
 
 `pnpm exec tsx setup/index.ts --step onecli`
 
@@ -80,7 +84,7 @@ Check probe results and skip if `ONECLI_STATUS=healthy`.
 
 Check probe results and skip if `ANTHROPIC_SECRET=true`.
 
-> *"Your agent needs an Anthropic credential to talk to Claude. Let's get that set up."*
+The agent needs an Anthropic credential to talk to Claude. Two sources:
 
 Use `AskUserQuestion`:
 1. **Claude subscription (Pro/Max)** — "Run `claude setup-token` in another terminal. It prints a token; paste it back here when ready."
@@ -94,7 +98,7 @@ Wait for the token. When received, run:
 
 Check probe results and skip if `SERVICE_STATUS=running`.
 
-> *"Starting the NanoClaw background service so it can relay messages between you and your agent."*
+Start the NanoClaw background service — it relays messages between the user and the agent.
 
 `pnpm exec tsx setup/index.ts --step service`
 
@@ -102,15 +106,15 @@ Check probe results and skip if `SERVICE_STATUS=running`.
 
 Check probe results and skip if `CLI_AGENT_WIRED=true`.
 
-> *"Now I'm creating your first agent and hooking it up to the terminal so you can start chatting."*
+If step 2's container build is still running in the background, join it here before proceeding — the agent needs the image.
 
-Ask: *"What should I call you?"* Default: the value of `INFERRED_DISPLAY_NAME` from probe.
+Create the first agent and wire it to the CLI channel. Ask the user "What should I call you?" first — default the offered value to `INFERRED_DISPLAY_NAME` from the probe.
 
 `pnpm exec tsx setup/index.ts --step cli-agent -- --display-name "<name>"`
 
 ### 7. First chat
 
-> *"You're all set — send your first message to your agent:"*
+Everything's ready — send the first message to the agent.
 
 `pnpm run chat hi`
 
