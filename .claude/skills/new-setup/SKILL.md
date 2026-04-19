@@ -1,7 +1,7 @@
 ---
 name: new-setup
 description: Shortest path from zero to a working two-way agent chat, for any user regardless of technical background — ends at a running NanoClaw instance with at least one CLI-reachable agent.
-allowed-tools: Bash(bash setup.sh) Bash(node setup/probe.mjs) Bash(pnpm exec tsx setup/index.ts *) Bash(pnpm run chat *) Bash(brew install *) Bash(curl -fsSL https://get.docker.com | sh) Bash(sudo usermod -aG docker *) Bash(open -a Docker) Bash(sudo systemctl start docker)
+allowed-tools: Bash(bash setup.sh) Bash(bash setup/probe.sh) Bash(pnpm exec tsx setup/index.ts *) Bash(pnpm run chat *) Bash(brew install *) Bash(curl -fsSL https://get.docker.com | sh) Bash(sudo usermod -aG docker *) Bash(open -a Docker) Bash(sudo systemctl start docker)
 ---
 
 # NanoClaw bare-minimum setup
@@ -18,7 +18,7 @@ Start with a probe: a single parallel scan that snapshots every prerequisite and
 
 ## Current state
 
-!`command -v node >/dev/null 2>&1 && node setup/probe.mjs || printf '=== NANOCLAW SETUP: PROBE ===\nSTATUS: unavailable\nREASON: node_not_installed\n=== END ===\n'`
+!`bash setup/probe.sh`
 
 ## Flow
 
