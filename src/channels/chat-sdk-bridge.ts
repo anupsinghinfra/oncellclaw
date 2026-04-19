@@ -71,6 +71,12 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
   let chat: Chat;
   let state: SqliteStateAdapter;
   let setupConfig: ChannelSetup;
+  // NOTE: populated at setup() and updateConversations(), but currently not
+  // read by any inbound handler. When adapter-level gating lands (engage_mode
+  // applied here) or when dynamic group registration is added, this map goes
+  // stale after setup unless updateConversations() is actively called on every
+  // messaging_groups / messaging_group_agents mutation. See ACTION-ITEMS.md
+  // item 17.
   let conversations: Map<string, ConversationConfig>;
   let gatewayAbort: AbortController | null = null;
 
