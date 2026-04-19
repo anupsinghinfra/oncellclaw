@@ -28,13 +28,18 @@ If the probe reports `STATUS: unavailable` (Node isn't installed yet), ignore al
 
 ### 1. Node bootstrap
 
-Always runs — probe can't report on this since it lives below the Node layer.
-
 > *"Now I'm installing Node and your project's dependencies, so the rest of setup has what it needs to run."*
 
-Run `bash setup.sh`. Parse the status block.
+If the probe reported `STATUS: unavailable` (Node isn't installed yet), install Node 22 **before** running `bash setup.sh` — otherwise the first bootstrap run is guaranteed to fail and you'll pay for it twice:
 
-- `NODE_OK=false` → Offer to install Node 22 (macOS: `brew install node@22`; Linux: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`). Re-run.
+- macOS: `brew install node@22`
+- Linux / WSL: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`
+
+Then run `bash setup.sh`. If the probe reported any other status, run `bash setup.sh` directly — it's idempotent and verifies host deps + native modules.
+
+Parse the status block:
+
+- `NODE_OK=false` → Node install didn't take effect (PATH issue, keg-only formula, etc.). Investigate `logs/setup.log`, resolve, re-run.
 - `DEPS_OK=false` or `NATIVE_OK=false` → Read `logs/setup.log`, fix, re-run.
 
 > **Loose command:** `bash setup.sh`. Justification: pre-Node bootstrap. Can't call the Node-based dispatcher before Node and `pnpm install` are in place.
