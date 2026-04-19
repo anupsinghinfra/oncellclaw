@@ -1,7 +1,7 @@
 ---
 name: new-setup
 description: Shortest path from zero to a working two-way agent chat, for any user regardless of technical background — ends at a running NanoClaw instance with at least one CLI-reachable agent.
-allowed-tools: Bash(bash setup.sh) Bash(pnpm exec tsx setup/index.ts *) Bash(pnpm run chat *) Bash(brew install *) Bash(curl -fsSL https://get.docker.com | sh) Bash(sudo usermod -aG docker *) Bash(open -a Docker) Bash(sudo systemctl start docker)
+allowed-tools: Bash(bash setup.sh) Bash(node setup/probe.mjs) Bash(pnpm exec tsx setup/index.ts *) Bash(pnpm run chat *) Bash(brew install *) Bash(curl -fsSL https://get.docker.com | sh) Bash(sudo usermod -aG docker *) Bash(open -a Docker) Bash(sudo systemctl start docker)
 ---
 
 # NanoClaw bare-minimum setup
@@ -14,15 +14,17 @@ For each step, print a one-liner to the user explaining what it does and why it'
 
 Each step is invoked as `pnpm exec tsx setup/index.ts --step <name>` and emits a structured status block Claude parses to decide what to do next.
 
-Start with a probe: a single parallel scan that snapshots every prerequisite and dependency. The rest of the flow reads this snapshot to decide what to run, skip, or ask about — no per-step re-checking.
+Start with a probe: a single parallel scan that snapshots every prerequisite and dependency. The rest of the flow reads this snapshot to decide what to run, skip, or ask about — no per-step re-checking. The probe is plain ESM JS (`setup/probe.mjs`) with no external deps so it can run before step 1 has installed `pnpm`/`node_modules`.
 
 ## Current state
 
-!`pnpm exec tsx setup/index.ts --step probe`
+!`command -v node >/dev/null 2>&1 && node setup/probe.mjs || printf '=== NANOCLAW SETUP: PROBE ===\nSTATUS: unavailable\nREASON: node_not_installed\n=== END ===\n'`
 
 ## Flow
 
 Parse the probe block above. For each step below, consult the named probe fields and skip, ask, or run accordingly. Before running any step, say the quoted one-liner to the user.
+
+If the probe reports `STATUS: unavailable` (Node isn't installed yet), ignore all `skip if …` probe conditions and run every step from 1 onward — each step has its own idempotency check, so re-running is safe.
 
 ### 1. Node bootstrap
 
