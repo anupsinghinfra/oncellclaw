@@ -145,7 +145,10 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       platform_id: event.platformId,
       name: null,
       is_group: 0,
-      unknown_sender_policy: 'strict',
+      // Let the schema default (currently 'request_approval') apply rather
+      // than hardcoding 'strict' — the schema is the source of truth for
+      // the default policy. See migration 011.
+      unknown_sender_policy: 'request_approval',
       created_at: new Date().toISOString(),
     };
     createMessagingGroup(mg);
