@@ -3,7 +3,7 @@ import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } 
 import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
-import { formatMessages, extractRouting, categorizeMessage, type RoutingContext } from './formatter.js';
+import { formatMessages, extractRouting, categorizeMessage, stripInternalTags, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -384,10 +384,7 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
     scratchpadParts.push(text.slice(lastIndex));
   }
 
-  const scratchpad = scratchpadParts
-    .join('')
-    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-    .trim();
+  const scratchpad = stripInternalTags(scratchpadParts.join(''));
 
   // Single-destination shortcut: the agent wrote plain text — send to
   // the session's originating channel (from session_routing) if available,
