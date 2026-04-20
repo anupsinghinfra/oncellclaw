@@ -39,14 +39,32 @@ describe('decideStuckAction', () => {
     expect(res.heartbeatAgeMs).toBeGreaterThan(ABSOLUTE_CEILING_MS);
   });
 
-  it('treats an absent heartbeat file as infinitely stale', () => {
+  it('skips the ceiling check when no heartbeat file exists (fresh container not yet ticked)', () => {
+    // A freshly-spawned container hasn't produced any SDK events yet, so no
+    // heartbeat. Prior behavior treated this as infinitely stale and killed
+    // every container within seconds of spawn. With no claims either, we
+    // should conclude everything is fine.
     const res = decideStuckAction({
       now: BASE,
       heartbeatMtimeMs: 0,
       containerState: null,
       claims: [],
     });
-    expect(res.action).toBe('kill-ceiling');
+    expect(res.action).toBe('ok');
+  });
+
+  it('kills on claim-stuck when heartbeat is absent AND a claim has aged past tolerance', () => {
+    // Hanging fresh container: spawned, picked up a message (claim recorded
+    // in processing_ack), but never wrote a heartbeat. Falls through the
+    // skipped ceiling check into claim-stuck — which correctly fires.
+    const claimedAgeMs = CLAIM_STUCK_MS + 5_000;
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: 0,
+      containerState: null,
+      claims: [claim('msg-1', claimedAgeMs)],
+    });
+    expect(res.action).toBe('kill-claim');
   });
 
   it('extends the ceiling when Bash has a declared timeout longer than 30 min', () => {
@@ -105,7 +123,7 @@ describe('decideStuckAction', () => {
     const res = decideStuckAction({
       now: BASE,
       // 5 min since claim, over the 60s default but under the declared Bash timeout
-      heartbeatMtimeMs: BASE - (5 * 60 * 1000) - 5_000,
+      heartbeatMtimeMs: BASE - 5 * 60 * 1000 - 5_000,
       containerState: {
         current_tool: 'Bash',
         tool_declared_timeout_ms: tenMinMs,

@@ -75,11 +75,21 @@ export function decideStuckAction(args: {
 }): StuckDecision {
   const { now, heartbeatMtimeMs, containerState, claims } = args;
   const declaredBashMs = bashTimeoutMs(containerState);
-  const heartbeatAge = heartbeatMtimeMs === 0 ? Infinity : now - heartbeatMtimeMs;
 
-  const ceiling = Math.max(ABSOLUTE_CEILING_MS, declaredBashMs ?? 0);
-  if (heartbeatAge > ceiling) {
-    return { action: 'kill-ceiling', heartbeatAgeMs: heartbeatAge, ceilingMs: ceiling };
+  // Ceiling check only applies when we have an actual heartbeat timestamp.
+  // A freshly-spawned container hasn't had any SDK activity yet so no
+  // heartbeat file exists — if we treated that as infinitely stale we'd
+  // kill every container within seconds of spawn. Genuinely-dead containers
+  // that never wrote a heartbeat are caught by the separate "container
+  // process not running" cleanup path, not here. If a fresh container is
+  // hanging at the gate (claimed a message but never did anything) the
+  // claim-stuck check below handles it.
+  if (heartbeatMtimeMs !== 0) {
+    const heartbeatAge = now - heartbeatMtimeMs;
+    const ceiling = Math.max(ABSOLUTE_CEILING_MS, declaredBashMs ?? 0);
+    if (heartbeatAge > ceiling) {
+      return { action: 'kill-ceiling', heartbeatAgeMs: heartbeatAge, ceilingMs: ceiling };
+    }
   }
 
   const tolerance = Math.max(CLAIM_STUCK_MS, declaredBashMs ?? 0);
