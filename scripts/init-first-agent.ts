@@ -59,6 +59,7 @@ import type { AgentGroup, MessagingGroup } from '../src/types.js';
 
 interface Args {
   cliOnly: boolean;
+  noCliBonus: boolean;
   channel: string;
   userId: string;
   platformId: string;
@@ -75,13 +76,16 @@ const CLI_PLATFORM_ID = 'local';
 const CLI_SYNTHETIC_USER_ID = `${CLI_CHANNEL}:${CLI_PLATFORM_ID}`;
 
 function parseArgs(argv: string[]): Args {
-  const out: Partial<Args> = { cliOnly: false };
+  const out: Partial<Args> = { cliOnly: false, noCliBonus: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     const val = argv[i + 1];
     switch (key) {
       case '--cli-only':
         out.cliOnly = true;
+        break;
+      case '--no-cli-bonus':
+        out.noCliBonus = true;
         break;
       case '--channel':
         out.channel = (val ?? '').toLowerCase();
@@ -120,6 +124,7 @@ function parseArgs(argv: string[]): Args {
     // CLI-only: channel/user/platform default to the synthetic local CLI identity.
     return {
       cliOnly: true,
+      noCliBonus: out.noCliBonus ?? false,
       channel: CLI_CHANNEL,
       userId: CLI_SYNTHETIC_USER_ID,
       platformId: CLI_PLATFORM_ID,
@@ -139,6 +144,7 @@ function parseArgs(argv: string[]): Args {
 
   return {
     cliOnly: false,
+    noCliBonus: out.noCliBonus ?? false,
     channel: out.channel!,
     userId: out.userId!,
     platformId: out.platformId!,
@@ -292,7 +298,9 @@ async function main(): Promise<void> {
   wireIfMissing(primaryMg, ag, now, args.cliOnly ? 'cli' : 'dm');
 
   // In DM mode also wire CLI so `pnpm run chat` works immediately.
-  if (!args.cliOnly) {
+  // Skip the bonus when --no-cli-bonus is set — used by /new-setup-2 so the
+  // throwaway CLI-only agent from /new-setup still owns CLI routing cleanly.
+  if (!args.cliOnly && !args.noCliBonus) {
     wireIfMissing(cliMg, ag, now, 'cli-bonus');
   }
 
@@ -322,7 +330,9 @@ async function main(): Promise<void> {
     console.log(`  channel: cli/${CLI_PLATFORM_ID}`);
   } else {
     console.log(`  channel: ${args.channel} ${primaryMg.platform_id}`);
-    console.log(`  cli:     cli/${CLI_PLATFORM_ID} wired — try \`pnpm run chat hi\``);
+    if (!args.noCliBonus) {
+      console.log(`  cli:     cli/${CLI_PLATFORM_ID} wired — try \`pnpm run chat hi\``);
+    }
   }
   console.log(`  session: ${session.id}`);
   console.log('');
