@@ -85,94 +85,46 @@ export interface ChatSdkBridgeConfig {
 export type EngageSource = 'subscribed' | 'mention' | 'dm' | 'new-message';
 
 /**
- * Should a message from (channelId, source, text) be forwarded to the host,
- * and if so, should the bridge subscribe the thread?
+ * Bridge-level forwarding decision — a coarse flood gate, not policy.
+ *
+ * The router owns per-wiring engage_mode / engage_pattern / sender_scope /
+ * ignored_message_policy (see `evaluateEngage` in src/router.ts). The bridge
+ * only answers two questions:
+ *
+ *   1. `forward` — is this message worth sending to the host at all?
+ *      - Known channel (any wiring): yes. Router will decide what engages /
+ *        accumulates / drops per wiring.
+ *      - Unknown channel: yes for subscribed / mention / DM (triggers the
+ *        router's auto-create or channel-registration flow); no for
+ *        `new-message`. onNewMessage(/./, …) fires for every message in
+ *        every unsubscribed thread the bot can see, including channels the
+ *        bot merely joined but was never wired to — forwarding everything
+ *        would flood the host.
+ *
+ *   2. `stickySubscribe` — should the bridge call `thread.subscribe()`?
+ *      - Yes if ANY wiring on this channel is mention-sticky AND the
+ *        source is an actual mention / DM. Coarse (no per-wiring picking)
+ *        but harmless: subscription is idempotent and one call serves
+ *        every mention-sticky wiring on the channel. Once subscribed,
+ *        follow-ups route through onSubscribedMessage.
  *
  * Exported for testability — see `chat-sdk-bridge.test.ts`.
- *
- * We take the union across wired agents: if any wiring would engage OR any
- * wiring has `ignoredMessagePolicy='accumulate'`, the message is forwarded.
- * The host router then does the per-wiring decision in `deliverToAgent` —
- * engaging agents get `trigger=1` (wake), accumulating agents get
- * `trigger=0` (store as context, don't wake), drop-policy agents are
- * skipped (see `src/router.ts` routeInbound fan-out).
- *
- * `stickySubscribe` is only set when an actual engage happens (not just
- * accumulate) — subscribing a thread we'd only silently accumulate on would
- * misrepresent the bot's presence to other users.
  */
 export function shouldEngage(
   conversations: Map<string, ConversationConfig[]>,
   channelId: string,
   source: EngageSource,
-  text: string,
 ): { forward: boolean; stickySubscribe: boolean } {
   const configs = conversations.get(channelId);
 
-  // Unknown conversation — behavior diverges by source:
-  //   - subscribed/mention/dm: forward anyway. These paths imply some
-  //     prior engagement (subscribe, @mention, DM open) and may be a new
-  //     group that hasn't been registered yet; central routing will log +
-  //     drop cleanly.
-  //   - new-message: DROP. `onNewMessage(/./, …)` fires for every message
-  //     in every unsubscribed thread the bot can see — including channels
-  //     the bot is merely *present* in but not wired to. Forwarding
-  //     everything would flood the host.
   if (!configs || configs.length === 0) {
     return { forward: source !== 'new-message', stickySubscribe: false };
   }
 
-  let engage = false;
-  let accumulate = false;
-  let stickySubscribe = false;
+  const stickySubscribe =
+    (source === 'mention' || source === 'dm') && configs.some((cfg) => cfg.engageMode === 'mention-sticky');
 
-  for (const cfg of configs) {
-    let cfgEngages = false;
-    switch (cfg.engageMode) {
-      case 'mention':
-        if (source === 'mention' || source === 'dm') cfgEngages = true;
-        break;
-      case 'mention-sticky':
-        if (source === 'mention' || source === 'dm') {
-          cfgEngages = true;
-          stickySubscribe = true;
-        } else if (source === 'subscribed') {
-          // Thread was already subscribed on a prior mention — treat as
-          // engage-all so follow-ups in the thread reach the agent.
-          cfgEngages = true;
-        }
-        // source='new-message' → does not engage (requires explicit mention
-        // to start). Accumulate policy is evaluated below if set.
-        break;
-      case 'pattern': {
-        // Pattern evaluates on any source that delivers a plain message —
-        // including new-message, which is the whole reason we registered
-        // onNewMessage(/./). For mention/dm-delivered messages we still
-        // test the regex (historical behavior), so pattern='foo' wirings
-        // only fire on mentions whose text contains 'foo'.
-        const pattern = cfg.engagePattern ?? '.';
-        try {
-          if (pattern === '.' || new RegExp(pattern).test(text)) cfgEngages = true;
-        } catch {
-          // Invalid regex → fail open so the admin can see something is
-          // happening and fix the pattern.
-          cfgEngages = true;
-        }
-        break;
-      }
-    }
-
-    if (cfgEngages) {
-      engage = true;
-    } else if (cfg.ignoredMessagePolicy === 'accumulate') {
-      // Wiring doesn't engage on this message but wants it captured as
-      // context for its session — forward so the router can write it with
-      // trigger=0.
-      accumulate = true;
-    }
-  }
-
-  return { forward: engage || accumulate, stickySubscribe };
+  return { forward: true, stickySubscribe };
 }
 
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
@@ -202,12 +154,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     return map;
   }
 
-  function engageDecision(
-    channelId: string,
-    source: EngageSource,
-    text: string,
-  ): { forward: boolean; stickySubscribe: boolean } {
-    return shouldEngage(conversations, channelId, source, text);
+  function engageDecision(channelId: string, source: EngageSource): { forward: boolean; stickySubscribe: boolean } {
+    return shouldEngage(conversations, channelId, source);
   }
 
   async function messageToInbound(message: ChatMessage, isMention: boolean): Promise<InboundMessage> {
@@ -289,46 +237,38 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         logger: 'silent',
       });
 
-      // Subscribed threads — the conversation is already active (via prior
-      // mention-sticky engagement or admin wiring). Gate on engageMode so a
-      // plain 'mention' wiring doesn't keep firing after a one-off mention.
+      // Four SDK dispatch paths — bridge just forwards; router does all
+      // per-wiring engage / accumulate / drop decisions. isMention is the
+      // load-bearing signal (see evaluateEngage in src/router.ts).
+
+      // Subscribed threads — every message in a thread we've previously
+      // engaged. Carry the SDK's `message.isMention` through so mention-mode
+      // wirings still fire on in-thread mentions.
       chat.onSubscribedMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const text = typeof message.text === 'string' ? message.text : '';
-        const decision = engageDecision(channelId, 'subscribed', text);
+        const decision = engageDecision(channelId, 'subscribed');
         if (!decision.forward) return;
-        // Subscribed path: the SDK sets message.isMention when the bot was
-        // @-mentioned in an already-subscribed thread (docs at
-        // handling-events.mdx). Forward it verbatim.
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, message.isMention === true));
       });
 
-      // @mention in an unsubscribed thread — always engage; subscribe only
-      // if the wiring is 'mention-sticky'.
+      // @mention in an unsubscribed thread — SDK-confirmed bot mention.
       chat.onNewMention(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const text = typeof message.text === 'string' ? message.text : '';
-        const decision = engageDecision(channelId, 'mention', text);
+        const decision = engageDecision(channelId, 'mention');
         if (!decision.forward) return;
-        // onNewMention only fires when the SDK confirms the bot was mentioned.
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
         if (decision.stickySubscribe) {
           await thread.subscribe();
         }
       });
 
-      // DMs — apply engage rules too, but DMs typically default to pattern='.'
-      // at setup time so this is a pass-through in practice. sticky subscribe
-      // follows the same rule as a group mention.
-      //
-      // Thread id is passed through so sub-thread context reaches delivery
-      // (Slack users can open threads inside a DM). The router collapses DM
-      // sub-threads to one session (is_group=0 short-circuits the per-thread
-      // escalation).
+      // DMs — by definition addressed to the bot. Thread id flows through
+      // so sub-thread context reaches delivery (Slack users can open threads
+      // inside a DM). Router collapses DM sub-threads to one session via
+      // is_group=0 short-circuit.
       chat.onDirectMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const text = typeof message.text === 'string' ? message.text : '';
-        const decision = engageDecision(channelId, 'dm', text);
+        const decision = engageDecision(channelId, 'dm');
         log.info('Inbound DM received', {
           adapter: adapter.name,
           channelId,
@@ -337,35 +277,25 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           forward: decision.forward,
         });
         if (!decision.forward) return;
-        // A DM is by definition addressed to the bot — treat as a mention
-        // for routing purposes. `mention` / `mention-sticky` wirings fire.
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
         if (decision.stickySubscribe) {
           await thread.subscribe();
         }
       });
 
-      // Plain (non-mention, non-DM) messages in unsubscribed threads.
+      // Plain messages in unsubscribed threads.
       //
-      // Chat SDK dispatch (handling-events.mdx §"Handler dispatch order"):
-      // subscribed threads → onSubscribedMessage; unsubscribed + mention →
-      // onNewMention; unsubscribed + pattern match → onNewMessage. Dispatch
-      // is exclusive — at most one handler fires per message.
-      //
-      // Without this handler, `engage_mode='pattern'` is silently dropped in
-      // unsubscribed group threads because the SDK never surfaces the
-      // message anywhere else. Registering with `/./` lets every wired
-      // conversation's regex be evaluated in our `shouldEngage` — unknown
-      // conversations are dropped there (see the source='new-message'
-      // branch) so this doesn't flood the host on channels the bot isn't
-      // wired to.
+      // Chat SDK dispatch (handling-events.mdx §"Handler dispatch order") is
+      // exclusive: subscribed → onSubscribedMessage; unsubscribed+mention →
+      // onNewMention; unsubscribed+pattern-match → onNewMessage. Registering
+      // with `/./` lets the router see every plain message on wired channels
+      // (needed for engage_mode='pattern' + ignored_message_policy='accumulate'
+      // wirings). `shouldEngage` drops unknown channels on this source
+      // specifically so we don't flood from channels the bot merely joined.
       chat.onNewMessage(/./, async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const text = typeof message.text === 'string' ? message.text : '';
-        const decision = engageDecision(channelId, 'new-message', text);
+        const decision = engageDecision(channelId, 'new-message');
         if (!decision.forward) return;
-        // SDK dispatch guarantees this is a non-mention non-DM message in an
-        // unsubscribed thread — isMention is definitively false here.
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, false));
       });
 
