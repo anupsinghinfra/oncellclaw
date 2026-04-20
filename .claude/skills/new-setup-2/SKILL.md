@@ -1,7 +1,7 @@
 ---
 name: new-setup-2
 description: Follow-on to /new-setup. Captures the operator and agent names, wires a real messaging channel, and adds quality-of-life extras. Linear rollthrough; every step is skippable. Invoked when the user picks "continue setup" at the end of /new-setup.
-allowed-tools: Bash(bash setup/probe.sh) Bash(bash setup/install-telegram.sh:*) Bash(pnpm exec tsx setup/index.ts *) Bash(pnpm exec tsx scripts/init-first-agent.ts *) Bash(tail:*) Bash(head:*) Bash(grep:*)
+allowed-tools: Bash(bash setup/probe.sh) Bash(bash setup/install-telegram.sh:*) Bash(pnpm exec tsx setup/index.ts:*) Bash(pnpm exec tsx scripts/init-first-agent.ts:*) Bash(tail:*) Bash(head:*) Bash(grep:*)
 ---
 
 # NanoClaw phase-2 setup
