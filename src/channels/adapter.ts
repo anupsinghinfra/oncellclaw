@@ -22,13 +22,6 @@ export interface ConversationConfig {
   engageMode: 'pattern' | 'mention' | 'mention-sticky';
   /** Regex source when engageMode='pattern'. '.' is the "always" sentinel. */
   engagePattern?: string | null;
-  /**
-   * What to do with non-engaging messages. Projected from the wiring so the
-   * adapter can decide whether to pre-subscribe to group threads — `accumulate`
-   * means "store everything as context even when not engaging", which requires
-   * seeing every message in the thread.
-   */
-  ignoredMessagePolicy?: 'drop' | 'accumulate';
   sessionMode: 'shared' | 'per-thread' | 'agent-shared';
 }
 
