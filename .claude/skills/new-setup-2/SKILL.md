@@ -40,36 +40,40 @@ Capture as `AGENT_NAME`. If skipped, set `AGENT_NAME = OPERATOR_NAME`. Nothing p
 
 Run `pnpm exec tsx setup/index.ts --step timezone` and parse the status block.
 
-- **RESOLVED_TZ is `UTC` or `Etc/UTC`** — before leaving UTC in `.env`, confirm with the user in plain prose:
+- **RESOLVED_TZ is `UTC` or `Etc/UTC`** — before leaving UTC in `.env`, confirm with `AskUserQuestion`:
 
-  > Your system reports UTC as the timezone. Is that actually right, or are you somewhere else? If elsewhere, tell me the IANA zone (e.g. `America/New_York`, `Europe/London`, `Asia/Tokyo`). Skip to keep UTC.
+  - **Question**: "Your system reports UTC as the timezone. Is that right, or are you somewhere else?"
+  - **Header**: "Timezone"
+  - **Options**:
+    1. `Keep UTC` — "Leave timezone as UTC."
+    2. `I'm somewhere else` — "I'll name the IANA zone (e.g. `America/New_York`, `Europe/London`, `Asia/Tokyo`) via Other."
 
-  If they name a different IANA timezone, re-run `pnpm exec tsx setup/index.ts --step timezone -- --tz <answer>` to overwrite `.env`. If they skip, leave UTC in place — nothing else to do.
+  If they pick "I'm somewhere else" (or type an IANA zone via Other), re-run `pnpm exec tsx setup/index.ts --step timezone -- --tz <answer>` to overwrite `.env`. If they keep UTC or skip, leave UTC in place.
 
-- **NEEDS_USER_INPUT=true** — autodetection failed. Ask for an IANA timezone (e.g. `America/New_York`, `Europe/London`, `Asia/Tokyo`), then re-run `pnpm exec tsx setup/index.ts --step timezone -- --tz <answer>`. If they skip, move on.
+- **NEEDS_USER_INPUT=true** — autodetection failed. Use `AskUserQuestion` with the same two options above (reword the question to "Autodetection failed — what timezone are you in?"), then re-run `pnpm exec tsx setup/index.ts --step timezone -- --tz <answer>` if they supply one. If they skip, move on.
 
 - Otherwise — timezone is already set; move on.
 
 ### 4. Pick a messaging channel
 
-Print the list as plain prose. **Do not use `AskUserQuestion` for this step** — just the list, then wait for the user's reply:
+Print the list as a numbered plain-prose list (too many options for `AskUserQuestion`, which caps at 4). The user replies with a number or channel name. Preserve the numbering exactly:
 
 > Which messaging channel should I wire your agent to?
 >
-> - **WhatsApp (native)** — `/add-whatsapp`
-> - **WhatsApp Cloud (Meta official)** — `/add-whatsapp-cloud`
-> - **Telegram** — `/add-telegram`
-> - **Slack** — `/add-slack`
-> - **Discord** — `/add-discord`
-> - **iMessage** — `/add-imessage`
-> - **Teams** — `/add-teams`
-> - **Matrix** — `/add-matrix`
-> - **Google Chat** — `/add-gchat`
-> - **Linear** — `/add-linear`
-> - **GitHub** — `/add-github`
-> - **Webex** — `/add-webex`
-> - **Resend (email)** — `/add-resend`
-> - **Emacs** — `/add-emacs`
+> 1. **WhatsApp (native)** — `/add-whatsapp`
+> 2. **WhatsApp Cloud (Meta official)** — `/add-whatsapp-cloud`
+> 3. **Telegram** — `/add-telegram`
+> 4. **Slack** — `/add-slack`
+> 5. **Discord** — `/add-discord`
+> 6. **iMessage** — `/add-imessage`
+> 7. **Teams** — `/add-teams`
+> 8. **Matrix** — `/add-matrix`
+> 9. **Google Chat** — `/add-gchat`
+> 10. **Linear** — `/add-linear`
+> 11. **GitHub** — `/add-github`
+> 12. **Webex** — `/add-webex`
+> 13. **Resend (email)** — `/add-resend`
+> 14. **Emacs** — `/add-emacs`
 >
 > Or say "skip" to leave this for later.
 
@@ -101,11 +105,15 @@ If the user skipped, move on to step 5.
 
 By default, agent containers can only touch their own workspace. If the user wants the agent to read or write files in specific host directories, those paths need to go on the mount allowlist.
 
-Plain-prose ask:
+Use `AskUserQuestion`:
 
-> Want your agent to be able to read or write files in any host directories (e.g. a code project, `~/Documents`)? Name the paths and I'll add them — or skip to keep the default isolated workspace.
+- **Question**: "Want your agent to read or write files in any host directories (e.g. a code project, `~/Documents`)?"
+- **Header**: "Host mounts"
+- **Options**:
+  1. `Keep isolated` — "Agent only touches its own workspace (Recommended)."
+  2. `Add host paths` — "I'll name the directories to allowlist via Other."
 
-If the user names paths, invoke `/manage-mounts` via the Skill tool to add them. If they skip, move on.
+If they pick "Add host paths" (or name paths via Other), invoke `/manage-mounts` via the Skill tool to add them. If they keep it isolated or skip, move on.
 
 ### 6. Quality of life
 
