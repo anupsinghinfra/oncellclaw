@@ -47,6 +47,11 @@ Working doc for each finding from [SUMMARY.md](SUMMARY.md). Decisions were made 
 - **6a**: Remove `IDLE_END_MS` from `poll-loop.ts` (folded into item 9)
 - **3a**: E2E recovery test (deferred)
 
+### Follow-up PRs (scoped, not in this branch)
+| # | Topic | Why later |
+|---|---|---|
+| 22 | Unknown-channel wiring approval flow (card to owner when bot receives inbound in an unwired messaging group) | Gap surfaced after item 5 landed — item 5's `request_approval` covers unknown senders but presupposes a wired channel. See item 22 for the full design. |
+
 ---
 
 ## HIGH
@@ -167,6 +172,87 @@ On wake, container pulls pending messages with `ORDER BY seq DESC LIMIT MAX_MESS
 
 ---
 
+### 22. Unknown-channel wiring approval flow
+**Finding** (post-item-5 discussion): item 5's `request_approval` only fires when a messaging group already has agents wired. Three scenarios slip through to the earlier `no_agent_wired` structural-drop branch in `src/router.ts` and get silent-dropped with no signal to the owner:
+
+1. A new user DMs the agent directly (the DM's messaging group auto-creates but has no wiring)
+2. The agent is @mentioned in a group the admin hasn't registered
+3. The agent is added to a new group and someone there addresses it
+
+In all three, the user sees no response and the owner has no signal anything happened.
+
+**Status**: decided — companion PR to item 5, scoped separately
+
+**Decision**: when the router hits `no_agent_wired` for a non-public event, **instead of silent-dropping, pick the owner and DM them a wiring card**. Two flavors depending on who triggered it:
+
+- **Sender IS an owner/admin** (the common "I just added the bot" case) → auto-wire IF exactly one agent group exists. Silent seamless flow. If multiple agent groups exist, fall through to the card so the owner picks.
+- **Sender is anyone else** (stranger, or owner in a multi-agent install) → deliver a card:
+  - Title: `🔌 New channel — wire it?`
+  - Body: `<senderName> is trying to reach you in <channelName> on <platform>. Wire to which agent?`
+  - Options: one button per existing `agent_groups` row, plus `➕ Create new` and `Ignore`
+
+**On approve (existing agent group)**:
+1. `createMessagingGroupAgent(...)` with channel-kind defaults — DM→`pattern` + `'.'`, threaded group→`mention-sticky`, non-threaded group→`mention` (same defaults as `scripts/init-first-agent.ts`)
+2. Replay the stored event via `routeInbound` (sender-approval pattern)
+3. Delete pending row
+
+**On approve "Create new"**: [OPEN SCOPE] — needs name/folder input. Options:
+- Follow-up ask_question card asking for a name → auto-derive folder from slug → create group + wire
+- Or: skill-backed flow — the button dispatches to `/init-agent` or similar and the card just links out
+- Punt until implementation; mention in the PR brief that we'll decide when building
+
+**On ignore**: delete pending row; future attempts re-prompt fresh (consistent with sender-approval deny; no denial persistence).
+
+**Failure cases** (drop silently with log, don't leave a pending row):
+- No owner configured (fresh install) — same behaviour as sender-approval
+- No reachable DM for any owner/admin
+- Delivery adapter missing
+
+**New table**:
+```
+pending_channel_approvals (
+  id                 TEXT PRIMARY KEY,
+  messaging_group_id TEXT NOT NULL REFERENCES messaging_groups(id),
+  sender_identity    TEXT,                 -- NULL when triggered by a non-identifiable event
+  sender_name        TEXT,
+  original_message   TEXT NOT NULL,        -- JSON InboundEvent for replay
+  approver_user_id   TEXT NOT NULL,
+  created_at         TEXT NOT NULL,
+  UNIQUE(messaging_group_id)               -- one pending wiring per channel
+)
+```
+
+Dedup is narrower than sender-approval's `(mg_id, sender_id)` — one pending wiring per channel, period. A second stranger writing into the same unwired channel piggybacks on the existing card instead of spawning a new one. Latest event replaces the stored `original_message` (we only replay one anyway, and latest is most useful).
+
+**Card action id prefix**: `nca-<approvalId>:<value>` where value is `agent-group-<id>` / `create` / `ignore`. Response handler lives in `src/modules/permissions/` alongside `handleSenderApprovalResponse`.
+
+**Owner-sender auto-wire logic**:
+```
+if sender is owner/admin AND getAllAgentGroups().length === 1:
+    auto-wire to that group, replay event, done — no card
+else:
+    deliver card
+```
+
+Don't auto-create a new agent group silently — always require a prompt for that.
+
+**LOC estimate**: ~145
+- Migration + CRUD: 45
+- Router hook before `no_agent_wired` drop → try channel approval: 15
+- Owner-sender auto-wire fast path: 20
+- Card delivery (scope `pickApprover(null)`; build buttons from `getAllAgentGroups()`): 25
+- Response handler: 25
+- Tests: 15
+
+**Open scopes (flag at PR time)**:
+- "Create new" sub-flow — pick between follow-up card vs skill link
+- Do we also react to bot-added-to-group platform events? Simpler to stay lazy (first-message-triggered only). Platform lifecycle events are inconsistent across Discord/Slack/Telegram anyway.
+- Worth scanning the `channels` branch for any existing channel-lifecycle handlers that might conflict.
+
+**Next step**: open a follow-up PR off this branch once #1869 lands.
+
+---
+
 ### 3a. End-to-end recovery test
 **Finding**: no test confirms the host-crash-restart scenario produces timely re-delivery.
 
@@ -252,6 +338,8 @@ Dedicated (not reusing `pending_approvals` which is OneCLI-specific).
 **Open gotchas noted**:
 - The router's auto-create at `router.ts:123` currently hardcodes `'strict'` — change to omit the field so schema default applies
 - `pickApprover` may return null if no admin/owner exists (e.g. fresh install before first user registered). In that case: log + drop silently, treat as effectively `'strict'` for safety. Don't block message forever.
+
+**Scope boundary** (important): this item covers **unknown sender in a wired channel**. The parallel case — **unknown channel** (new DM / unwired group / bot-added-to-group) — short-circuits at the `no_agent_wired` structural drop before this flow ever runs. Tracked as item 22.
 
 **Next step**: implement alongside item 1 or as a follow-up. Same migration window is fine (one migration for engage columns + request_approval default change + new table).
 
