@@ -21,7 +21,7 @@ import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
 import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
-import type { ChannelAdapter, ChannelSetup, ConversationConfig, InboundMessage } from './adapter.js';
+import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
 interface GatewayAdapter extends Adapter {
@@ -65,98 +65,13 @@ export interface ChatSdkBridgeConfig {
   transformOutboundText?: (text: string) => string;
 }
 
-/**
- * Which Chat SDK handler delivered this message. Determines which engage modes
- * can fire.
- *
- *   - `subscribed`  — `onSubscribedMessage`. Thread is already subscribed.
- *                     Every wiring mode (mention / mention-sticky / pattern)
- *                     evaluates normally.
- *   - `mention`     — `onNewMention`. Bot was @-mentioned in an unsubscribed
- *                     thread. mention + mention-sticky engage; pattern runs
- *                     the regex.
- *   - `dm`          — `onDirectMessage`. Unsubscribed DM. Treated like a
- *                     mention for engagement purposes.
- *   - `new-message` — `onNewMessage(/./, …)`. Plain non-mention non-DM
- *                     message in an unsubscribed thread. Only `pattern`
- *                     wirings can fire here. mention / mention-sticky ignore
- *                     this source (they require an explicit mention).
- */
-export type EngageSource = 'subscribed' | 'mention' | 'dm' | 'new-message';
-
-/**
- * Bridge-level forwarding decision — a coarse flood gate, not policy.
- *
- * The router owns per-wiring engage_mode / engage_pattern / sender_scope /
- * ignored_message_policy (see `evaluateEngage` in src/router.ts). The bridge
- * only answers two questions:
- *
- *   1. `forward` — is this message worth sending to the host at all?
- *      - Known channel (any wiring): yes. Router will decide what engages /
- *        accumulates / drops per wiring.
- *      - Unknown channel: yes for subscribed / mention / DM (triggers the
- *        router's auto-create or channel-registration flow); no for
- *        `new-message`. onNewMessage(/./, …) fires for every message in
- *        every unsubscribed thread the bot can see, including channels the
- *        bot merely joined but was never wired to — forwarding everything
- *        would flood the host.
- *
- *   2. `stickySubscribe` — should the bridge call `thread.subscribe()`?
- *      - Yes if ANY wiring on this channel is mention-sticky AND the
- *        source is an actual mention / DM. Coarse (no per-wiring picking)
- *        but harmless: subscription is idempotent and one call serves
- *        every mention-sticky wiring on the channel. Once subscribed,
- *        follow-ups route through onSubscribedMessage.
- *
- * Exported for testability — see `chat-sdk-bridge.test.ts`.
- */
-export function shouldEngage(
-  conversations: Map<string, ConversationConfig[]>,
-  channelId: string,
-  source: EngageSource,
-): { forward: boolean; stickySubscribe: boolean } {
-  const configs = conversations.get(channelId);
-
-  if (!configs || configs.length === 0) {
-    return { forward: source !== 'new-message', stickySubscribe: false };
-  }
-
-  const stickySubscribe =
-    (source === 'mention' || source === 'dm') && configs.some((cfg) => cfg.engageMode === 'mention-sticky');
-
-  return { forward: true, stickySubscribe };
-}
-
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
   const { adapter } = config;
   const transformText = (t: string): string => (config.transformOutboundText ? config.transformOutboundText(t) : t);
   let chat: Chat;
   let state: SqliteStateAdapter;
   let setupConfig: ChannelSetup;
-  // Keyed by platformId. Multiple agents may be wired to the same
-  // conversation — this holds all their configs so the bridge can apply the
-  // most-permissive engage rule at gate time and only subscribe when at
-  // least one wiring requested 'mention-sticky'.
-  //
-  // STALENESS: populated at setup() and updateConversations(). If wirings
-  // change after setup, updateConversations() must be called to refresh
-  // (ACTION-ITEMS item 17).
-  let conversations: Map<string, ConversationConfig[]>;
   let gatewayAbort: AbortController | null = null;
-
-  function buildConversationMap(configs: ConversationConfig[]): Map<string, ConversationConfig[]> {
-    const map = new Map<string, ConversationConfig[]>();
-    for (const conv of configs) {
-      const existing = map.get(conv.platformId);
-      if (existing) existing.push(conv);
-      else map.set(conv.platformId, [conv]);
-    }
-    return map;
-  }
-
-  function engageDecision(channelId: string, source: EngageSource): { forward: boolean; stickySubscribe: boolean } {
-    return shouldEngage(conversations, channelId, source);
-  }
 
   async function messageToInbound(message: ChatMessage, isMention: boolean): Promise<InboundMessage> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -225,7 +140,6 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
 
     async setup(hostConfig: ChannelSetup) {
       setupConfig = hostConfig;
-      conversations = buildConversationMap(hostConfig.conversations);
 
       state = new SqliteStateAdapter();
 
@@ -237,29 +151,25 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         logger: 'silent',
       });
 
-      // Four SDK dispatch paths — bridge just forwards; router does all
-      // per-wiring engage / accumulate / drop decisions. isMention is the
-      // load-bearing signal (see evaluateEngage in src/router.ts).
+      // Four SDK dispatch paths — bridge just forwards. All per-wiring
+      // engage / accumulate / drop / subscribe decisions live in the host
+      // router (src/router.ts routeInbound / evaluateEngage). The bridge
+      // only resolves channel ids and sets the platform-confirmed isMention
+      // flag that routeInbound evaluates; the router calls back into
+      // bridge.subscribe(...) when a mention-sticky wiring engages.
 
       // Subscribed threads — every message in a thread we've previously
       // engaged. Carry the SDK's `message.isMention` through so mention-mode
       // wirings still fire on in-thread mentions.
       chat.onSubscribedMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const decision = engageDecision(channelId, 'subscribed');
-        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, message.isMention === true));
       });
 
       // @mention in an unsubscribed thread — SDK-confirmed bot mention.
       chat.onNewMention(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const decision = engageDecision(channelId, 'mention');
-        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
-        if (decision.stickySubscribe) {
-          await thread.subscribe();
-        }
       });
 
       // DMs — by definition addressed to the bot. Thread id flows through
@@ -268,19 +178,13 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // is_group=0 short-circuit.
       chat.onDirectMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const decision = engageDecision(channelId, 'dm');
         log.info('Inbound DM received', {
           adapter: adapter.name,
           channelId,
           sender: (message.author as any)?.fullName ?? (message.author as any)?.userId ?? 'unknown',
           threadId: thread.id,
-          forward: decision.forward,
         });
-        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
-        if (decision.stickySubscribe) {
-          await thread.subscribe();
-        }
       });
 
       // Plain messages in unsubscribed threads.
@@ -288,14 +192,13 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // Chat SDK dispatch (handling-events.mdx §"Handler dispatch order") is
       // exclusive: subscribed → onSubscribedMessage; unsubscribed+mention →
       // onNewMention; unsubscribed+pattern-match → onNewMessage. Registering
-      // with `/./` lets the router see every plain message on wired channels
-      // (needed for engage_mode='pattern' + ignored_message_policy='accumulate'
-      // wirings). `shouldEngage` drops unknown channels on this source
-      // specifically so we don't flood from channels the bot merely joined.
+      // with `/./` lets the router see every plain message on every
+      // unsubscribed thread the bot can see. The router short-circuits via
+      // getMessagingGroupWithAgentCount (~1 DB read) for unwired channels,
+      // so forwarding every one is cheap enough to not need a bridge-side
+      // flood gate.
       chat.onNewMessage(/./, async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const decision = engageDecision(channelId, 'new-message');
-        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, false));
       });
 
@@ -468,8 +371,13 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       return true;
     },
 
-    updateConversations(configs: ConversationConfig[]) {
-      conversations = buildConversationMap(configs);
+    async subscribe(_platformId: string, threadId: string) {
+      // Chat SDK's subscription state lives on the StateAdapter (not on the
+      // Chat instance itself). SqliteStateAdapter.subscribe is idempotent —
+      // a second call on an already-subscribed thread is a no-op. threadId
+      // is the SDK's thread id, which is what the router already has from
+      // the original inbound event.
+      await state.subscribe(threadId);
     },
   };
 

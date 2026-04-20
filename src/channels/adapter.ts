@@ -5,45 +5,8 @@
  * Two patterns: native adapters (implement directly) or Chat SDK bridge (wrap a Chat SDK adapter).
  */
 
-/** Configuration for a registered conversation (messaging group + agent wiring). */
-export interface ConversationConfig {
-  platformId: string;
-  agentGroupId: string;
-  /**
-   * When does the agent engage on messages from this conversation?
-   *
-   *   'pattern'        — regex test against message text; engagePattern='.'
-   *                      means "always" (match everything)
-   *   'mention'        — fires only on @mention
-   *   'mention-sticky' — fires on @mention, then auto-subscribes to the thread
-   *                      and treats subsequent messages as engage-all.
-   *                      Threaded platforms only (Slack/Discord/Linear).
-   */
-  engageMode: 'pattern' | 'mention' | 'mention-sticky';
-  /** Regex source when engageMode='pattern'. '.' is the "always" sentinel. */
-  engagePattern?: string | null;
-  /**
-   * What to do with messages this wiring doesn't engage on.
-   *
-   *   'drop'       — discard silently
-   *   'accumulate' — still forward to the host so the router can store the
-   *                  message in this agent's session with trigger=0. It
-   *                  rides along as context when the agent next wakes, but
-   *                  doesn't wake it on its own.
-   *
-   * The bridge reads this to decide whether to forward a non-engaging
-   * message at all — if any wiring on a conversation has 'accumulate', the
-   * bridge forwards and lets the router apply the per-wiring decision.
-   */
-  ignoredMessagePolicy?: 'drop' | 'accumulate';
-  sessionMode: 'shared' | 'per-thread' | 'agent-shared';
-}
-
 /** Passed to the adapter at setup time. */
 export interface ChannelSetup {
-  /** Known conversations from central DB. */
-  conversations: ConversationConfig[];
-
   /** Called when an inbound message arrives from the platform. */
   onInbound(platformId: string, threadId: string | null, message: InboundMessage): void | Promise<void>;
 
@@ -125,7 +88,17 @@ export interface ChannelAdapter {
   // Optional
   setTyping?(platformId: string, threadId: string | null): Promise<void>;
   syncConversations?(): Promise<ConversationInfo[]>;
-  updateConversations?(conversations: ConversationConfig[]): void;
+
+  /**
+   * Subscribe the bot to a thread so follow-up messages route via the
+   * platform's "subscribed message" path (onSubscribedMessage in Chat SDK).
+   * Called by the router when a mention-sticky wiring first engages in a
+   * thread. Idempotent: calling twice on the same thread is a no-op.
+   *
+   * Platforms without a subscription concept can omit this; the router
+   * treats absence as a no-op.
+   */
+  subscribe?(platformId: string, threadId: string): Promise<void>;
 
   /**
    * Open (or fetch) a DM with this user, returning the platform_id of the
