@@ -10,6 +10,7 @@ const STEPS: Record<
   () => Promise<{ run: (args: string[]) => Promise<void> }>
 > = {
   timezone: () => import('./timezone.js'),
+  'set-env': () => import('./set-env.js'),
   environment: () => import('./environment.js'),
   container: () => import('./container.js'),
   register: () => import('./register.js'),

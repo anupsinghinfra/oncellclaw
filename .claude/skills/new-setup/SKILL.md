@@ -1,7 +1,7 @@
 ---
 name: new-setup
 description: Shortest path from zero to a working two-way agent chat, for any user regardless of technical background — ends at a running NanoClaw instance with at least one CLI-reachable agent.
-allowed-tools: Bash(bash setup.sh) Bash(bash setup/probe.sh) Bash(pnpm exec tsx setup/index.ts:*) Bash(pnpm run chat:*) Bash(curl -fsSL https://get.docker.com | sh) Bash(curl -fsSL https://deb.nodesource.com/setup_22.x) Bash(sudo apt-get install -y nodejs) Bash(sudo usermod -aG docker:*) Bash(open -a Docker) Bash(sudo systemctl start docker) Bash(node --version) Bash(tail:*) Bash(head:*) Bash(grep:*)
+allowed-tools: Bash(bash setup.sh) Bash(bash setup/probe.sh) Bash(bash setup/install-node.sh) Bash(bash setup/install-docker.sh) Bash(pnpm exec tsx setup/index.ts:*) Bash(pnpm run chat) Bash(pnpm run chat:*) Bash(open -a Docker) Bash(sudo systemctl start docker) Bash(node --version) Bash(tail:*) Bash(head:*) Bash(grep:*)
 ---
 
 # NanoClaw bare-minimum setup
@@ -38,10 +38,7 @@ One permitted parallelism:
 
 Check probe results and skip if `HOST_DEPS=ok` — Node, pnpm, `node_modules`, and `better-sqlite3`'s native binding are already in place.
 
-If `HOST_DEPS=missing` and `node --version` fails (Node isn't installed at all), install Node 22 **before** running `bash setup.sh`, otherwise the first bootstrap run is guaranteed to fail:
-
-- macOS: `brew install node@22`
-- Linux / WSL: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`
+If `HOST_DEPS=missing` and `node --version` fails (Node isn't installed at all), run `bash setup/install-node.sh` **before** `bash setup.sh` — the script handles both macOS (via `brew`) and Linux/WSL (NodeSource + apt). It's idempotent and short-circuits when node is already on PATH.
 
 Then run `bash setup.sh`. If Node is already present and only `HOST_DEPS=missing`, run `bash setup.sh` directly — deps just haven't been installed yet.
 
@@ -57,16 +54,14 @@ Parse the status block:
 Check probe results and skip if `DOCKER=running` AND `IMAGE_PRESENT=true`.
 
 **Runtime:**
-- `DOCKER=not_found` → Docker itself is missing — install it so agent containers have an isolated place to run.
-  - macOS: `brew install --cask docker && open -a Docker`
-  - Linux: `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER` (tell user they may need to log out/in for group membership)
+- `DOCKER=not_found` → Docker is missing — install it so agent containers have an isolated place to run. Run `bash setup/install-docker.sh` (handles macOS via `brew --cask` and Linux via the official get.docker.com script, and adds the user to the `docker` group on Linux). On Linux the user may need to log out/in for group membership to take effect. On macOS, launch Docker afterwards with `open -a Docker`.
 - `DOCKER=installed_not_running` → Docker is installed but the daemon is down — start it.
   - macOS: `open -a Docker`
   - Linux: `sudo systemctl start docker`
 
 Wait ~15s after either, then proceed.
 
-> **Loose commands:** Docker install/start. Justification: platform-specific package-manager invocations. Wrapping them in a `--step` would just move the same branching into TypeScript with no added value.
+> **Loose commands:** `open -a Docker`, `sudo systemctl start docker`. Justification: daemon-start is a one-liner per platform, not worth wrapping. The actual install (which had the unmatchable `curl | sh` pattern) is now inside `setup/install-docker.sh`.
 
 **Image (run if `IMAGE_PRESENT=false`):** build the agent container image — takes a few minutes the first time, one-off cost.
 
