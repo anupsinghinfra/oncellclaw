@@ -72,6 +72,19 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       continue;
     }
 
+    // Accumulate gate: if the batch contains only trigger=0 rows
+    // (context-only, router-stored under ignored_message_policy='accumulate'),
+    // don't wake the agent. Leave them `pending` — they'll ride along the
+    // next time a real trigger=1 message lands via this same getPendingMessages
+    // query. Without this gate, a warm container keeps processing
+    // (and potentially responding to) every accumulate-only batch, defeating
+    // the "store as context, don't engage" contract. Host-side countDueMessages
+    // gates the same way for wake-from-cold (see src/db/session-db.ts).
+    if (!messages.some((m) => m.trigger === 1)) {
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+
     const ids = messages.map((m) => m.id);
     markProcessing(ids);
 
