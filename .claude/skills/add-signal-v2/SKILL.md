@@ -233,53 +233,12 @@ Find the UUID from `messaging_groups.platform_id` or the `users` table.
 
 ## Voice Transcription (optional)
 
-Inbound voice messages are automatically transcribed using a local whisper.cpp
-binary. The feature degrades gracefully — if whisper-cli or ffmpeg is missing,
+Inbound voice messages are automatically transcribed using a local whisper
+binary. The feature degrades gracefully — if whisper or ffmpeg is missing,
 voice messages are still delivered as attachments with no transcript.
 
-### Install whisper.cpp on Linux
-
-```bash
-# Build from source (requires git, cmake, make, gcc)
-git clone https://github.com/ggerganov/whisper.cpp
-cd whisper.cpp
-cmake -B build && cmake --build build --config Release -j$(nproc)
-sudo cp build/bin/whisper-cli /usr/local/bin/whisper-cli
-```
-
-Or install ffmpeg + Python openai-whisper (slower but easier):
-```bash
-sudo dnf install -y ffmpeg        # or: sudo apt install ffmpeg
-pip3 install openai-whisper
-# then set WHISPER_BIN=whisper and WHISPER_MODEL=base in .env
-```
-
-On macOS: `brew install whisper-cpp ffmpeg`
-
-### Download a model
-
-```bash
-mkdir -p data/models
-curl -L -o data/models/ggml-base.bin \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
-```
-
-Larger models trade speed for accuracy: `ggml-small.bin` (466 MB), `ggml-medium.bin` (1.5 GB).
-
-### Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WHISPER_BIN` | `whisper-cli` | Path to whisper.cpp binary |
-| `WHISPER_MODEL` | `data/models/ggml-base.bin` | Path to GGML model file |
-
-### Verify
-
-```bash
-ffmpeg -version >/dev/null && echo "ffmpeg OK" || echo "ffmpeg missing"
-whisper-cli --version 2>/dev/null && echo "whisper-cli OK" || echo "whisper-cli missing"
-ls data/models/ggml-*.bin 2>/dev/null || echo "no model — download one"
-```
+See `/add-voice-transcription-free-whisper` for full setup instructions
+(ffmpeg, whisper backends, model download, environment variables, troubleshooting).
 
 ---
 
