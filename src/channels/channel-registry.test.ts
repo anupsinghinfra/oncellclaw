@@ -105,6 +105,7 @@ describe('channel registry', () => {
     await initChannelAdapters(() => ({
       conversations: [],
       onInbound: () => {},
+      onInboundEvent: () => {},
       onMetadata: () => {},
       onAction: () => {},
     }));
@@ -208,6 +209,7 @@ describe('channel + router integration', () => {
     await initChannelAdapters(() => ({
       conversations: [],
       onInbound: () => {},
+      onInboundEvent: () => {},
       onMetadata: () => {},
       onAction: () => {},
     }));

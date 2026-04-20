@@ -86,6 +86,15 @@ async function main(): Promise<void> {
           log.error('Failed to route inbound message', { channelType: adapter.channelType, err });
         });
       },
+      onInboundEvent(event) {
+        routeInbound(event).catch((err) => {
+          log.error('Failed to route inbound event', {
+            sourceAdapter: adapter.channelType,
+            targetChannelType: event.channelType,
+            err,
+          });
+        });
+      },
       onMetadata(platformId, name, isGroup) {
         log.info('Channel metadata discovered', {
           channelType: adapter.channelType,

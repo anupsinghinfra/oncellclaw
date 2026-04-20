@@ -32,30 +32,10 @@ import { resolveSession, writeSessionMessage } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
 import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
+import type { InboundEvent } from './channels/adapter.js';
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export interface InboundEvent {
-  channelType: string;
-  platformId: string;
-  threadId: string | null;
-  message: {
-    id: string;
-    kind: 'chat' | 'chat-sdk';
-    content: string; // JSON blob
-    timestamp: string;
-    /**
-     * Platform-confirmed bot-mention signal forwarded from the adapter.
-     * When defined, it's authoritative — use this instead of text-matching
-     * agent_group_name, which breaks on platforms where the mention token
-     * is the bot's platform username (e.g. Telegram). undefined means the
-     * adapter doesn't provide the signal; evaluateEngage falls back to
-     * agent-name regex.
-     */
-    isMention?: boolean;
-  };
 }
 
 /**
@@ -408,13 +388,23 @@ async function deliverToAgent(
 
   const { session, created } = resolveSession(agent.agent_group_id, mg.id, event.threadId, effectiveSessionMode);
 
+  // The inbound row's (channel_type, platform_id, thread_id) is the address
+  // the agent's reply will be delivered to. Normally it mirrors the source
+  // (stamped from the event). When the caller supplied `replyTo` (CLI admin
+  // transport acting on operator intent), the reply is redirected there.
+  const deliveryAddr = event.replyTo ?? {
+    channelType: event.channelType,
+    platformId: event.platformId,
+    threadId: event.threadId,
+  };
+
   writeSessionMessage(session.agent_group_id, session.id, {
     id: messageIdForAgent(event.message.id, agent.agent_group_id),
     kind: event.message.kind,
     timestamp: event.message.timestamp,
-    platformId: event.platformId,
-    channelType: event.channelType,
-    threadId: event.threadId,
+    platformId: deliveryAddr.platformId,
+    channelType: deliveryAddr.channelType,
+    threadId: deliveryAddr.threadId,
     content: event.message.content,
     trigger: wake ? 1 : 0,
   });

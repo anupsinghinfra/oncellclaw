@@ -10,11 +10,54 @@ export interface ChannelSetup {
   /** Called when an inbound message arrives from the platform. */
   onInbound(platformId: string, threadId: string | null, message: InboundMessage): void | Promise<void>;
 
+  /**
+   * Called by admin-transport adapters (CLI) that want to route a message to
+   * an arbitrary channel/platform and optionally redirect replies elsewhere.
+   * Regular chat adapters should use `onInbound`; `onInboundEvent` skips the
+   * adapter-channel-type injection so the caller can target any wired mg.
+   */
+  onInboundEvent(event: InboundEvent): void | Promise<void>;
+
   /** Called when the adapter discovers metadata about a conversation. */
   onMetadata(platformId: string, name?: string, isGroup?: boolean): void;
 
   /** Called when a user clicks a button/action in a card (e.g., ask_user_question response). */
   onAction(questionId: string, selectedOption: string, userId: string): void;
+}
+
+/** Delivery address used for reply-to overrides and (normally) the inbound's own origin. */
+export interface DeliveryAddress {
+  channelType: string;
+  platformId: string;
+  threadId: string | null;
+}
+
+/**
+ * Full inbound event handed to the router.
+ *
+ * `channelType` + `platformId` + `threadId` identify which messaging group /
+ * session receives the message. `replyTo`, when set, overrides where the
+ * agent's reply is delivered — used by the CLI admin transport when the
+ * operator wants a message routed to one channel but replies echoed back to
+ * their terminal. Agents cannot set `replyTo`; it is a router-layer concept
+ * set only by external adapters carrying operator intent.
+ */
+export interface InboundEvent {
+  channelType: string;
+  platformId: string;
+  threadId: string | null;
+  message: {
+    id: string;
+    kind: 'chat' | 'chat-sdk';
+    content: string; // JSON blob
+    timestamp: string;
+    /**
+     * Platform-confirmed bot-mention signal forwarded from the adapter.
+     * See InboundMessage.isMention for the full explanation.
+     */
+    isMention?: boolean;
+  };
+  replyTo?: DeliveryAddress;
 }
 
 /** Inbound message from adapter to host. */

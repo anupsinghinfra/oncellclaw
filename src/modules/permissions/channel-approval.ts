@@ -41,7 +41,7 @@ import { getAllAgentGroups } from '../../db/agent-groups.js';
 import { getMessagingGroup } from '../../db/messaging-groups.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { log } from '../../log.js';
-import type { InboundEvent } from '../../router.js';
+import type { InboundEvent } from '../../channels/adapter.js';
 import { pickApprovalDelivery, pickApprover } from '../approvals/primitive.js';
 import { createPendingChannelApproval, hasInFlightChannelApproval } from './db/pending-channel-approvals.js';
 
