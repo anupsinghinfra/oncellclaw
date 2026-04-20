@@ -16,10 +16,7 @@
  * access gate is not registered and core defaults to allow-all.
  */
 import { recordDroppedMessage } from '../../db/dropped-messages.js';
-import {
-  createMessagingGroupAgent,
-  setMessagingGroupDeniedAt,
-} from '../../db/messaging-groups.js';
+import { createMessagingGroupAgent, setMessagingGroupDeniedAt } from '../../db/messaging-groups.js';
 import {
   routeInbound,
   setAccessGate,
@@ -35,10 +32,7 @@ import type { MessagingGroup, MessagingGroupAgent } from '../../types.js';
 import { canAccessAgentGroup } from './access.js';
 import { requestChannelApproval } from './channel-approval.js';
 import { addMember } from './db/agent-group-members.js';
-import {
-  deletePendingChannelApproval,
-  getPendingChannelApproval,
-} from './db/pending-channel-approvals.js';
+import { deletePendingChannelApproval, getPendingChannelApproval } from './db/pending-channel-approvals.js';
 import { deletePendingSenderApproval, getPendingSenderApproval } from './db/pending-sender-approvals.js';
 import { hasAdminPrivilege } from './db/user-roles.js';
 import { getUser, upsertUser } from './db/users.js';

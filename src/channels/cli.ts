@@ -39,13 +39,7 @@ import path from 'path';
 
 import { DATA_DIR } from '../config.js';
 import { log } from '../log.js';
-import type {
-  ChannelAdapter,
-  ChannelSetup,
-  DeliveryAddress,
-  InboundEvent,
-  OutboundMessage,
-} from './adapter.js';
+import type { ChannelAdapter, ChannelSetup, DeliveryAddress, InboundEvent, OutboundMessage } from './adapter.js';
 import { registerChannelAdapter } from './channel-registry.js';
 
 const PLATFORM_ID = 'local';
@@ -184,11 +178,7 @@ function createAdapter(): ChannelAdapter {
     });
   }
 
-  async function handleLine(
-    line: string,
-    config: ChannelSetup,
-    claimChatSlot: () => void,
-  ): Promise<void> {
+  async function handleLine(line: string, config: ChannelSetup, claimChatSlot: () => void): Promise<void> {
     let payload: {
       text?: unknown;
       to?: unknown;
@@ -260,8 +250,8 @@ function createAdapter(): ChannelAdapter {
       obj.threadId === null || obj.threadId === undefined
         ? null
         : typeof obj.threadId === 'string'
-        ? obj.threadId
-        : null;
+          ? obj.threadId
+          : null;
     return {
       channelType: obj.channelType,
       platformId: obj.platformId,
