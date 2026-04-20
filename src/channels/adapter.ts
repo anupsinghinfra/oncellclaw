@@ -60,6 +60,21 @@ export interface InboundMessage {
   kind: 'chat' | 'chat-sdk';
   content: unknown; // JS object — host will JSON.stringify before writing to session DB
   timestamp: string;
+  /**
+   * Platform-confirmed signal that this message is a mention of the bot.
+   *
+   * Set by adapters that know the platform's own mention semantics — e.g.
+   * the Chat SDK bridge sets it true from `onNewMention` / `onDirectMessage`
+   * and forwards `message.isMention` from `onSubscribedMessage`. Use this
+   * in the router instead of agent-name regex matching, which breaks on
+   * platforms where the mention text is the bot's platform username (e.g.
+   * Telegram's `@nanoclaw_v2_refactr_1_bot`) rather than the agent_group
+   * display name (e.g. `@Andy`).
+   *
+   * Adapters that don't set it (native / legacy) leave it undefined — the
+   * router falls back to text-match against agent_group_name.
+   */
+  isMention?: boolean;
 }
 
 /** A file attachment to deliver alongside a message. */

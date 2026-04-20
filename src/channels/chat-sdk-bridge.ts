@@ -210,7 +210,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     return shouldEngage(conversations, channelId, source, text);
   }
 
-  async function messageToInbound(message: ChatMessage): Promise<InboundMessage> {
+  async function messageToInbound(message: ChatMessage, isMention: boolean): Promise<InboundMessage> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const serialized = message.toJSON() as Record<string, any>;
 
@@ -266,6 +266,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       kind: 'chat-sdk',
       content: serialized,
       timestamp: message.metadata.dateSent.toISOString(),
+      isMention,
     };
   }
 
@@ -296,7 +297,10 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const text = typeof message.text === 'string' ? message.text : '';
         const decision = engageDecision(channelId, 'subscribed', text);
         if (!decision.forward) return;
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
+        // Subscribed path: the SDK sets message.isMention when the bot was
+        // @-mentioned in an already-subscribed thread (docs at
+        // handling-events.mdx). Forward it verbatim.
+        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, message.isMention === true));
       });
 
       // @mention in an unsubscribed thread — always engage; subscribe only
@@ -306,7 +310,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const text = typeof message.text === 'string' ? message.text : '';
         const decision = engageDecision(channelId, 'mention', text);
         if (!decision.forward) return;
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
+        // onNewMention only fires when the SDK confirms the bot was mentioned.
+        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
         if (decision.stickySubscribe) {
           await thread.subscribe();
         }
@@ -332,7 +337,9 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           forward: decision.forward,
         });
         if (!decision.forward) return;
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
+        // A DM is by definition addressed to the bot — treat as a mention
+        // for routing purposes. `mention` / `mention-sticky` wirings fire.
+        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
         if (decision.stickySubscribe) {
           await thread.subscribe();
         }
@@ -357,7 +364,9 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const text = typeof message.text === 'string' ? message.text : '';
         const decision = engageDecision(channelId, 'new-message', text);
         if (!decision.forward) return;
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
+        // SDK dispatch guarantees this is a non-mention non-DM message in an
+        // unsubscribed thread — isMention is definitively false here.
+        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, false));
       });
 
       // Handle button clicks (ask_user_question)

@@ -42,6 +42,15 @@ export interface InboundEvent {
     kind: 'chat' | 'chat-sdk';
     content: string; // JSON blob
     timestamp: string;
+    /**
+     * Platform-confirmed bot-mention signal forwarded from the adapter.
+     * When defined, it's authoritative — use this instead of text-matching
+     * agent_group_name, which breaks on platforms where the mention token
+     * is the bot's platform username (e.g. Telegram). undefined means the
+     * adapter doesn't provide the signal; evaluateEngage falls back to
+     * agent-name regex.
+     */
+    isMention?: boolean;
   };
 }
 
@@ -194,6 +203,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   //    engage later. Drop policy = skip silently.
   const parsed = safeParseContent(event.message.content);
   const messageText = parsed.text ?? '';
+  const isMention = event.message.isMention === true;
 
   let engagedCount = 0;
   let accumulatedCount = 0;
@@ -202,7 +212,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     const agentGroup = getAgentGroup(agent.agent_group_id);
     if (!agentGroup) continue;
 
-    const engages = evaluateEngage(agent, agentGroup, messageText, mg, event.threadId);
+    const engages = evaluateEngage(agent, messageText, isMention, mg, event.threadId);
 
     const accessOk = engages && (!accessGate || accessGate(event, userId, mg, agent.agent_group_id).allowed);
     const scopeOk = engages && (!senderScopeGate || senderScopeGate(event, userId, mg, agent).allowed);
@@ -241,17 +251,26 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
  * Decide whether a given wired agent should engage on this message.
  *
  *   'pattern'        — regex test on text; '.' = always
- *   'mention'        — bot must be @-mentioned by its agent-group name
- *   'mention-sticky' — @mention OR an active per-thread session already
- *                      exists for this (agent, mg, thread). The session
- *                      existence IS our subscription state; once a thread
- *                      has engaged us once, follow-ups arrive with no
- *                      mention and should still fire.
+ *   'mention'        — bot must be mentioned on the platform. Resolved by
+ *                      the adapter (SDK-level) and forwarded as
+ *                      `event.message.isMention`. Agent display name
+ *                      (`agent_group.name`) is irrelevant — users address
+ *                      the bot via its platform username (@botname on
+ *                      Telegram, user-id mention on Slack/Discord), not
+ *                      via the agent's NanoClaw-side display name. If a
+ *                      user wants to disambiguate between multiple agents
+ *                      wired to one chat, use engage_mode='pattern' with
+ *                      the disambiguator as the regex.
+ *   'mention-sticky' — platform mention OR an active per-thread session
+ *                      already exists for this (agent, mg, thread). The
+ *                      session existence IS our subscription state; once
+ *                      a thread has engaged us once, follow-ups arrive
+ *                      with no mention and should still fire.
  */
 function evaluateEngage(
   agent: MessagingGroupAgent,
-  agentGroup: AgentGroup,
   text: string,
+  isMention: boolean,
   mg: MessagingGroup,
   threadId: string | null,
 ): boolean {
@@ -267,9 +286,9 @@ function evaluateEngage(
       }
     }
     case 'mention':
-      return hasMention(text, agentGroup.name);
+      return isMention;
     case 'mention-sticky': {
-      if (hasMention(text, agentGroup.name)) return true;
+      if (isMention) return true;
       // Sticky follow-up: session already exists for this (agent, mg, thread)
       // — the thread was activated before, keep firing.
       if (mg.is_group === 0) return false; // DMs never use mention-sticky sensibly
@@ -279,12 +298,6 @@ function evaluateEngage(
     default:
       return false;
   }
-}
-
-function hasMention(text: string, agentName: string): boolean {
-  if (!agentName) return false;
-  const escaped = agentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`@${escaped}\\b`, 'i').test(text);
 }
 
 async function deliverToAgent(
