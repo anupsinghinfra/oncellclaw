@@ -114,23 +114,51 @@ Start the NanoClaw background service — it relays messages between the user an
 
 `pnpm exec tsx setup/index.ts --step service`
 
-### 6. First CLI agent
+### 6. Wire the CLI agent and verify end-to-end
+
+**Do not narrate this step.** No "creating your first agent…", no "sending a ping…" chatter. The user's experience here is: they finished the last visible step (service), then a single success line appears. Wiring is an implementation detail at this point, not a user-facing milestone.
 
 If step 2's container build is still running in the background, join it here before proceeding — the agent needs the image.
 
-Create the first agent and wire it to the CLI channel. Ask the user "What should I call you?" first — default the offered value to `INFERRED_DISPLAY_NAME` from the probe.
+Use `INFERRED_DISPLAY_NAME` from the probe silently. **Do not ask the user.** The CLI agent at this stage is a scratch agent whose only purpose is to verify the end-to-end pipeline (host → container → agent → back). The user's real name capture happens in `/new-setup-2` when they wire a messaging channel.
 
-`pnpm exec tsx setup/index.ts --step cli-agent -- --display-name "<name>"`
+Run wiring and ping back-to-back, silently:
 
-### 7. First chat
+```
+pnpm exec tsx setup/index.ts --step cli-agent -- --display-name "<INFERRED_DISPLAY_NAME>"
+pnpm run chat ping
+```
 
-Everything's ready — send the first message to the agent.
+First container spin-up takes ~60s. When the agent's reply arrives, emit exactly one line to the user:
 
-`pnpm run chat hi`
+> Your agent is up, running and ready to go!
 
-The agent should reply within ~60s (first container spin-up is slowest). If no reply, tail `logs/nanoclaw.log`.
+If `pnpm run chat ping` times out or errors, tail `logs/nanoclaw.log`, diagnose, and fix — don't surface a half-success.
 
-> **Loose command:** `pnpm run chat hi`. Justification: this is the command the user will keep using after setup. Hiding it behind a `--step` would force them to memorize a second way to do the same thing.
+> **Loose command:** `pnpm run chat ping`. Justification: this is the same command the user will keep using after setup, so verification and the real channel are one and the same.
+
+### 7. Chat now, or keep setting up?
+
+Ask the user via `AskUserQuestion` which they'd like to do next:
+
+1. **Keep chatting with the agent via CLI** — happy with the CLI channel for now.
+2. **Continue setup** — name the agent, wire a messaging channel, add quality-of-life extras.
+
+**If they pick "keep chatting":** print both options below, then stop. The user is chatting with the agent now, not with you — no further output from you.
+
+**Option 1 — from inside this Claude Code session.** Type your message with a leading `!`, which runs it as a bash command in this shell:
+
+```
+!pnpm run chat your message here
+```
+
+**Option 2 — from a separate terminal.** Open a new terminal, `cd` into your nanoclaw checkout, then:
+
+```
+pnpm run chat your message here
+```
+
+**If they pick "continue setup":** hand off directly to `/new-setup-2` via the Skill tool. That follow-on flow is structured like this one (linear, skippable steps) and covers naming, messaging-channel wiring, and QoL. Invoke it immediately — do not offer a menu of individual skills.
 
 ## If anything fails
 
