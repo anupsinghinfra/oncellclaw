@@ -16,11 +16,25 @@
  * access gate is not registered and core defaults to allow-all.
  */
 import { recordDroppedMessage } from '../../db/dropped-messages.js';
-import { setAccessGate, setSenderResolver, type AccessGateResult, type InboundEvent } from '../../router.js';
+import {
+  routeInbound,
+  setAccessGate,
+  setSenderResolver,
+  setSenderScopeGate,
+  type AccessGateResult,
+  type InboundEvent,
+} from '../../router.js';
+import { registerResponseHandler, type ResponsePayload } from '../../response-registry.js';
 import { log } from '../../log.js';
-import type { MessagingGroup } from '../../types.js';
+import type { MessagingGroup, MessagingGroupAgent } from '../../types.js';
 import { canAccessAgentGroup } from './access.js';
+import { addMember } from './db/agent-group-members.js';
+import {
+  deletePendingSenderApproval,
+  getPendingSenderApproval,
+} from './db/pending-sender-approvals.js';
 import { getUser, upsertUser } from './db/users.js';
+import { requestSenderApproval } from './sender-approval.js';
 
 function extractAndUpsertUser(event: InboundEvent): string | null {
   let content: Record<string, unknown>;
@@ -76,11 +90,12 @@ function handleUnknownSender(
   event: InboundEvent,
 ): void {
   const parsed = safeParseContent(event.message.content);
+  const senderName = parsed.sender ?? null;
   const dropRecord = {
     channel_type: event.channelType,
     platform_id: event.platformId,
     user_id: userId,
-    sender_name: parsed.sender ?? null,
+    sender_name: senderName,
     reason: `unknown_sender_${mg.unknown_sender_policy}`,
     messaging_group_id: mg.id,
     agent_group_id: agentGroupId,
@@ -98,13 +113,27 @@ function handleUnknownSender(
   }
 
   if (mg.unknown_sender_policy === 'request_approval') {
-    log.info('MESSAGE DROPPED — unknown sender (approval flow TODO)', {
+    log.info('MESSAGE DROPPED — unknown sender (approval requested)', {
       messagingGroupId: mg.id,
       agentGroupId,
       userId,
       accessReason,
     });
     recordDroppedMessage(dropRecord);
+    // Fire-and-forget; pick-approver + delivery + row-insert are all async.
+    // If it fails it logs internally — the user's message still stays dropped
+    // either way. Requires a resolved userId (senderResolver populates users
+    // row before the gate fires); if we got here without one, there's nothing
+    // to identify for approval and we just stay in the "silent strict" branch.
+    if (userId) {
+      requestSenderApproval({
+        messagingGroupId: mg.id,
+        agentGroupId,
+        senderIdentity: userId,
+        senderName,
+        event,
+      }).catch((err) => log.error('Sender-approval flow threw', { err }));
+    }
     return;
   }
 
@@ -132,3 +161,81 @@ setAccessGate((event, userId, mg, agentGroupId): AccessGateResult => {
   handleUnknownSender(mg, userId, agentGroupId, decision.reason, event);
   return { allowed: false, reason: decision.reason };
 });
+
+/**
+ * Per-wiring sender-scope enforcement. Stricter than the messaging-group
+ * `unknown_sender_policy` — a wiring can require `sender_scope='known'`
+ * (explicit owner / admin / member) even on a 'public' messaging group.
+ *
+ * 'all' is a no-op; any sender passes. 'known' requires a userId that
+ * canAccessAgentGroup accepts (owner, admin, or group member).
+ */
+setSenderScopeGate(
+  (_event: InboundEvent, userId: string | null, _mg: MessagingGroup, agent: MessagingGroupAgent): AccessGateResult => {
+    if (agent.sender_scope === 'all') return { allowed: true };
+    if (!userId) return { allowed: false, reason: 'unknown_user_scope' };
+    const decision = canAccessAgentGroup(userId, agent.agent_group_id);
+    if (decision.allowed) return { allowed: true };
+    return { allowed: false, reason: `sender_scope_${decision.reason}` };
+  },
+);
+
+/**
+ * Response handler for the unknown-sender approval card.
+ *
+ * Claim rule: questionId matches a row in pending_sender_approvals. If no
+ * such row, return false so the next handler (approvals module, OneCLI,
+ * interactive) gets a shot.
+ *
+ * Approve: add the sender to agent_group_members + re-invoke routeInbound
+ * with the stored event. The second routing attempt clears the gate because
+ * the user is now a member.
+ *
+ * Deny: delete the row (no "deny list" — a future message re-triggers a
+ * fresh card per ACTION-ITEMS item 5 "no denial persistence").
+ */
+async function handleSenderApprovalResponse(payload: ResponsePayload): Promise<boolean> {
+  const row = getPendingSenderApproval(payload.questionId);
+  if (!row) return false;
+
+  const approverId = payload.userId ?? row.approver_user_id;
+  const approved = payload.value === 'approve';
+
+  if (approved) {
+    addMember({
+      user_id: row.sender_identity,
+      agent_group_id: row.agent_group_id,
+      added_by: approverId,
+      added_at: new Date().toISOString(),
+    });
+    log.info('Unknown sender approved — member added', {
+      approvalId: row.id,
+      senderIdentity: row.sender_identity,
+      agentGroupId: row.agent_group_id,
+      approverId,
+    });
+
+    // Clear the pending row BEFORE re-routing so the gate check on the
+    // second attempt doesn't see the in-flight row and short-circuit.
+    deletePendingSenderApproval(row.id);
+
+    try {
+      const event = JSON.parse(row.original_message) as InboundEvent;
+      await routeInbound(event);
+    } catch (err) {
+      log.error('Failed to replay message after sender approval', { approvalId: row.id, err });
+    }
+    return true;
+  }
+
+  log.info('Unknown sender denied', {
+    approvalId: row.id,
+    senderIdentity: row.sender_identity,
+    agentGroupId: row.agent_group_id,
+    approverId,
+  });
+  deletePendingSenderApproval(row.id);
+  return true;
+}
+
+registerResponseHandler(handleSenderApprovalResponse);

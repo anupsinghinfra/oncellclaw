@@ -178,12 +178,7 @@ function ensureCliMessagingGroup(now: string): MessagingGroup {
   return cliMg;
 }
 
-function wireIfMissing(
-  mg: MessagingGroup,
-  ag: AgentGroup,
-  now: string,
-  label: string,
-): void {
+function wireIfMissing(mg: MessagingGroup, ag: AgentGroup, now: string, label: string): void {
   const existing = getMessagingGroupAgentByPair(mg.id, ag.id);
   if (existing) {
     console.log(`Wiring already exists: ${existing.id} (${label})`);
@@ -193,8 +188,13 @@ function wireIfMissing(
     id: generateId('mga'),
     messaging_group_id: mg.id,
     agent_group_id: ag.id,
-    trigger_rules: null,
-    response_scope: 'all',
+    // DM / CLI (is_group=0) default to "respond to everything" via a '.' regex.
+    // Group chats default to mention-only; admins can upgrade to mention-sticky
+    // via /manage-channels once the agent is in use.
+    engage_mode: mg.is_group === 0 ? 'pattern' : 'mention',
+    engage_pattern: mg.is_group === 0 ? '.' : null,
+    sender_scope: 'all',
+    ignored_message_policy: 'drop',
     session_mode: 'shared',
     priority: 0,
     created_at: now,
