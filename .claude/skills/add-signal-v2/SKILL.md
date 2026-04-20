@@ -297,6 +297,11 @@ ls data/models/ggml-*.bin 2>/dev/null || echo "no model — download one"
   as shown above.
 - **config-lock**: signal-sdk holds an exclusive lock on `data/signal/` while
   nanoclaw is running. Stop the service before running any `signal-cli` commands.
+- **attachment storage**: signal-sdk launches signal-cli **without** a `--config`
+  flag, so signal-cli stores attachments at the XDG default
+  (`~/.local/share/signal-cli/attachments/`), not under `data/signal/`. The
+  adapter checks both locations. Verify with:
+  `ps aux | grep signal-cli` — if there is no `-c` argument, XDG default is in use.
 
 ---
 
@@ -326,6 +331,15 @@ GroupV2. The adapter must extract the group ID from
 `envelope?.dataMessage?.groupV2?.id` (not just `groupInfo?.groupId`, which is
 GroupV1/legacy). Check `src/channels/signal.ts` and confirm the groupId
 extraction falls through to `groupV2.id`.
+
+**Voice messages / attachments silently skipped, no transcript** — signal-sdk
+launches signal-cli without a `--config` flag, so attachments land at the XDG
+default (`~/.local/share/signal-cli/attachments/`) rather than under
+`data/signal/`. Confirm with `ps aux | grep signal-cli` — if there is no `-c`
+argument in the process line, the XDG default is in use. The adapter falls back
+to that location automatically. If you still see no "Signal attachment saved"
+log lines, add a debug log around the `if (!storedPath) continue` guard in
+`src/channels/signal.ts` to inspect `att.storedFilename` and `att.id`.
 
 **Java not found** — install Java 17+ (see Install step 1).
 
