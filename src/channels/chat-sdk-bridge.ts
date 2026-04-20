@@ -85,21 +85,28 @@ export interface ChatSdkBridgeConfig {
 export type EngageSource = 'subscribed' | 'mention' | 'dm' | 'new-message';
 
 /**
- * Should a message from (channelId, source, text) engage any of the wired
- * agents on this conversation?
+ * Should a message from (channelId, source, text) be forwarded to the host,
+ * and if so, should the bridge subscribe the thread?
  *
  * Exported for testability — see `chat-sdk-bridge.test.ts`.
  *
- * We take the union across wired agents: if any wiring would engage, the
- * message is forwarded. Per-agent filtering after that happens in the host
- * router (see `src/router.ts` pickAgents).
+ * We take the union across wired agents: if any wiring would engage OR any
+ * wiring has `ignoredMessagePolicy='accumulate'`, the message is forwarded.
+ * The host router then does the per-wiring decision in `deliverToAgent` —
+ * engaging agents get `trigger=1` (wake), accumulating agents get
+ * `trigger=0` (store as context, don't wake), drop-policy agents are
+ * skipped (see `src/router.ts` routeInbound fan-out).
+ *
+ * `stickySubscribe` is only set when an actual engage happens (not just
+ * accumulate) — subscribing a thread we'd only silently accumulate on would
+ * misrepresent the bot's presence to other users.
  */
 export function shouldEngage(
   conversations: Map<string, ConversationConfig[]>,
   channelId: string,
   source: EngageSource,
   text: string,
-): { engage: boolean; stickySubscribe: boolean } {
+): { forward: boolean; stickySubscribe: boolean } {
   const configs = conversations.get(channelId);
 
   // Unknown conversation — behavior diverges by source:
@@ -112,28 +119,30 @@ export function shouldEngage(
   //     the bot is merely *present* in but not wired to. Forwarding
   //     everything would flood the host.
   if (!configs || configs.length === 0) {
-    return { engage: source !== 'new-message', stickySubscribe: false };
+    return { forward: source !== 'new-message', stickySubscribe: false };
   }
 
   let engage = false;
+  let accumulate = false;
   let stickySubscribe = false;
 
   for (const cfg of configs) {
+    let cfgEngages = false;
     switch (cfg.engageMode) {
       case 'mention':
-        if (source === 'mention' || source === 'dm') engage = true;
+        if (source === 'mention' || source === 'dm') cfgEngages = true;
         break;
       case 'mention-sticky':
         if (source === 'mention' || source === 'dm') {
-          engage = true;
+          cfgEngages = true;
           stickySubscribe = true;
         } else if (source === 'subscribed') {
           // Thread was already subscribed on a prior mention — treat as
           // engage-all so follow-ups in the thread reach the agent.
-          engage = true;
+          cfgEngages = true;
         }
-        // source='new-message' → do not engage. mention-sticky requires an
-        // explicit mention to start the conversation.
+        // source='new-message' → does not engage (requires explicit mention
+        // to start). Accumulate policy is evaluated below if set.
         break;
       case 'pattern': {
         // Pattern evaluates on any source that delivers a plain message —
@@ -143,19 +152,27 @@ export function shouldEngage(
         // only fire on mentions whose text contains 'foo'.
         const pattern = cfg.engagePattern ?? '.';
         try {
-          if (pattern === '.' || new RegExp(pattern).test(text)) engage = true;
+          if (pattern === '.' || new RegExp(pattern).test(text)) cfgEngages = true;
         } catch {
           // Invalid regex → fail open so the admin can see something is
           // happening and fix the pattern.
-          engage = true;
+          cfgEngages = true;
         }
         break;
       }
     }
-    if (engage && stickySubscribe) break;
+
+    if (cfgEngages) {
+      engage = true;
+    } else if (cfg.ignoredMessagePolicy === 'accumulate') {
+      // Wiring doesn't engage on this message but wants it captured as
+      // context for its session — forward so the router can write it with
+      // trigger=0.
+      accumulate = true;
+    }
   }
 
-  return { engage, stickySubscribe };
+  return { forward: engage || accumulate, stickySubscribe };
 }
 
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
@@ -189,7 +206,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     channelId: string,
     source: EngageSource,
     text: string,
-  ): { engage: boolean; stickySubscribe: boolean } {
+  ): { forward: boolean; stickySubscribe: boolean } {
     return shouldEngage(conversations, channelId, source, text);
   }
 
@@ -278,7 +295,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const channelId = adapter.channelIdFromThreadId(thread.id);
         const text = typeof message.text === 'string' ? message.text : '';
         const decision = engageDecision(channelId, 'subscribed', text);
-        if (!decision.engage) return;
+        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
       });
 
@@ -288,7 +305,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const channelId = adapter.channelIdFromThreadId(thread.id);
         const text = typeof message.text === 'string' ? message.text : '';
         const decision = engageDecision(channelId, 'mention', text);
-        if (!decision.engage) return;
+        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
         if (decision.stickySubscribe) {
           await thread.subscribe();
@@ -312,9 +329,9 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           channelId,
           sender: (message.author as any)?.fullName ?? (message.author as any)?.userId ?? 'unknown',
           threadId: thread.id,
-          engage: decision.engage,
+          forward: decision.forward,
         });
-        if (!decision.engage) return;
+        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
         if (decision.stickySubscribe) {
           await thread.subscribe();
@@ -339,7 +356,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const channelId = adapter.channelIdFromThreadId(thread.id);
         const text = typeof message.text === 'string' ? message.text : '';
         const decision = engageDecision(channelId, 'new-message', text);
-        if (!decision.engage) return;
+        if (!decision.forward) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
       });
 

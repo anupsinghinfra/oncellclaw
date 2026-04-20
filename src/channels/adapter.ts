@@ -22,6 +22,20 @@ export interface ConversationConfig {
   engageMode: 'pattern' | 'mention' | 'mention-sticky';
   /** Regex source when engageMode='pattern'. '.' is the "always" sentinel. */
   engagePattern?: string | null;
+  /**
+   * What to do with messages this wiring doesn't engage on.
+   *
+   *   'drop'       — discard silently
+   *   'accumulate' — still forward to the host so the router can store the
+   *                  message in this agent's session with trigger=0. It
+   *                  rides along as context when the agent next wakes, but
+   *                  doesn't wake it on its own.
+   *
+   * The bridge reads this to decide whether to forward a non-engaging
+   * message at all — if any wiring on a conversation has 'accumulate', the
+   * bridge forwards and lets the router apply the per-wiring decision.
+   */
+  ignoredMessagePolicy?: 'drop' | 'accumulate';
   sessionMode: 'shared' | 'per-thread' | 'agent-shared';
 }
 
