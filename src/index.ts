@@ -163,6 +163,7 @@ function buildConversationConfigs(channelType: string): ConversationConfig[] {
         agentGroupId: agent.agent_group_id,
         engageMode: agent.engage_mode,
         engagePattern: agent.engage_pattern,
+        ignoredMessagePolicy: agent.ignored_message_policy,
         sessionMode: agent.session_mode,
       });
     }
