@@ -19,17 +19,18 @@ CREATE TABLE agent_groups (
 
 -- Platform groups/channels. unknown_sender_policy governs what happens
 -- when a sender we've never seen before posts in this chat.
+-- The column DEFAULT is "strict" (inherited from migration 001), but it
+-- only matters if something inserts without specifying the field, which no
+-- current callsite does. Router auto-create hardcodes "request_approval"
+-- (see src/router.ts:151); setup scripts pick per context.
 CREATE TABLE messaging_groups (
   id                    TEXT PRIMARY KEY,
   channel_type          TEXT NOT NULL,
   platform_id           TEXT NOT NULL,
   name                  TEXT,
   is_group              INTEGER DEFAULT 0,
-  unknown_sender_policy TEXT NOT NULL DEFAULT 'request_approval',
+  unknown_sender_policy TEXT NOT NULL DEFAULT 'strict',
                         -- 'strict' | 'request_approval' | 'public'
-                        -- Default is request_approval so silent drops don't
-                        -- mystery-break users who wired their DM during
-                        -- setup and haven't explicitly marked it public.
   created_at            TEXT NOT NULL,
   UNIQUE(channel_type, platform_id)
 );

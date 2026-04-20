@@ -4,10 +4,15 @@
  * in-flight entry in this table dedups concurrent attempts from the same
  * sender; the row is cleared on approve / deny.
  *
- * Also flips the `messaging_groups.unknown_sender_policy` default from 'strict'
- * to 'request_approval' so fresh wirings don't silently swallow messages from
- * users the admin hasn't added yet. Existing rows are left as-is (silent
- * upgrade would change established behavior without the admin asking for it).
+ * Previously this migration also rebuilt `messaging_groups` to flip the
+ * column DEFAULT from `'strict'` to `'request_approval'`. Removed: the
+ * rebuild failed SQLite's foreign-key integrity check at DROP time on live
+ * DBs with existing FK references (sessions, user_dms, etc.), and `PRAGMA
+ * foreign_keys` / `defer_foreign_keys` can't be toggled inside the
+ * implicit migration transaction. The default-flip was cosmetic anyway —
+ * every `createMessagingGroup` callsite passes `unknown_sender_policy`
+ * explicitly, and the router's auto-create path was updated to hardcode
+ * `'request_approval'` directly (see src/router.ts:123).
  */
 import type Database from 'better-sqlite3';
 import type { Migration } from './index.js';
@@ -30,28 +35,6 @@ export const migration011: Migration = {
       );
       CREATE INDEX IF NOT EXISTS idx_pending_sender_approvals_mg
         ON pending_sender_approvals(messaging_group_id);
-    `);
-
-    // Default-flip: fresh messaging_groups default to request_approval instead
-    // of silently dropping. SQLite doesn't support modifying column DEFAULTs
-    // in place, so we rebuild the table via the classic rename-copy-drop
-    // pattern. Existing rows keep their current unknown_sender_policy value.
-    db.exec(`
-      CREATE TABLE messaging_groups_new (
-        id                    TEXT PRIMARY KEY,
-        channel_type          TEXT NOT NULL,
-        platform_id           TEXT NOT NULL,
-        name                  TEXT,
-        is_group              INTEGER DEFAULT 0,
-        unknown_sender_policy TEXT NOT NULL DEFAULT 'request_approval',
-        created_at            TEXT NOT NULL,
-        UNIQUE(channel_type, platform_id)
-      );
-      INSERT INTO messaging_groups_new
-        SELECT id, channel_type, platform_id, name, is_group, unknown_sender_policy, created_at
-          FROM messaging_groups;
-      DROP TABLE messaging_groups;
-      ALTER TABLE messaging_groups_new RENAME TO messaging_groups;
     `);
   },
 };
