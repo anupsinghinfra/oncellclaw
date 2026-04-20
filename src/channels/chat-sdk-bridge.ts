@@ -237,7 +237,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // plain 'mention' wiring doesn't keep firing after a one-off mention.
       chat.onSubscribedMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const text = typeof message.content === 'string' ? message.content : '';
+        const text = typeof message.text === 'string' ? message.text : '';
         const decision = shouldEngage(channelId, 'subscribed', text);
         if (!decision.engage) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
@@ -247,7 +247,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // if the wiring is 'mention-sticky'.
       chat.onNewMention(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const text = typeof message.content === 'string' ? message.content : '';
+        const text = typeof message.text === 'string' ? message.text : '';
         const decision = shouldEngage(channelId, 'mention', text);
         if (!decision.engage) return;
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message));
@@ -266,7 +266,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // escalation).
       chat.onDirectMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        const text = typeof message.content === 'string' ? message.content : '';
+        const text = typeof message.text === 'string' ? message.text : '';
         const decision = shouldEngage(channelId, 'dm', text);
         log.info('Inbound DM received', {
           adapter: adapter.name,
