@@ -37,20 +37,6 @@ function onecliVersion(): string | null {
   }
 }
 
-function getApiHost(): string | null {
-  try {
-    const out = execFileSync('onecli', ['config', 'get', 'api-host'], {
-      encoding: 'utf-8',
-      env: childEnv(),
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const parsed = JSON.parse(out) as { value?: unknown };
-    return typeof parsed.value === 'string' && parsed.value ? parsed.value : null;
-  } catch {
-    return null;
-  }
-}
-
 function extractUrlFromOutput(output: string): string | null {
   const match = output.match(/https?:\/\/[\w.\-]+(?::\d+)?/);
   return match ? match[0] : null;
@@ -123,58 +109,47 @@ async function pollHealth(url: string, timeoutMs: number): Promise<boolean> {
 export async function run(_args: string[]): Promise<void> {
   ensureShellProfilePath();
 
-  let installOutput = '';
-  let present = !!onecliVersion();
-  if (!present) {
-    log.info('Installing OneCLI gateway and CLI');
-    const res = installOnecli();
-    installOutput = res.stdout;
-    if (!res.ok) {
-      emitStatus('ONECLI', {
-        INSTALLED: false,
-        STATUS: 'failed',
-        ERROR: 'install_failed',
-        LOG: 'logs/setup.log',
-      });
-      process.exit(1);
-    }
-    present = !!onecliVersion();
-    if (!present) {
-      emitStatus('ONECLI', {
-        INSTALLED: false,
-        STATUS: 'failed',
-        ERROR: 'onecli_not_on_path_after_install',
-        HINT: 'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"` and retry.',
-        LOG: 'logs/setup.log',
-      });
-      process.exit(1);
-    }
+  log.info('Installing OneCLI gateway and CLI');
+  const res = installOnecli();
+  if (!res.ok) {
+    emitStatus('ONECLI', {
+      INSTALLED: false,
+      STATUS: 'failed',
+      ERROR: 'install_failed',
+      LOG: 'logs/setup.log',
+    });
+    process.exit(1);
+  }
+  if (!onecliVersion()) {
+    emitStatus('ONECLI', {
+      INSTALLED: false,
+      STATUS: 'failed',
+      ERROR: 'onecli_not_on_path_after_install',
+      HINT: 'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"` and retry.',
+      LOG: 'logs/setup.log',
+    });
+    process.exit(1);
   }
 
-  let url = getApiHost();
-  if (!url && installOutput) {
-    url = extractUrlFromOutput(installOutput);
-    if (url) {
-      try {
-        execFileSync('onecli', ['config', 'set', 'api-host', url], {
-          stdio: 'ignore',
-          env: childEnv(),
-        });
-      } catch (err) {
-        log.warn('onecli config set api-host failed', { err });
-      }
-    }
-  }
-
+  const url = extractUrlFromOutput(res.stdout);
   if (!url) {
     emitStatus('ONECLI', {
       INSTALLED: true,
       STATUS: 'failed',
       ERROR: 'could_not_resolve_api_host',
-      HINT: 'Run `onecli config get api-host` to inspect the gateway URL.',
+      HINT: 'Inspect logs/setup.log for the install output.',
       LOG: 'logs/setup.log',
     });
     process.exit(1);
+  }
+
+  try {
+    execFileSync('onecli', ['config', 'set', 'api-host', url], {
+      stdio: 'ignore',
+      env: childEnv(),
+    });
+  } catch (err) {
+    log.warn('onecli config set api-host failed', { err });
   }
 
   writeEnvOnecliUrl(url);
