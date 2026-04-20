@@ -97,7 +97,17 @@ When the user picks one:
 
 If the user skipped, move on to step 5.
 
-### 5. Quality of life
+### 5. Host directory access
+
+By default, agent containers can only touch their own workspace. If the user wants the agent to read or write files in specific host directories, those paths need to go on the mount allowlist.
+
+Plain-prose ask:
+
+> Want your agent to be able to read or write files in any host directories (e.g. a code project, `~/Documents`)? Name the paths and I'll add them — or skip to keep the default isolated workspace.
+
+If the user names paths, invoke `/manage-mounts` via the Skill tool to add them. If they skip, move on.
+
+### 6. Quality of life
 
 Optional polish. Print the list; the user may pick zero, one, or several — invoke each chosen skill in sequence:
 
@@ -113,7 +123,7 @@ If the probe reports `PLATFORM=darwin`, also offer:
 
 Do **not** list `/add-macos-statusbar` on Linux. If the user skips everything, just move on.
 
-### 6. Done
+### 7. Done
 
 Short wrap-up:
 
