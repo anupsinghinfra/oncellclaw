@@ -64,8 +64,6 @@ function createMockAdapter(
     },
 
     async setTyping() {},
-
-    updateConversations() {},
   };
 }
 

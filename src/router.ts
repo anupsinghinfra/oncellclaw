@@ -20,7 +20,11 @@
 import { getChannelAdapter } from './channels/channel-registry.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { recordDroppedMessage } from './db/dropped-messages.js';
-import { getMessagingGroupByPlatform, createMessagingGroup, getMessagingGroupAgents } from './db/messaging-groups.js';
+import {
+  createMessagingGroup,
+  getMessagingGroupAgents,
+  getMessagingGroupWithAgentCount,
+} from './db/messaging-groups.js';
 import { findSessionForAgent } from './db/sessions.js';
 import { startTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
@@ -123,6 +127,27 @@ export function setSenderScopeGate(fn: SenderScopeGateFn): void {
   senderScopeGate = fn;
 }
 
+/**
+ * Channel-registration hook. Runs when the router sees a mention/DM on a
+ * messaging group that has no wirings AND hasn't been denied. The hook is
+ * expected to escalate to an owner (card, etc.) and arrange for future
+ * replay via routeInbound after approval. Fire-and-forget from the
+ * router's perspective.
+ *
+ * Registered by the permissions module. Without the module the router
+ * silently records the drop with reason='no_agent_wired' and moves on.
+ */
+export type ChannelRequestGateFn = (mg: MessagingGroup, event: InboundEvent) => Promise<void>;
+
+let channelRequestGate: ChannelRequestGateFn | null = null;
+
+export function setChannelRequestGate(fn: ChannelRequestGateFn): void {
+  if (channelRequestGate) {
+    log.warn('Channel-request gate overwritten');
+  }
+  channelRequestGate = fn;
+}
+
 function safeParseContent(raw: string): { text?: string; sender?: string; senderId?: string } {
   try {
     return JSON.parse(raw);
@@ -143,10 +168,21 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     event = { ...event, threadId: null };
   }
 
-  // 1. Resolve messaging group
-  let mg = getMessagingGroupByPlatform(event.channelType, event.platformId);
+  const isMention = event.message.isMention === true;
 
-  if (!mg) {
+  // 1. Combined lookup: messaging_group row + count of wired agents in a
+  //    single query. Cheap short-circuit for the common "unwired channel"
+  //    case — one DB read and we're out, no auto-create, no sender
+  //    resolution, no log spam.
+  const found = getMessagingGroupWithAgentCount(event.channelType, event.platformId);
+
+  let mg: MessagingGroup;
+  let agentCount: number;
+  if (!found) {
+    // No messaging_groups row. Auto-create only when the message warrants
+    // attention (the bot was addressed — @mention or DM). Plain chatter in
+    // channels we merely sit in stays silent — no row, no DB writes.
+    if (!isMention) return;
     const mgId = `mg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     mg = {
       id: mgId,
@@ -154,10 +190,8 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       platform_id: event.platformId,
       name: null,
       is_group: 0,
-      // Let the schema default (currently 'request_approval') apply rather
-      // than hardcoding 'strict' — the schema is the source of truth for
-      // the default policy. See migration 011.
       unknown_sender_policy: 'request_approval',
+      denied_at: null,
       created_at: new Date().toISOString(),
     };
     createMessagingGroup(mg);
@@ -166,6 +200,51 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       channelType: event.channelType,
       platformId: event.platformId,
     });
+    agentCount = 0;
+  } else {
+    mg = found.mg;
+    agentCount = found.agentCount;
+  }
+
+  // 1b. No wirings — either silent drop (plain chatter / denied channel) or
+  //     escalate to owner for channel-registration approval.
+  if (agentCount === 0) {
+    if (!isMention) return;
+    if (mg.denied_at) {
+      log.debug('Message dropped — channel was denied by owner', {
+        messagingGroupId: mg.id,
+        deniedAt: mg.denied_at,
+      });
+      return;
+    }
+
+    const parsed = safeParseContent(event.message.content);
+    recordDroppedMessage({
+      channel_type: event.channelType,
+      platform_id: event.platformId,
+      user_id: null,
+      sender_name: parsed.sender ?? null,
+      reason: 'no_agent_wired',
+      messaging_group_id: mg.id,
+      agent_group_id: null,
+    });
+
+    if (channelRequestGate) {
+      // Fire-and-forget escalation. The gate is expected to build a card,
+      // persist pending_channel_approvals, and replay the event via
+      // routeInbound after approval. Errors are logged internally — the
+      // user's message still stays dropped here either way.
+      void channelRequestGate(mg, event).catch((err) =>
+        log.error('Channel-request gate threw', { messagingGroupId: mg.id, err }),
+      );
+    } else {
+      log.warn('MESSAGE DROPPED — no agent groups wired and no channel-request gate registered', {
+        messagingGroupId: mg.id,
+        channelType: event.channelType,
+        platformId: event.platformId,
+      });
+    }
+    return;
   }
 
   // 2. Sender resolution (permissions module upserts the users row as a
@@ -173,27 +252,9 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   //    Without the module, userId is null — downstream tolerates it.
   const userId: string | null = senderResolver ? senderResolver(event) : null;
 
-  // 3. Resolve agent groups wired to this messaging group. Structural
-  //    drops record to dropped_messages for audit.
+  // 3. Fetch wired agents in full (we already know the count is > 0; now
+  //    we need their actual rows for fan-out).
   const agents = getMessagingGroupAgents(mg.id);
-  if (agents.length === 0) {
-    log.warn('MESSAGE DROPPED — no agent groups wired to this channel. Run setup register step to configure.', {
-      messagingGroupId: mg.id,
-      channelType: event.channelType,
-      platformId: event.platformId,
-    });
-    const parsed = safeParseContent(event.message.content);
-    recordDroppedMessage({
-      channel_type: event.channelType,
-      platform_id: event.platformId,
-      user_id: userId,
-      sender_name: parsed.sender ?? null,
-      reason: 'no_agent_wired',
-      messaging_group_id: mg.id,
-      agent_group_id: null,
-    });
-    return;
-  }
 
   // 4. Fan-out: evaluate each wired agent independently against engage_mode,
   //    sender_scope, and access gate. An agent that engages gets its own
@@ -201,12 +262,18 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   //    ignored_message_policy='accumulate' still gets the message stored in
   //    its session (trigger=0) so the context is available when it does
   //    engage later. Drop policy = skip silently.
+  //
+  //    Subscribe (for mention-sticky wirings on threaded platforms) fires
+  //    once per message from this loop — the first engaging mention-sticky
+  //    wiring triggers adapter.subscribe(...); subsequent wirings don't
+  //    re-subscribe (chat.subscribe is idempotent anyway, but the flag
+  //    avoids the extra await).
   const parsed = safeParseContent(event.message.content);
   const messageText = parsed.text ?? '';
-  const isMention = event.message.isMention === true;
 
   let engagedCount = 0;
   let accumulatedCount = 0;
+  let subscribed = false;
 
   for (const agent of agents) {
     const agentGroup = getAgentGroup(agent.agent_group_id);
@@ -220,6 +287,27 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     if (engages && accessOk && scopeOk) {
       await deliverToAgent(agent, agentGroup, mg, event, userId, adapter?.supportsThreads === true, true);
       engagedCount++;
+
+      // Mention-sticky: ask the adapter to subscribe the thread so the
+      // platform's subscribed-message path carries follow-ups without
+      // requiring another @mention. Threaded-adapter only; DMs and
+      // non-threaded platforms skip.
+      if (
+        !subscribed &&
+        agent.engage_mode === 'mention-sticky' &&
+        adapter?.supportsThreads &&
+        adapter.subscribe &&
+        event.threadId !== null &&
+        mg.is_group !== 0
+      ) {
+        subscribed = true;
+        // Fire-and-forget — subscribe is platform-side bookkeeping and
+        // shouldn't block message routing. Errors are logged inside the
+        // adapter (or by the promise rejection handler below).
+        void adapter.subscribe(event.platformId, event.threadId).catch((err) => {
+          log.warn('adapter.subscribe failed', { channelType: event.channelType, threadId: event.threadId, err });
+        });
+      }
     } else if (agent.ignored_message_policy === 'accumulate') {
       await deliverToAgent(agent, agentGroup, mg, event, userId, adapter?.supportsThreads === true, false);
       accumulatedCount++;

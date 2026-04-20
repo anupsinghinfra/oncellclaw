@@ -244,26 +244,42 @@ describe('router', () => {
     expect(wakeContainer).toHaveBeenCalled();
   });
 
-  it('should auto-create messaging group for unknown platform', async () => {
+  it('auto-creates messaging group only when the bot is addressed (mention/DM)', async () => {
+    // The router's no-mg branch is escalation-gated: plain chatter on an
+    // unknown channel stays silent (no DB writes) so a bot that sits in
+    // many unwired channels doesn't bloat messaging_groups. Only explicit
+    // mentions and DMs trigger auto-create.
     const { routeInbound } = await import('./router.js');
+    const { getMessagingGroupByPlatform } = await import('./db/messaging-groups.js');
 
-    const event: InboundEvent = {
+    // Plain message on unknown channel — should NOT auto-create.
+    await routeInbound({
       channelType: 'slack',
-      platformId: 'C-NEW-CHANNEL',
+      platformId: 'C-PLAIN',
       threadId: null,
       message: {
-        id: 'msg-2',
+        id: 'msg-plain',
         kind: 'chat',
         content: JSON.stringify({ sender: 'User', text: 'Hi' }),
         timestamp: now(),
       },
-    };
+    });
+    expect(getMessagingGroupByPlatform('slack', 'C-PLAIN')).toBeUndefined();
 
-    await routeInbound(event);
-
-    const { getMessagingGroupByPlatform } = await import('./db/messaging-groups.js');
-    const mg = getMessagingGroupByPlatform('slack', 'C-NEW-CHANNEL');
-    expect(mg).toBeDefined();
+    // Mention on unknown channel — SHOULD auto-create (next step: channel-registration flow).
+    await routeInbound({
+      channelType: 'slack',
+      platformId: 'C-MENTIONED',
+      threadId: null,
+      message: {
+        id: 'msg-mentioned',
+        kind: 'chat',
+        content: JSON.stringify({ sender: 'User', text: '@bot hi' }),
+        timestamp: now(),
+        isMention: true,
+      },
+    });
+    expect(getMessagingGroupByPlatform('slack', 'C-MENTIONED')).toBeDefined();
   });
 
   it('should route multiple messages to the same session', async () => {
