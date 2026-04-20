@@ -29,10 +29,8 @@ import { log } from '../../log.js';
 import type { MessagingGroup, MessagingGroupAgent } from '../../types.js';
 import { canAccessAgentGroup } from './access.js';
 import { addMember } from './db/agent-group-members.js';
-import {
-  deletePendingSenderApproval,
-  getPendingSenderApproval,
-} from './db/pending-sender-approvals.js';
+import { deletePendingSenderApproval, getPendingSenderApproval } from './db/pending-sender-approvals.js';
+import { hasAdminPrivilege } from './db/user-roles.js';
 import { getUser, upsertUser } from './db/users.js';
 import { requestSenderApproval } from './sender-approval.js';
 
@@ -198,7 +196,23 @@ async function handleSenderApprovalResponse(payload: ResponsePayload): Promise<b
   const row = getPendingSenderApproval(payload.questionId);
   if (!row) return false;
 
-  const approverId = payload.userId ?? row.approver_user_id;
+  // payload.userId is the raw platform userId (e.g. "6037840640"); namespace it
+  // with the channel type so it matches users(id) format. Then verify the
+  // clicker is the designated approver OR has owner/admin privilege over this
+  // agent group — any other click is rejected so random users can't self-admit
+  // via stolen card forwarding.
+  const clickerId = payload.userId ? `${payload.channelType}:${payload.userId}` : null;
+  const isAuthorized =
+    clickerId !== null && (clickerId === row.approver_user_id || hasAdminPrivilege(clickerId, row.agent_group_id));
+  if (!isAuthorized) {
+    log.warn('Unknown-sender approval click rejected — unauthorized clicker', {
+      approvalId: row.id,
+      clickerId,
+      expectedApprover: row.approver_user_id,
+    });
+    return true; // claim the response so it's not unclaimed-logged, but do nothing
+  }
+  const approverId = clickerId;
   const approved = payload.value === 'approve';
 
   if (approved) {

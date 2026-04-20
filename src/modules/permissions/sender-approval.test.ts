@@ -184,9 +184,7 @@ describe('unknown-sender request_approval flow', () => {
 
     expect(deliverMock).toHaveBeenCalledTimes(1);
     const { getDb } = await import('../../db/connection.js');
-    const count = (
-      getDb().prepare('SELECT COUNT(*) AS c FROM pending_sender_approvals').get() as { c: number }
-    ).c;
+    const count = (getDb().prepare('SELECT COUNT(*) AS c FROM pending_sender_approvals').get() as { c: number }).c;
     expect(count).toBe(1);
   });
 
@@ -208,7 +206,10 @@ describe('unknown-sender request_approval flow', () => {
       const claimed = await handler({
         questionId: pending.id,
         value: 'approve',
-        userId: 'telegram:owner',
+        // Chat SDK's onAction surfaces the raw platform userId (e.g. Telegram
+        // chat id). The permissions handler namespaces it with channelType to
+        // match users(id).
+        userId: 'owner',
         channelType: 'telegram',
         platformId: 'dm-owner',
         threadId: null,
@@ -245,7 +246,7 @@ describe('unknown-sender request_approval flow', () => {
       const claimed = await handler({
         questionId: pending.id,
         value: 'reject',
-        userId: 'telegram:owner',
+        userId: 'owner', // raw platform id — handler namespaces with channelType
         channelType: 'telegram',
         platformId: 'dm-owner',
         threadId: null,
@@ -253,13 +254,91 @@ describe('unknown-sender request_approval flow', () => {
       if (claimed) break;
     }
 
-    const count = (
-      getDb().prepare('SELECT COUNT(*) AS c FROM pending_sender_approvals').get() as { c: number }
-    ).c;
+    const count = (getDb().prepare('SELECT COUNT(*) AS c FROM pending_sender_approvals').get() as { c: number }).c;
     expect(count).toBe(0);
     const member = getDb()
       .prepare('SELECT 1 AS x FROM agent_group_members WHERE user_id = ? AND agent_group_id = ?')
       .get('tg:stranger', 'ag-1');
     expect(member).toBeUndefined();
+  });
+
+  it('rejects clicks from an unauthorized user (prevents self-admit via forwarded card)', async () => {
+    // Stranger triggers the approval flow; card goes to the owner.
+    const { routeInbound } = await import('../../router.js');
+    const { getResponseHandlers } = await import('../../response-registry.js');
+
+    await routeInbound(stranger('can I play'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const { getDb } = await import('../../db/connection.js');
+    const pending = getDb().prepare('SELECT id FROM pending_sender_approvals').get() as { id: string };
+    expect(pending).toBeDefined();
+
+    // A random user (not the stranger, not the owner, not an admin) tries to
+    // click the approval — e.g. they got the card forwarded. Should be
+    // rejected without admitting them.
+    for (const handler of getResponseHandlers()) {
+      const claimed = await handler({
+        questionId: pending.id,
+        value: 'approve',
+        userId: 'random-bystander', // not owner, not admin
+        channelType: 'telegram',
+        platformId: 'dm-random',
+        threadId: null,
+      });
+      if (claimed) break;
+    }
+
+    // No member added for the stranger.
+    const member = getDb()
+      .prepare('SELECT 1 AS x FROM agent_group_members WHERE user_id = ? AND agent_group_id = ?')
+      .get('tg:stranger', 'ag-1');
+    expect(member).toBeUndefined();
+
+    // Pending row is still there — a legitimate approver can still act on it.
+    const stillPending = (getDb().prepare('SELECT COUNT(*) AS c FROM pending_sender_approvals').get() as { c: number })
+      .c;
+    expect(stillPending).toBe(1);
+  });
+
+  it('accepts a click from a global admin even if they are not the designated approver', async () => {
+    // Pre-seed a separate admin user so we can click as them.
+    upsertUser({ id: 'telegram:admin-bob', kind: 'telegram', display_name: 'Bob', created_at: now() });
+    grantRole({
+      user_id: 'telegram:admin-bob',
+      role: 'admin',
+      agent_group_id: null,
+      granted_by: 'telegram:owner',
+      granted_at: now(),
+    });
+
+    const { routeInbound } = await import('../../router.js');
+    const { getResponseHandlers } = await import('../../response-registry.js');
+
+    await routeInbound(stranger('knock knock'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const { getDb } = await import('../../db/connection.js');
+    const pending = getDb().prepare('SELECT id FROM pending_sender_approvals').get() as { id: string };
+    expect(pending).toBeDefined();
+
+    // Admin clicks approve (not the designated approver, which was owner).
+    for (const handler of getResponseHandlers()) {
+      const claimed = await handler({
+        questionId: pending.id,
+        value: 'approve',
+        userId: 'admin-bob',
+        channelType: 'telegram',
+        platformId: 'dm-bob',
+        threadId: null,
+      });
+      if (claimed) break;
+    }
+
+    // Stranger admitted thanks to the admin's authority.
+    const member = getDb()
+      .prepare('SELECT 1 AS x FROM agent_group_members WHERE user_id = ? AND agent_group_id = ?')
+      .get('tg:stranger', 'ag-1');
+    expect(member).toBeDefined();
   });
 });
