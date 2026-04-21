@@ -15,7 +15,7 @@ ARG INSTALL_CJK_FONTS=false
 # Pin CLI versions for reproducibility. Bump deliberately — unpinned installs
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
-ARG CLAUDE_CODE_VERSION=2.1.112
+ARG CLAUDE_CODE_VERSION=2.1.116
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=latest
 ARG BUN_VERSION=1.3.12
@@ -76,6 +76,7 @@ RUN corepack enable
 # package. Pinned versions so every rebuild is reproducible.
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     echo "only-built-dependencies[]=agent-browser" > /root/.npmrc && \
+    echo "only-built-dependencies[]=@anthropic-ai/claude-code" >> /root/.npmrc && \
     pnpm install -g \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
         "agent-browser@${AGENT_BROWSER_VERSION}" \
