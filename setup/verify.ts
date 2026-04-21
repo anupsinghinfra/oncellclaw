@@ -85,15 +85,10 @@ export async function run(_args: string[]): Promise<void> {
   // 2. Check container runtime
   let containerRuntime = 'none';
   try {
-    execSync('command -v container', { stdio: 'ignore' });
-    containerRuntime = 'apple-container';
+    execSync('docker info', { stdio: 'ignore' });
+    containerRuntime = 'docker';
   } catch {
-    try {
-      execSync('docker info', { stdio: 'ignore' });
-      containerRuntime = 'docker';
-    } catch {
-      // No runtime
-    }
+    // Docker not running
   }
 
   // 3. Check credentials
