@@ -9,14 +9,15 @@
  * Config via env:
  *   NANOCLAW_TZ    IANA zone override (skip autodetect)
  *   NANOCLAW_SKIP  comma-separated step names to skip
- *                  (environment|timezone|container|onecli|mounts|service|verify)
+ *                  (environment|timezone|container|onecli|auth|mounts|service|verify)
  *
- * OneCLI is installed and configured here, but secret registration (the
- * Anthropic token or API key), channel auth, and `/manage-channels` stay
- * interactive — they need human input. Finish those with `/setup` §4
- * onwards, `/add-<channel>`, and `/manage-channels`.
+ * Anthropic credential registration runs via setup/register-claude-token.sh
+ * (the only step that truly requires human input — browser sign-in or a
+ * pasted token/key). Channel auth and `/manage-channels` remain separate
+ * because they're platform-specific and typically handled via `/add-<channel>`
+ * and `/manage-channels` after this driver completes.
  */
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 type Fields = Record<string, string>;
 type StepResult = { ok: boolean; fields: Fields; exitCode: number };
@@ -64,6 +65,26 @@ function runStep(name: string, extra: string[] = []): Promise<StepResult> {
         exitCode: code ?? 1,
       });
     });
+  });
+}
+
+function anthropicSecretExists(): boolean {
+  try {
+    const res = spawnSync('onecli', ['secrets', 'list'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (res.status !== 0) return false;
+    return /anthropic/i.test(res.stdout ?? '');
+  } catch {
+    return false;
+  }
+}
+
+function runBashScript(relPath: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn('bash', [relPath], { stdio: 'inherit' });
+    child.on('close', (code) => resolve(code ?? 1));
   });
 }
 
@@ -131,6 +152,24 @@ async function main(): Promise<void> {
     }
   }
 
+  if (!skip.has('auth')) {
+    if (anthropicSecretExists()) {
+      console.log(
+        '\n── auth ────────────────────────────────────\n' +
+          '[setup:auto] OneCLI already has an Anthropic secret — skipping.',
+      );
+    } else {
+      console.log('\n── auth ────────────────────────────────────');
+      const code = await runBashScript('setup/register-claude-token.sh');
+      if (code !== 0) {
+        fail(
+          'Anthropic credential registration failed or was aborted.',
+          'Re-run `bash setup/register-claude-token.sh` or handle via `/setup` §4.',
+        );
+      }
+    }
+  }
+
   if (!skip.has('mounts')) {
     const res = await runStep('mounts', ['--empty']);
     if (!res.ok && res.fields.STATUS !== 'skipped') {
@@ -160,7 +199,7 @@ async function main(): Promise<void> {
     if (!res.ok) {
       console.log('\n[setup:auto] Scripted steps done. Remaining (interactive):');
       if (res.fields.CREDENTIALS !== 'configured') {
-        console.log('  • Register an Anthropic secret in OneCLI — see `/setup` §4');
+        console.log('  • Anthropic secret not detected — re-run `bash setup/register-claude-token.sh`');
       }
       if (!res.fields.CONFIGURED_CHANNELS) {
         console.log('  • Install a channel: `/add-discord`, `/add-slack`, `/add-telegram`, …');
