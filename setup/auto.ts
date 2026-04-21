@@ -27,7 +27,7 @@ import k from 'kleur';
 
 import { runTelegramChannel } from './channels/telegram.js';
 import * as setupLog from './logs.js';
-import { ensureAnswer, fail, runQuietStep } from './lib/runner.js';
+import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
 import { brandBold, brandChip } from './lib/theme.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
@@ -46,121 +46,116 @@ async function main(): Promise<void> {
 
   if (!skip.has('environment')) {
     const res = await runQuietStep('environment', {
-      running: 'Checking environment…',
-      done: 'Environment OK.',
+      running: 'Checking your system…',
+      done: 'Your system looks good.',
     });
-    if (!res.ok) fail('environment', 'Environment check failed.');
+    if (!res.ok) {
+      fail(
+        'environment',
+        "Your system doesn't look quite right.",
+        'See logs/setup-steps/ for details, then retry.',
+      );
+    }
   }
 
   if (!skip.has('container')) {
+    p.log.message(
+      k.dim(
+        'Your assistant lives in its own sandbox. It can only see what you explicitly share.',
+      ),
+    );
     const res = await runQuietStep('container', {
-      running: 'Building the agent container image…',
-      done: 'Container image ready.',
-      failed: 'Container build failed.',
+      running: 'Preparing the sandbox your assistant runs in…',
+      done: 'Sandbox ready.',
+      failed: "Couldn't prepare the sandbox.",
     });
     if (!res.ok) {
       const err = res.terminal?.fields.ERROR;
       if (err === 'runtime_not_available') {
         fail(
           'container',
-          'Docker is not available and could not be started automatically.',
-          'Install Docker Desktop or start it manually, then retry.',
+          "Docker isn't available.",
+          'Install Docker Desktop (or start it if already installed), then retry.',
         );
       }
       if (err === 'docker_group_not_active') {
         fail(
           'container',
-          'Docker was just installed but your shell is not yet in the `docker` group.',
+          "Docker was just installed but your shell doesn't know yet.",
           'Log out and back in (or run `newgrp docker` in a new shell), then retry.',
         );
       }
       fail(
         'container',
-        'Container build/test failed.',
-        'For stale cache: `docker builder prune -f`, then retry `pnpm run setup:auto`.',
+        "Couldn't build the sandbox.",
+        'If Docker has a stale cache, try: `docker builder prune -f`, then retry.',
       );
     }
     maybeReexecUnderSg();
   }
 
   if (!skip.has('onecli')) {
+    p.log.message(
+      k.dim(
+        'Your assistant never gets your API keys directly. The vault adds them to approved requests as they leave the sandbox.',
+      ),
+    );
     const res = await runQuietStep('onecli', {
-      running: 'Installing OneCLI credential vault…',
-      done: 'OneCLI installed.',
+      running: "Setting up OneCLI, your agent's vault…",
+      done: 'OneCLI vault ready.',
     });
     if (!res.ok) {
       const err = res.terminal?.fields.ERROR;
       if (err === 'onecli_not_on_path_after_install') {
         fail(
           'onecli',
-          'OneCLI installed but not on PATH.',
+          'OneCLI was installed but your shell needs to refresh to see it.',
           'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"`, then retry.',
         );
       }
       fail(
         'onecli',
-        `OneCLI install failed (${err ?? 'unknown'}).`,
-        'Check that curl + a writable ~/.local/bin are available, then retry.',
+        `Couldn't set up OneCLI (${err ?? 'unknown error'}).`,
+        'Make sure curl is installed and ~/.local/bin is writable, then retry.',
       );
     }
   }
 
   if (!skip.has('auth')) {
-    if (anthropicSecretExists()) {
-      p.log.success('OneCLI already has an Anthropic secret — skipping.');
-      setupLog.step('auth', 'skipped', 0, { REASON: 'secret-already-present' });
-    } else {
-      p.log.step('Registering your Anthropic credential…');
-      console.log(
-        k.dim('   (browser sign-in or paste a token/key — this part is interactive)'),
-      );
-      console.log();
-      const start = Date.now();
-      const code = await runInheritScript('bash', ['setup/register-claude-token.sh']);
-      const durationMs = Date.now() - start;
-      console.log();
-      if (code !== 0) {
-        setupLog.step('auth', 'failed', durationMs, { EXIT_CODE: code });
-        fail(
-          'auth',
-          'Anthropic credential registration failed or was aborted.',
-          'Re-run `bash setup/register-claude-token.sh` or handle via `/setup` §4.',
-        );
-      }
-      setupLog.step('auth', 'interactive', durationMs, {
-        METHOD: 'register-claude-token.sh',
-      });
-      p.log.success('Anthropic credential registered with OneCLI.');
-    }
+    await runAuthStep();
   }
 
   if (!skip.has('mounts')) {
     const res = await runQuietStep(
       'mounts',
       {
-        running: 'Writing mount allowlist…',
-        done: 'Mount allowlist in place.',
-        skipped: 'Mount allowlist already configured.',
+        running: "Setting your assistant's access rules…",
+        done: 'Access rules set.',
+        skipped: 'Access rules already set.',
       },
       ['--empty'],
     );
-    if (!res.ok) fail('mounts', 'Mount allowlist step failed.');
+    if (!res.ok) {
+      fail('mounts', "Couldn't write access rules.");
+    }
   }
 
   if (!skip.has('service')) {
     const res = await runQuietStep('service', {
-      running: 'Installing the background service…',
-      done: 'Service installed and running.',
+      running: 'Starting NanoClaw in the background…',
+      done: 'NanoClaw is running.',
     });
     if (!res.ok) {
       fail(
         'service',
-        'Service install failed.',
-        'Check logs/nanoclaw.error.log, or run `/setup` to iterate interactively.',
+        "Couldn't start NanoClaw.",
+        'See logs/nanoclaw.error.log for details.',
       );
     }
     if (res.terminal?.fields.DOCKER_GROUP_STALE === 'true') {
-      p.log.warn('Docker group stale in systemd session.');
+      p.log.warn(
+        "NanoClaw's permissions need a tweak before it can reach Docker.",
+      );
       p.log.message(
         k.dim(
           '  sudo setfacl -m u:$(whoami):rw /var/run/docker.sock\n' +
@@ -182,16 +177,16 @@ async function main(): Promise<void> {
     const res = await runQuietStep(
       'cli-agent',
       {
-        running: 'Wiring the terminal agent…',
-        done: 'Terminal agent wired (try `pnpm run chat hi`).',
+        running: 'Setting up your terminal chat…',
+        done: 'Terminal chat ready. Try `pnpm run chat hi`.',
       },
       ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME],
     );
     if (!res.ok) {
       fail(
         'cli-agent',
-        'CLI agent wiring failed.',
-        `Re-run \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName!}" --agent-name "${CLI_AGENT_NAME}"\` to fix.`,
+        "Couldn't set up the terminal chat.",
+        `You can retry later with \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName!}" --agent-name "${CLI_AGENT_NAME}"\`.`,
       );
     }
   }
@@ -201,47 +196,165 @@ async function main(): Promise<void> {
     if (choice === 'telegram') {
       await runTelegramChannel(displayName!);
     } else {
-      p.log.info('No messaging channel wired — you can add one later with `/add-<channel>`.');
+      p.log.info(
+        "No messaging app for now. You can add one later (like Telegram, Slack, or Discord).",
+      );
     }
   }
 
   if (!skip.has('verify')) {
     const res = await runQuietStep('verify', {
-      running: 'Verifying the install…',
-      done: 'Install verified.',
-      failed: 'Verification found issues.',
+      running: 'Making sure everything works together…',
+      done: "Everything's connected.",
+      failed: 'A few things still need your attention.',
     });
     if (!res.ok) {
       const notes: string[] = [];
       if (res.terminal?.fields.CREDENTIALS !== 'configured') {
-        notes.push('• Anthropic secret not detected — re-run `bash setup/register-claude-token.sh`.');
+        notes.push('• Your Claude account isn\'t connected. Re-run setup and try again.');
       }
       const agentPing = res.terminal?.fields.AGENT_PING;
       if (agentPing && agentPing !== 'ok' && agentPing !== 'skipped') {
         notes.push(
-          `• CLI agent did not reply (status: ${agentPing}). ` +
-            'Check `logs/nanoclaw.log` and `groups/*/logs/container-*.log`, then try `pnpm run chat hi`.',
+          "• Your assistant didn't reply to a test message. " +
+            'Check `logs/nanoclaw.log` for clues, then try `pnpm run chat hi`.',
         );
       }
       if (!res.terminal?.fields.CONFIGURED_CHANNELS) {
-        notes.push('• Optional: add a messaging channel — `/add-discord`, `/add-slack`, `/add-telegram`, …');
+        notes.push('• Want to chat from your phone? Add a messaging app with `/add-telegram`, `/add-slack`, or `/add-discord`.');
       }
       if (notes.length > 0) {
-        p.note(notes.join('\n'), 'What’s left');
+        p.note(notes.join('\n'), "What's left");
       }
-      p.outro(k.yellow('Scripted steps done — some pieces still need you.'));
+      p.outro(k.yellow('Almost there. A few things still need your attention.'));
       return;
     }
   }
 
-  const nextSteps = [
-    `${k.cyan('Chat from the CLI:')}     pnpm run chat hi`,
-    `${k.cyan('Tail host logs:')}        tail -f logs/nanoclaw.log`,
-    `${k.cyan('Open Claude Code:')}      claude`,
-  ].join('\n');
-  p.note(nextSteps, 'Next steps');
+  const rows: [string, string][] = [
+    ['Chat in the terminal:', 'pnpm run chat hi'],
+    ["See what's happening:", 'tail -f logs/nanoclaw.log'],
+    ['Open Claude Code:', 'claude'],
+  ];
+  const labelWidth = Math.max(...rows.map(([l]) => l.length));
+  const nextSteps = rows
+    .map(([l, c]) => `${k.cyan(l.padEnd(labelWidth))}  ${c}`)
+    .join('\n');
+  p.note(nextSteps, 'Try these');
   setupLog.complete(Date.now() - RUN_START);
-  p.outro(k.green('Setup complete.'));
+  p.outro(k.green("You're ready! Enjoy NanoClaw."));
+}
+
+// ─── auth step (select → branch) ────────────────────────────────────────
+
+async function runAuthStep(): Promise<void> {
+  if (anthropicSecretExists()) {
+    p.log.success('Your Claude account is already connected.');
+    setupLog.step('auth', 'skipped', 0, { REASON: 'secret-already-present' });
+    return;
+  }
+
+  const method = ensureAnswer(
+    await p.select({
+      message: 'How would you like to connect to Claude?',
+      options: [
+        {
+          value: 'subscription',
+          label: 'Sign in with my Claude subscription',
+          hint: 'recommended if you have Pro or Max',
+        },
+        {
+          value: 'oauth',
+          label: 'Paste an OAuth token I already have',
+          hint: 'sk-ant-oat…',
+        },
+        {
+          value: 'api',
+          label: 'Paste an Anthropic API key',
+          hint: 'pay-per-use via console.anthropic.com',
+        },
+      ],
+    }),
+  ) as 'subscription' | 'oauth' | 'api';
+  setupLog.userInput('auth_method', method);
+
+  if (method === 'subscription') {
+    await runSubscriptionAuth();
+  } else {
+    await runPasteAuth(method);
+  }
+}
+
+async function runSubscriptionAuth(): Promise<void> {
+  p.log.step("Opening the Claude sign-in flow…");
+  console.log(
+    k.dim('   (a browser will open for sign-in; this part is interactive)'),
+  );
+  console.log();
+  const start = Date.now();
+  const code = await runInheritScript('bash', [
+    'setup/register-claude-token.sh',
+  ]);
+  const durationMs = Date.now() - start;
+  console.log();
+  if (code !== 0) {
+    setupLog.step('auth', 'failed', durationMs, {
+      EXIT_CODE: code,
+      METHOD: 'subscription',
+    });
+    fail(
+      'auth',
+      "Couldn't complete the Claude sign-in.",
+      'Re-run setup and try again, or choose a paste option instead.',
+    );
+  }
+  setupLog.step('auth', 'interactive', durationMs, { METHOD: 'subscription' });
+  p.log.success('Claude account connected.');
+}
+
+async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
+  const label = method === 'oauth' ? 'OAuth token' : 'API key';
+  const prefix = method === 'oauth' ? 'sk-ant-oat' : 'sk-ant-api';
+
+  const answer = ensureAnswer(
+    await p.password({
+      message: `Paste your ${label}`,
+      validate: (v) => {
+        if (!v || !v.trim()) return 'Required';
+        if (!v.trim().startsWith(prefix)) {
+          return `Should start with ${prefix}…`;
+        }
+        return undefined;
+      },
+    }),
+  );
+  const token = (answer as string).trim();
+
+  const res = await runQuietChild(
+    'auth',
+    'onecli',
+    [
+      'secrets', 'create',
+      '--name', 'Anthropic',
+      '--type', 'anthropic',
+      '--value', token,
+      '--host-pattern', 'api.anthropic.com',
+    ],
+    {
+      running: `Saving your ${label} to your OneCLI vault…`,
+      done: 'Claude account connected.',
+    },
+    {
+      extraFields: { METHOD: method },
+    },
+  );
+  if (!res.ok) {
+    fail(
+      'auth',
+      `Couldn't save your ${label} to the vault.`,
+      'Make sure OneCLI is running (`onecli version`), then retry.',
+    );
+  }
 }
 
 // ─── prompts owned by the sequencer ────────────────────────────────────
@@ -249,7 +362,7 @@ async function main(): Promise<void> {
 async function askDisplayName(fallback: string): Promise<string> {
   const answer = ensureAnswer(
     await p.text({
-      message: 'What should your agents call you?',
+      message: 'What should your assistant call you?',
       placeholder: fallback,
       defaultValue: fallback,
     }),
@@ -262,10 +375,10 @@ async function askDisplayName(fallback: string): Promise<string> {
 async function askChannelChoice(): Promise<'telegram' | 'skip'> {
   const choice = ensureAnswer(
     await p.select({
-      message: 'Connect a messaging app so you can chat from your phone?',
+      message: 'Want to chat with your assistant from your phone?',
       options: [
-        { value: 'telegram', label: 'Telegram', hint: 'recommended' },
-        { value: 'skip', label: 'Skip — use the CLI only' },
+        { value: 'telegram', label: 'Yes, connect Telegram', hint: 'recommended' },
+        { value: 'skip', label: 'Skip for now', hint: "I'll just use the terminal" },
       ],
     }),
   );
@@ -311,7 +424,7 @@ function maybeReexecUnderSg(): void {
   if (!/permission denied/i.test(err)) return;
   if (spawnSync('which', ['sg'], { stdio: 'ignore' }).status !== 0) return;
 
-  p.log.warn('Docker socket not accessible in current group — re-executing under `sg docker`.');
+  p.log.warn('Docker socket not accessible in current group. Re-executing under `sg docker`.');
   const res = spawnSync('sg', ['docker', '-c', 'pnpm run setup:auto'], {
     stdio: 'inherit',
     env: { ...process.env, NANOCLAW_REEXEC_SG: '1' },
@@ -323,17 +436,28 @@ function maybeReexecUnderSg(): void {
 
 function printIntro(): void {
   const isReexec = process.env.NANOCLAW_REEXEC_SG === '1';
+  const isBootstrapped = process.env.NANOCLAW_BOOTSTRAPPED === '1';
   const wordmark = `${k.bold('Nano')}${brandBold('Claw')}`;
 
   if (isReexec) {
-    p.intro(`${brandChip(' setup:auto ')}  ${wordmark}  ${k.dim('· resuming under docker group')}`);
+    p.intro(
+      `${brandChip(' Welcome ')}  ${wordmark}  ${k.dim('· picking up where we left off')}`,
+    );
+    return;
+  }
+
+  // When we were called via nanoclaw.sh, the wordmark + subtitle were
+  // already printed in bash. Just open the clack gutter with a short,
+  // neutral intro so the flow continues without duplication.
+  if (isBootstrapped) {
+    p.intro(k.dim("Let's get you set up."));
     return;
   }
 
   console.log();
   console.log(`  ${wordmark}`);
-  console.log(`  ${k.dim('end-to-end scripted setup of your personal assistant')}`);
-  p.intro(`${brandChip(' setup:auto ')}`);
+  console.log(`  ${k.dim('Setting up your personal AI assistant')}`);
+  p.intro(k.dim("Let's get you set up."));
 }
 
 /**

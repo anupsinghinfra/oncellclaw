@@ -43,8 +43,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
     'bash',
     ['setup/add-telegram.sh'],
     {
-      running: `Installing Telegram adapter and wiring @${botUsername}…`,
-      done: 'Telegram adapter ready.',
+      running: `Connecting Telegram to @${botUsername}…`,
+      done: 'Telegram connected.',
     },
     {
       env: { TELEGRAM_BOT_TOKEN: token },
@@ -54,8 +54,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   if (!install.ok) {
     fail(
       'telegram-install',
-      'Telegram install failed.',
-      'Check the raw log under logs/setup-steps/, then retry `pnpm run setup:auto`.',
+      "Couldn't connect Telegram.",
+      'See logs/setup-steps/ for details, then retry setup.',
     );
   }
 
@@ -63,8 +63,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   if (!pair.ok) {
     fail(
       'pair-telegram',
-      'Telegram pairing failed.',
-      'Re-run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent main`.',
+      "Couldn't pair with Telegram.",
+      'Re-run setup to try again.',
     );
   }
 
@@ -73,8 +73,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   if (!platformId || !pairedUserId) {
     fail(
       'pair-telegram',
-      'pair-telegram succeeded but did not return PLATFORM_ID and PAIRED_USER_ID.',
-      'Re-run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent main` and capture the success block.',
+      'Pairing completed but came back incomplete.',
+      'Re-run setup to try again.',
     );
   }
 
@@ -92,8 +92,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
       '--agent-name', agentName,
     ],
     {
-      running: `Wiring ${agentName} to your Telegram chat…`,
-      done: `${agentName} is wired — welcome DM incoming.`,
+      running: `Connecting ${agentName} to your Telegram chat…`,
+      done: `${agentName} is ready. Check Telegram for a welcome message.`,
     },
     {
       extraFields: { CHANNEL: 'telegram', AGENT_NAME: agentName, PLATFORM_ID: platformId },
@@ -102,8 +102,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   if (!init.ok) {
     fail(
       'init-first-agent',
-      'Wiring the Telegram agent failed.',
-      `Re-run \`pnpm exec tsx scripts/init-first-agent.ts --channel telegram --user-id "${pairedUserId}" --platform-id "${platformId}" --display-name "${displayName}" --agent-name "${agentName}"\`.`,
+      `Couldn't finish connecting ${agentName}.`,
+      'You can retry later with `/manage-channels`.',
     );
   }
 }
@@ -111,24 +111,26 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
 async function collectTelegramToken(): Promise<string> {
   p.note(
     [
-      '1. Open Telegram and message @BotFather',
-      '2. Send: /newbot',
-      '3. Follow the prompts (name + username ending in "bot")',
-      '4. Copy the token it gives you (format: <digits>:<chars>)',
+      "Your assistant talks to you through a Telegram bot you create.",
+      "Here's how:",
       '',
-      k.dim('Optional, but recommended for groups:'),
-      k.dim('    @BotFather → /mybots → Bot Settings → Group Privacy → OFF'),
+      '  1. Open Telegram and message @BotFather',
+      '  2. Send /newbot and follow the prompts',
+      '  3. Copy the token it gives you (it looks like <digits>:<chars>)',
+      '',
+      k.dim('Planning to add your assistant to group chats? In @BotFather:'),
+      k.dim('    /mybots → your bot → Bot Settings → Group Privacy → OFF'),
     ].join('\n'),
-    'Create a Telegram bot',
+    'Set up your Telegram bot',
   );
 
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your bot token',
       validate: (v) => {
-        if (!v || !v.trim()) return 'Token is required';
+        if (!v || !v.trim()) return "Token is required";
         if (!/^[0-9]+:[A-Za-z0-9_-]{35,}$/.test(v.trim())) {
-          return 'Format looks wrong — expected <digits>:<chars>';
+          return "That doesn't look right. It should be <digits>:<chars>";
         }
         return undefined;
       },
@@ -145,7 +147,7 @@ async function collectTelegramToken(): Promise<string> {
 async function validateTelegramToken(token: string): Promise<string> {
   const s = p.spinner();
   const start = Date.now();
-  s.start('Validating token with Telegram…');
+  s.start('Checking your bot token…');
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
     const data = (await res.json()) as {
@@ -156,7 +158,7 @@ async function validateTelegramToken(token: string): Promise<string> {
     const elapsedS = Math.round((Date.now() - start) / 1000);
     if (data.ok && data.result?.username) {
       const username = data.result.username;
-      s.stop(`Bot is @${username}. ${k.dim(`(${elapsedS}s)`)}`);
+      s.stop(`Found your bot: @${username}. ${k.dim(`(${elapsedS}s)`)}`);
       setupLog.step('telegram-validate', 'success', Date.now() - start, {
         BOT_USERNAME: username,
         BOT_ID: data.result.id ?? '',
@@ -164,26 +166,26 @@ async function validateTelegramToken(token: string): Promise<string> {
       return username;
     }
     const reason = data.description ?? 'token rejected by Telegram';
-    s.stop(`Telegram rejected the token: ${reason}`, 1);
+    s.stop(`Telegram didn't accept that token: ${reason}`, 1);
     setupLog.step('telegram-validate', 'failed', Date.now() - start, {
       ERROR: reason,
     });
     fail(
       'telegram-validate',
-      'Telegram rejected the token.',
-      'Double-check the token (copy it again from @BotFather) and retry.',
+      "Telegram didn't accept that token.",
+      'Copy the token again from @BotFather and try setup once more.',
     );
   } catch (err) {
     const elapsedS = Math.round((Date.now() - start) / 1000);
-    s.stop(`Could not reach Telegram. ${k.dim(`(${elapsedS}s)`)}`, 1);
+    s.stop(`Couldn't reach Telegram. ${k.dim(`(${elapsedS}s)`)}`, 1);
     const message = err instanceof Error ? err.message : String(err);
     setupLog.step('telegram-validate', 'failed', Date.now() - start, {
       ERROR: message,
     });
     fail(
       'telegram-validate',
-      'Telegram API unreachable.',
-      'Check your network connection and retry.',
+      "Couldn't reach Telegram.",
+      'Check your internet connection and retry setup.',
     );
   }
 }
@@ -194,7 +196,7 @@ async function runPairTelegram(): Promise<
   const rawLog = setupLog.stepRawLog('pair-telegram');
   const start = Date.now();
   const s = p.spinner();
-  s.start('Creating pairing code…');
+  s.start('Generating a secret code for your bot…');
   let spinnerActive = true;
 
   const stopSpinner = (msg: string, code?: number) => {
@@ -211,15 +213,15 @@ async function runPairTelegram(): Promise<
       if (block.type === 'PAIR_TELEGRAM_CODE') {
         const reason = block.fields.REASON ?? 'initial';
         if (reason === 'initial') {
-          stopSpinner('Pairing code ready.');
+          stopSpinner('Your secret code is ready.');
         } else {
-          stopSpinner('Previous code invalidated. New code below.');
+          stopSpinner("Old code expired. Here's a fresh one.");
         }
-        p.note(formatCodeCard(block.fields.CODE ?? '????'), 'Pairing code');
-        s.start('Waiting for the code from Telegram…');
+        p.note(formatCodeCard(block.fields.CODE ?? '????'), 'Secret code');
+        s.start('Waiting for you to send the code from Telegram…');
         spinnerActive = true;
       } else if (block.type === 'PAIR_TELEGRAM_ATTEMPT') {
-        stopSpinner(`Received "${block.fields.CANDIDATE ?? '?'}" — doesn't match.`);
+        stopSpinner(`Got "${block.fields.CANDIDATE ?? '?'}", not a match.`);
         s.start('Waiting for the correct code…');
         spinnerActive = true;
       } else if (block.type === 'PAIR_TELEGRAM') {
@@ -238,7 +240,7 @@ async function runPairTelegram(): Promise<
   // sure we don't leave the spinner running.
   if (spinnerActive) {
     stopSpinner(
-      result.ok ? 'Done.' : 'Pairing exited unexpectedly.',
+      result.ok ? 'Done.' : 'Pairing ended unexpectedly.',
       result.ok ? 0 : 1,
     );
     if (!result.ok) dumpTranscriptOnFailure(result.transcript);
@@ -254,7 +256,7 @@ function formatCodeCard(code: string): string {
     '',
     `   ${brandBold(spaced)}`,
     '',
-    k.dim('   Send these digits from Telegram to your bot.'),
+    k.dim('   Send this code to your bot from Telegram.'),
   ].join('\n');
 }
 
@@ -266,7 +268,7 @@ async function resolveAgentName(): Promise<string> {
   }
   const answer = ensureAnswer(
     await p.text({
-      message: 'What should your messaging agent be called?',
+      message: 'What should your assistant be called?',
       placeholder: DEFAULT_AGENT_NAME,
       defaultValue: DEFAULT_AGENT_NAME,
     }),

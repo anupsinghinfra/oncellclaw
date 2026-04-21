@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #
-# NanoClaw — scripted end-to-end install.
+# NanoClaw — end-to-end setup entry point.
 #
-# Phase 1: bootstrap (Node + pnpm + native module verify). Runs bash-side
-# since tsx isn't available until pnpm install completes.
-# Phase 2: setup:auto (all remaining steps under clack).
+# Runs two parts from the user's perspective as one continuous flow:
+#   - bash-side: install the basics (Node + pnpm + native modules) under a
+#     bash-rendered clack-alike spinner. Can't use setup/auto.ts here since
+#     tsx isn't available until pnpm install completes.
+#   - hand off to `pnpm run setup:auto`, which renders the rest with
+#     @clack/prompts. The wordmark is printed once here so setup:auto can
+#     skip it and the flow reads as a single sequence.
 #
-# Both phases obey the same three-level output contract (see
-# docs/setup-flow.md):
+# Obeys the three-level output contract (see docs/setup-flow.md):
 #   1. User-facing       — concise status line with elapsed time
-#   2. Progression log   — logs/setup.log (header + one entry per phase/step)
+#   2. Progression log   — logs/setup.log (header + one entry per step)
 #   3. Raw per-step log  — logs/setup-steps/NN-name.log (full verbatim output)
 #
 # Config via env — passed through unchanged:
@@ -91,6 +94,19 @@ use_ansi() { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; }
 dim()     { use_ansi && printf '\033[2m%s\033[0m' "$1" || printf '%s' "$1"; }
 gray()    { use_ansi && printf '\033[90m%s\033[0m' "$1" || printf '%s' "$1"; }
 red()     { use_ansi && printf '\033[31m%s\033[0m' "$1" || printf '%s' "$1"; }
+bold()    { use_ansi && printf '\033[1m%s\033[0m' "$1" || printf '%s' "$1"; }
+# brand cyan (≈ #2BB7CE) — truecolor when supported, 16-color cyan fallback.
+brand_bold() {
+  if use_ansi; then
+    if [ "${COLORTERM:-}" = "truecolor" ] || [ "${COLORTERM:-}" = "24bit" ]; then
+      printf '\033[1;38;2;43;183;206m%s\033[0m' "$1"
+    else
+      printf '\033[1;36m%s\033[0m' "$1"
+    fi
+  else
+    printf '%s' "$1"
+  fi
+}
 clear_line() { use_ansi && printf '\r\033[2K' || printf '\n'; }
 
 spinner_start()   { printf '%s  %s…' "$(gray '◒')" "$1"; }
@@ -105,21 +121,20 @@ rm -f  "$PROGRESS_LOG"
 mkdir -p "$STEPS_DIR" "$LOGS_DIR"
 write_header
 
-cat <<'EOF'
-═══════════════════════════════════════════════════════════════
- NanoClaw scripted setup
-═══════════════════════════════════════════════════════════════
+# NanoClaw wordmark + subtitle — setup:auto will see NANOCLAW_BOOTSTRAPPED=1
+# and skip printing these again, so the flow stays visually continuous.
+printf '\n  %s%s\n' "$(bold 'Nano')" "$(brand_bold 'Claw')"
+printf '  %s\n\n' "$(dim 'Setting up your personal AI assistant')"
 
-Phase 1 · bootstrap
-
-EOF
-
-# ─── phase 1: bootstrap ─────────────────────────────────────────────────
+# ─── first step: install the basics (Node + pnpm + native modules) ─────
 
 BOOTSTRAP_RAW="${STEPS_DIR}/01-bootstrap.log"
-BOOTSTRAP_LABEL="Bootstrapping Node, pnpm, native modules"
+BOOTSTRAP_LABEL="Installing the basics"
 BOOTSTRAP_START=$(date +%s)
 
+# One-line "why" that teaches a differentiator while the user waits.
+printf '%s  %s\n' "$(gray '│')" \
+  "$(dim "NanoClaw is small and runs entirely on your machine. Yours to modify.")"
 spinner_start "$BOOTSTRAP_LABEL"
 
 # Run in the background so we can tick elapsed time. Capture exit code via
@@ -151,10 +166,10 @@ rm -f "$BOOTSTRAP_EXIT_FILE"
 BOOTSTRAP_DUR=$(( $(date +%s) - BOOTSTRAP_START ))
 
 if [ "$BOOTSTRAP_RC" -eq 0 ]; then
-  spinner_success "Bootstrap complete" "$BOOTSTRAP_DUR"
+  spinner_success "Basics installed" "$BOOTSTRAP_DUR"
   write_bootstrap_entry success "$BOOTSTRAP_DUR" "$BOOTSTRAP_RAW"
 else
-  spinner_failure "Bootstrap failed" "$BOOTSTRAP_DUR"
+  spinner_failure "Couldn't install the basics" "$BOOTSTRAP_DUR"
   write_bootstrap_entry failed "$BOOTSTRAP_DUR" "$BOOTSTRAP_RAW"
   write_abort_entry bootstrap "exit-${BOOTSTRAP_RC}"
 
@@ -162,23 +177,19 @@ else
   echo "$(dim '── last 40 lines of ')$(dim "$BOOTSTRAP_RAW")$(dim ' ──')"
   tail -40 "$BOOTSTRAP_RAW"
   echo
-  echo "Full raw log: $BOOTSTRAP_RAW"
-  echo "Progression:  $PROGRESS_LOG"
+  echo "$(dim "Full raw log: $BOOTSTRAP_RAW")"
+  echo "$(dim "Progression:  $PROGRESS_LOG")"
   exit 1
 fi
 
-echo
-cat <<'EOF'
-Phase 2 · setup:auto
+# ─── hand off to setup:auto ────────────────────────────────────────────
 
-EOF
-
-# ─── phase 2: clack driver ──────────────────────────────────────────────
-
-# NANOCLAW_BOOTSTRAPPED=1 tells setup/auto.ts that the progression log has
-# already been initialized (header + bootstrap entry), so it should append
-# rather than wipe.
+# NANOCLAW_BOOTSTRAPPED=1 tells setup/auto.ts to skip the wordmark (we
+# already printed it) and to append to the progression log rather than
+# wipe it.
 export NANOCLAW_BOOTSTRAPPED=1
 
-# exec so signals (Ctrl-C) propagate directly to the child.
-exec pnpm run setup:auto
+# --silent suppresses pnpm's `> nanoclaw@1.2.52 setup:auto / > tsx setup/auto.ts`
+# preamble so the flow continues visually from "Basics installed" straight
+# into setup:auto's spinner. exec so signals (Ctrl-C) propagate directly.
+exec pnpm --silent run setup:auto
