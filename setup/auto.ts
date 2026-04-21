@@ -71,6 +71,33 @@ function runStep(name: string, extra: string[] = []): Promise<StepResult> {
   });
 }
 
+/**
+ * After installing Docker, this process's supplementary groups are still
+ * frozen from login — subsequent steps that talk to /var/run/docker.sock
+ * (onecli install, service start, …) fail with EACCES even though the
+ * daemon is up. Detect that and re-exec the whole driver under `sg docker`
+ * so the rest of the run inherits the docker group without a re-login.
+ */
+function maybeReexecUnderSg(): void {
+  if (process.env.NANOCLAW_REEXEC_SG === '1') return; // already re-exec'd
+  if (process.platform !== 'linux') return;
+  const info = spawnSync('docker', ['info'], { encoding: 'utf-8' });
+  if (info.status === 0) return;
+  const err = `${info.stderr ?? ''}\n${info.stdout ?? ''}`;
+  if (!/permission denied/i.test(err)) return;
+  if (spawnSync('which', ['sg'], { stdio: 'ignore' }).status !== 0) return;
+
+  console.log(
+    '\n[setup:auto] Docker socket not accessible in current group — ' +
+      're-executing under `sg docker` to pick up new group membership.',
+  );
+  const res = spawnSync('sg', ['docker', '-c', 'pnpm run setup:auto'], {
+    stdio: 'inherit',
+    env: { ...process.env, NANOCLAW_REEXEC_SG: '1' },
+  });
+  process.exit(res.status ?? 1);
+}
+
 function anthropicSecretExists(): boolean {
   try {
     const res = spawnSync('onecli', ['secrets', 'list'], {
@@ -132,11 +159,18 @@ async function main(): Promise<void> {
           'Install Docker Desktop or start it manually, then retry.',
         );
       }
+      if (res.fields.ERROR === 'docker_group_not_active') {
+        fail(
+          'Docker was just installed but your shell is not yet in the `docker` group.',
+          'Log out and back in (or run `newgrp docker` in a new shell), then retry `pnpm run setup:auto`.',
+        );
+      }
       fail(
         'container build/test failed',
         'For stale build cache: `docker builder prune -f`, then retry `pnpm run setup:auto`.',
       );
     }
+    maybeReexecUnderSg();
   }
 
   if (!skip.has('onecli')) {
