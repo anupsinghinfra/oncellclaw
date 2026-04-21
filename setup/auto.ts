@@ -264,6 +264,12 @@ async function main(): Promise<void> {
       if (res.fields.CREDENTIALS !== 'configured') {
         console.log('  • Anthropic secret not detected — re-run `bash setup/register-claude-token.sh`');
       }
+      if (res.fields.AGENT_PING && res.fields.AGENT_PING !== 'ok' && res.fields.AGENT_PING !== 'skipped') {
+        console.log(
+          `  • CLI agent did not reply (status: ${res.fields.AGENT_PING}). ` +
+            'Check `logs/nanoclaw.log` and `groups/*/logs/container-*.log`, then try `pnpm run chat hi`.',
+        );
+      }
       if (!res.fields.CONFIGURED_CHANNELS) {
         console.log(
           '  • Optional: add a messaging channel — `/add-discord`, `/add-slack`, `/add-telegram`, …',
