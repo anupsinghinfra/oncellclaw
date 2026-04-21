@@ -189,6 +189,7 @@ Print the list as a numbered plain-prose list (too many options for `AskUserQues
 > 12. **Webex** — `/add-webex`
 > 13. **Resend (email)** — `/add-resend`
 > 14. **Emacs** — `/add-emacs`
+> 15. **WeChat** — `/add-wechat`
 >
 > Or say "skip" to leave this for later.
 
