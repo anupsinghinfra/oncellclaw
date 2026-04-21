@@ -4,7 +4,7 @@
 #
 # Runs `bash setup.sh` (bootstrap: Node check, pnpm install, native module
 # verify), then `pnpm run setup:auto` (environment → container → onecli →
-# auth → mounts → service → cli-agent → verify).
+# auth → mounts → service → cli-agent → channel → verify).
 #
 # Everything that can be scripted runs unattended; the one interactive pause
 # is the auth step (browser sign-in or paste token/API key).

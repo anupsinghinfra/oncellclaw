@@ -11,8 +11,8 @@
  *                          interactive prompt before cli-agent. If unset,
  *                          the driver asks, defaulting to $USER.
  *   NANOCLAW_SKIP          comma-separated step names to skip
- *                          (environment|container|onecli|auth|
- *                           mounts|service|cli-agent|verify)
+ *                          (environment|container|onecli|auth|mounts|
+ *                           service|cli-agent|channel|verify)
  *
  * Timezone is not configured here — it defaults to the host system's TZ.
  * Run `pnpm exec tsx setup/index.ts --step timezone -- --tz <zone>` later
@@ -125,6 +125,19 @@ async function askDisplayName(fallback: string): Promise<string> {
       `\nWhat should your agents call you? [${fallback}]: `,
     );
     return answer.trim() || fallback;
+  } finally {
+    rl.close();
+  }
+}
+
+async function askChannelChoice(): Promise<'telegram' | 'skip'> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log('\nConnect a messaging app so you can chat from your phone?');
+    console.log('  1) Telegram');
+    console.log('  2) Skip — just use the CLI for now');
+    const answer = (await rl.question('Choose [1/2]: ')).trim();
+    return answer === '1' ? 'telegram' : 'skip';
   } finally {
     rl.close();
   }
@@ -254,6 +267,34 @@ async function main(): Promise<void> {
         'CLI agent wiring failed',
         `Re-run \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName}" --agent-name "${CLI_AGENT_NAME}"\` to fix.`,
       );
+    }
+  }
+
+  if (!skip.has('channel')) {
+    const choice = await askChannelChoice();
+    if (choice === 'telegram') {
+      const installCode = await runBashScript('setup/add-telegram.sh');
+      if (installCode !== 0) {
+        fail(
+          'Telegram install failed.',
+          'Re-run `bash setup/add-telegram.sh`, then `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent main`.',
+        );
+      }
+
+      console.log(
+        '\n[setup:auto] Pairing Telegram. A 4-digit code will appear below.\n' +
+          '             From Telegram, send just those 4 digits to your bot\n' +
+          '             (DM the bot for a personal chat, or prefix with your\n' +
+          '             bot handle in a group with privacy on).\n',
+      );
+
+      const pair = await runStep('pair-telegram', ['--intent', 'main']);
+      if (!pair.ok) {
+        fail(
+          'Telegram pairing failed.',
+          'Re-run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent main`.',
+        );
+      }
     }
   }
 
