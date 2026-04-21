@@ -7,9 +7,11 @@
  * module check). This driver picks up from there.
  *
  * Config via env:
- *   NANOCLAW_DISPLAY_NAME  operator name for the CLI agent — skips the
- *                          interactive prompt before cli-agent. If unset,
- *                          the driver asks, defaulting to $USER.
+ *   NANOCLAW_DISPLAY_NAME  how the agents address the operator — skips the
+ *                          prompt. Defaults to $USER.
+ *   NANOCLAW_AGENT_NAME    name for the messaging-channel agent (Telegram,
+ *                          etc.) — skips the prompt. Defaults to "Nano".
+ *                          (The CLI scratch agent is always "Terminal Agent".)
  *   NANOCLAW_SKIP          comma-separated step names to skip
  *                          (environment|container|onecli|auth|mounts|
  *                           service|cli-agent|channel|verify)
@@ -28,6 +30,7 @@ import { spawn, spawnSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
+const DEFAULT_AGENT_NAME = 'Nano';
 
 type Fields = Record<string, string>;
 type StepResult = { ok: boolean; fields: Fields; exitCode: number };
@@ -130,6 +133,18 @@ async function askDisplayName(fallback: string): Promise<string> {
   }
 }
 
+async function askAgentName(fallback: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(
+      `\nWhat should your agent be called? [${fallback}]: `,
+    );
+    return answer.trim() || fallback;
+  } finally {
+    rl.close();
+  }
+}
+
 async function askChannelChoice(): Promise<'telegram' | 'skip'> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -146,6 +161,15 @@ async function askChannelChoice(): Promise<'telegram' | 'skip'> {
 function runBashScript(relPath: string): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn('bash', [relPath], { stdio: 'inherit' });
+    child.on('close', (code) => resolve(code ?? 1));
+  });
+}
+
+function runTsxScript(relPath: string, args: string[] = []): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn('pnpm', ['exec', 'tsx', relPath, ...args], {
+      stdio: 'inherit',
+    });
     child.on('close', (code) => resolve(code ?? 1));
   });
 }
@@ -251,21 +275,26 @@ async function main(): Promise<void> {
     }
   }
 
-  if (!skip.has('cli-agent')) {
+  // Resolved once, reused by cli-agent + channel wiring.
+  let displayName: string | undefined;
+  const needsDisplayName = !skip.has('cli-agent') || !skip.has('channel');
+  if (needsDisplayName) {
     const fallback = process.env.USER?.trim() || 'Operator';
     const preset = process.env.NANOCLAW_DISPLAY_NAME?.trim();
-    const displayName = preset || (await askDisplayName(fallback));
+    displayName = preset || (await askDisplayName(fallback));
+  }
 
+  if (!skip.has('cli-agent')) {
     const res = await runStep('cli-agent', [
       '--display-name',
-      displayName,
+      displayName!,
       '--agent-name',
       CLI_AGENT_NAME,
     ]);
     if (!res.ok) {
       fail(
         'CLI agent wiring failed',
-        `Re-run \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName}" --agent-name "${CLI_AGENT_NAME}"\` to fix.`,
+        `Re-run \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName!}" --agent-name "${CLI_AGENT_NAME}"\` to fix.`,
       );
     }
   }
@@ -295,6 +324,38 @@ async function main(): Promise<void> {
           'Re-run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent main`.',
         );
       }
+
+      const platformId = pair.fields.PLATFORM_ID;
+      const adminUserId = pair.fields.ADMIN_USER_ID;
+      if (!platformId || !adminUserId) {
+        fail(
+          'pair-telegram succeeded but did not return PLATFORM_ID and ADMIN_USER_ID.',
+          'Re-run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent main` and capture the success block.',
+        );
+      }
+
+      const agentName =
+        process.env.NANOCLAW_AGENT_NAME?.trim() ||
+        (await askAgentName(DEFAULT_AGENT_NAME));
+
+      console.log('\n── wiring first agent ──────────────────────────');
+      const initCode = await runTsxScript('scripts/init-first-agent.ts', [
+        '--channel', 'telegram',
+        '--user-id', adminUserId,
+        '--platform-id', platformId,
+        '--display-name', displayName!,
+        '--agent-name', agentName,
+      ]);
+      if (initCode !== 0) {
+        fail(
+          'Wiring the Telegram agent failed.',
+          `Re-run \`pnpm exec tsx scripts/init-first-agent.ts --channel telegram --user-id "${adminUserId}" --platform-id "${platformId}" --display-name "${displayName!}" --agent-name "${agentName}"\`.`,
+        );
+      }
+
+      console.log(
+        `\n[setup:auto] Telegram is wired. ${agentName} will DM you a welcome shortly.`,
+      );
     }
   }
 
