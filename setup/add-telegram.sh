@@ -17,7 +17,6 @@ CHANNELS_BRANCH="origin/channels"
 
 need_install() {
   [[ ! -f src/channels/telegram.ts ]] && return 0
-  [[ ! -f setup/pair-telegram.ts ]] && return 0
   ! grep -q "^import './telegram.js';" src/channels/index.ts 2>/dev/null && return 0
   return 1
 }
@@ -26,14 +25,15 @@ if need_install; then
   echo "[add-telegram] Fetching channels branch…"
   git fetch origin channels >/dev/null 2>&1
 
+  # pair-telegram.ts is maintained in this branch (setup-auto), so it's NOT
+  # in this list — do not overwrite the local version with the channels copy.
   echo "[add-telegram] Copying adapter files from $CHANNELS_BRANCH…"
   for f in \
     src/channels/telegram.ts \
     src/channels/telegram-pairing.ts \
     src/channels/telegram-pairing.test.ts \
     src/channels/telegram-markdown-sanitize.ts \
-    src/channels/telegram-markdown-sanitize.test.ts \
-    setup/pair-telegram.ts
+    src/channels/telegram-markdown-sanitize.test.ts
   do
     git show "$CHANNELS_BRANCH:$f" > "$f"
   done
