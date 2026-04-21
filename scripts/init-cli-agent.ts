@@ -30,7 +30,6 @@ import {
 } from '../src/db/messaging-groups.js';
 import { runMigrations } from '../src/db/migrations/index.js';
 import { normalizeName } from '../src/modules/agent-to-agent/db/agent-destinations.js';
-import { grantRole, hasAnyOwner } from '../src/modules/permissions/db/user-roles.js';
 import { upsertUser } from '../src/modules/permissions/db/users.js';
 import { initGroupFilesystem } from '../src/group-init.js';
 import type { AgentGroup, MessagingGroup } from '../src/types.js';
@@ -91,17 +90,9 @@ async function main(): Promise<void> {
     created_at: now,
   });
 
-  let promotedToOwner = false;
-  if (!hasAnyOwner()) {
-    grantRole({
-      user_id: CLI_SYNTHETIC_USER_ID,
-      role: 'owner',
-      agent_group_id: null,
-      granted_by: null,
-      granted_at: now,
-    });
-    promotedToOwner = true;
-  }
+  // Owner grant deferred to init-first-agent when the real channel user is
+  // wired — cli:local is a scratch identity, not the operator.
+  const promotedToOwner = false;
 
   // 2. Agent group + filesystem.
   const folder = `cli-with-${normalizeName(args.displayName)}`;
