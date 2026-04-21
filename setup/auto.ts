@@ -7,8 +7,9 @@
  * module check). This driver picks up from there.
  *
  * Config via env:
- *   NANOCLAW_DISPLAY_NAME  operator name for the CLI agent (default: $USER)
- *   NANOCLAW_AGENT_NAME    agent persona name (default: display name)
+ *   NANOCLAW_DISPLAY_NAME  operator name for the CLI agent — skips the
+ *                          interactive prompt before cli-agent. If unset,
+ *                          the driver asks, defaulting to $USER.
  *   NANOCLAW_SKIP          comma-separated step names to skip
  *                          (environment|container|onecli|auth|
  *                           mounts|service|cli-agent|verify)
@@ -24,6 +25,9 @@
  * and `/manage-channels` after this driver completes.
  */
 import { spawn, spawnSync } from 'child_process';
+import { createInterface } from 'readline/promises';
+
+const CLI_AGENT_NAME = 'Terminal Agent';
 
 type Fields = Record<string, string>;
 type StepResult = { ok: boolean; fields: Fields; exitCode: number };
@@ -111,6 +115,18 @@ function anthropicSecretExists(): boolean {
     return /anthropic/i.test(res.stdout ?? '');
   } catch {
     return false;
+  }
+}
+
+async function askDisplayName(fallback: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(
+      `\nWhat should the agent call you? [${fallback}]: `,
+    );
+    return answer.trim() || fallback;
+  } finally {
+    rl.close();
   }
 }
 
@@ -223,19 +239,20 @@ async function main(): Promise<void> {
   }
 
   if (!skip.has('cli-agent')) {
-    const displayName =
-      process.env.NANOCLAW_DISPLAY_NAME?.trim() ||
-      process.env.USER?.trim() ||
-      'Operator';
-    const agentName = process.env.NANOCLAW_AGENT_NAME?.trim();
-    const args = ['--display-name', displayName];
-    if (agentName) args.push('--agent-name', agentName);
+    const fallback = process.env.USER?.trim() || 'Operator';
+    const preset = process.env.NANOCLAW_DISPLAY_NAME?.trim();
+    const displayName = preset || (await askDisplayName(fallback));
 
-    const res = await runStep('cli-agent', args);
+    const res = await runStep('cli-agent', [
+      '--display-name',
+      displayName,
+      '--agent-name',
+      CLI_AGENT_NAME,
+    ]);
     if (!res.ok) {
       fail(
         'CLI agent wiring failed',
-        'Re-run `pnpm exec tsx scripts/init-cli-agent.ts --display-name "<your name>"` to fix.',
+        `Re-run \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName}" --agent-name "${CLI_AGENT_NAME}"\` to fix.`,
       );
     }
   }
