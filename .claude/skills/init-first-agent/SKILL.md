@@ -87,13 +87,13 @@ The script:
 2. Creates the `agent_groups` row and calls `initGroupFilesystem` at `groups/dm-with-<name>/`.
 3. Reuses or creates the DM `messaging_groups` row.
 4. Wires them via `messaging_group_agents` (which auto-creates the companion `agent_destinations` row).
-5. Seeds the welcome message directly into the DM session's `inbound.db` (sender tagged `System`). The running service's host-sweep picks it up on the next pass and wakes the container through the normal path — no CLI-socket hand-off, no `cli:local` identity on the new agent's permission surface.
+5. Hands the welcome message to the running service via its CLI socket (`data/cli.sock`), targeting the DM messaging group. The service routes it into the DM session, which wakes the container synchronously. If the socket isn't reachable (service down), falls back to a direct `inbound.db` write that the next host sweep picks up.
 
 Show the script's output to the user.
 
 ## 5. Verify
 
-The welcome is written to `inbound.db` immediately; the wait is host-sweep pickup (≤60s) plus container cold-start (~60s on first launch) before the agent processes the message and the reply flows through `outbound.db` to the channel.
+The welcome DM is queued synchronously; the only wait is container cold-start (~60s on first launch) before the agent processes the message and the reply flows through `outbound.db` to the channel.
 
 Do not tail the log or poll in a sleep loop. Ask the user in plain text:
 

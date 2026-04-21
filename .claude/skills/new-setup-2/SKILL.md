@@ -92,7 +92,7 @@ When the user picks one:
      ```
 
 2. **Capture platform IDs.** After the `/add-<channel>` skill finishes (or after inline credentials for Telegram), you need two values: the operator's user-id on that platform, and the chat/channel platform-id. Each channel surfaces these differently — consult the **Channel Info** section at the bottom of that skill's `SKILL.md` for the exact path. For Telegram, run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent <main|wire-to:folder|new-agent:folder>` directly and follow its `PAIR_TELEGRAM_ISSUED`/`PAIR_TELEGRAM STATUS=success` blocks — `PLATFORM_ID` and `ADMIN_USER_ID` land in the success block.
-3. **Wire the agent.** Run `init-first-agent.ts` in DM mode:
+3. **Wire the agent.** Run `init-first-agent.ts` in DM mode with `--no-cli-bonus` (this keeps the new agent off the CLI messaging group so the pre-existing throwaway agent still owns CLI routing cleanly):
 
    ```
    pnpm exec tsx scripts/init-first-agent.ts \
@@ -100,7 +100,8 @@ When the user picks one:
      --user-id "<platform-user-id>" \
      --platform-id "<platform-chat-id>" \
      --display-name "<OPERATOR_NAME>" \
-     --agent-name "<AGENT_NAME>"
+     --agent-name "<AGENT_NAME>" \
+     --no-cli-bonus
    ```
 
 4. **Announce.** On success, emit the encouragement line verbatim:

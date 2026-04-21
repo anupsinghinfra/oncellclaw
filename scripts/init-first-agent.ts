@@ -1,25 +1,24 @@
 /**
  * Init the first (or Nth) NanoClaw v2 agent for a DM channel.
  *
- * Wires a real DM channel (discord, telegram, etc.) to a new agent group,
- * then seeds a welcome message directly into the session's inbound DB. The
- * running service's host-sweep picks it up on its next pass (within
- * SWEEP_INTERVAL_MS) and wakes the container through the normal path; the
- * agent introduces itself via the channel.
+ * Wires a real DM channel (discord, telegram, etc.) to a new agent group
+ * (and the local CLI channel as a convenience bonus), then hands a welcome
+ * message to the running service via its CLI socket. The service routes
+ * that message into the DM session, which wakes the container synchronously —
+ * the agent processes the welcome and DMs the operator through the normal
+ * delivery path.
  *
- * CLI channel wiring is NOT touched here — `scripts/init-cli-agent.ts` owns
- * the cli/local messaging group and its scratch agent. Keeping the two
- * scripts disjoint means no `cli:local` identity ever appears on the new
- * agent's permission surface, so the unknown-sender approval card that used
- * to fire when the welcome was queued via the CLI admin socket no longer
- * happens.
+ * For the CLI-only scratch agent used during `/new-setup`, see
+ * `scripts/init-cli-agent.ts` — that's a distinct flow and doesn't run
+ * through here.
  *
  * Creates/reuses: user, owner grant (if none), agent group + filesystem,
- * messaging group, wiring, session, welcome message.
+ * messaging group(s), wiring.
  *
- * Runs alongside the service (WAL-mode sqlite) — does NOT initialize channel
- * adapters, so there's no Gateway conflict. No IPC to the service is needed;
- * the sweep is the sole hand-off.
+ * Runs alongside the service (WAL-mode sqlite + CLI socket IPC) — does NOT
+ * initialize channel adapters, so there's no Gateway conflict. Requires
+ * the service to be running: the welcome hand-off goes over the CLI socket
+ * and fails loudly if the service isn't up.
  *
  * Usage:
  *   pnpm exec tsx scripts/init-first-agent.ts \
@@ -28,11 +27,13 @@
  *     --platform-id discord:@me:1491573333382523708 \
  *     --display-name "Gavriel" \
  *     [--agent-name "Andy"] \
- *     [--welcome "System instruction: ..."]
+ *     [--welcome "System instruction: ..."] \
+ *     [--no-cli-bonus]
  *
  * For direct-addressable channels (telegram, whatsapp, etc.), --platform-id
  * is typically the same as the handle in --user-id, with the channel prefix.
  */
+import net from 'net';
 import path from 'path';
 
 import { DATA_DIR } from '../src/config.js';
@@ -49,10 +50,10 @@ import { normalizeName } from '../src/modules/agent-to-agent/db/agent-destinatio
 import { grantRole, hasAnyOwner } from '../src/modules/permissions/db/user-roles.js';
 import { upsertUser } from '../src/modules/permissions/db/users.js';
 import { initGroupFilesystem } from '../src/group-init.js';
-import { resolveSession, writeSessionMessage } from '../src/session-manager.js';
 import type { AgentGroup, MessagingGroup } from '../src/types.js';
 
 interface Args {
+  noCliBonus: boolean;
   channel: string;
   userId: string;
   platformId: string;
@@ -64,12 +65,18 @@ interface Args {
 const DEFAULT_WELCOME =
   'System instruction: run /welcome to introduce yourself to the user on this new channel.';
 
+const CLI_CHANNEL = 'cli';
+const CLI_PLATFORM_ID = 'local';
+
 function parseArgs(argv: string[]): Args {
-  const out: Partial<Args> = {};
+  const out: Partial<Args> = { noCliBonus: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     const val = argv[i + 1];
     switch (key) {
+      case '--no-cli-bonus':
+        out.noCliBonus = true;
+        break;
       case '--channel':
         out.channel = (val ?? '').toLowerCase();
         i++;
@@ -108,6 +115,7 @@ function parseArgs(argv: string[]): Args {
   }
 
   return {
+    noCliBonus: out.noCliBonus ?? false,
     channel: out.channel!,
     userId: out.userId!,
     platformId: out.platformId!,
@@ -129,6 +137,24 @@ function generateId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function ensureCliMessagingGroup(now: string): MessagingGroup {
+  let cliMg = getMessagingGroupByPlatform(CLI_CHANNEL, CLI_PLATFORM_ID);
+  if (cliMg) return cliMg;
+
+  cliMg = {
+    id: generateId('mg'),
+    channel_type: CLI_CHANNEL,
+    platform_id: CLI_PLATFORM_ID,
+    name: 'Local CLI',
+    is_group: 0,
+    unknown_sender_policy: 'public',
+    created_at: now,
+  };
+  createMessagingGroup(cliMg);
+  console.log(`Created CLI messaging group: ${cliMg.id}`);
+  return cliMg;
+}
+
 function wireIfMissing(mg: MessagingGroup, ag: AgentGroup, now: string, label: string): void {
   const existing = getMessagingGroupAgentByPair(mg.id, ag.id);
   if (existing) {
@@ -139,8 +165,9 @@ function wireIfMissing(mg: MessagingGroup, ag: AgentGroup, now: string, label: s
     id: generateId('mga'),
     messaging_group_id: mg.id,
     agent_group_id: ag.id,
-    // DMs default to "respond to everything" via a '.' regex. Group chats
-    // default to mention-only; admins can upgrade via /manage-channels.
+    // DM / CLI (is_group=0) default to "respond to everything" via a '.' regex.
+    // Group chats default to mention-only; admins can upgrade to mention-sticky
+    // via /manage-channels once the agent is in use.
     engage_mode: mg.is_group === 0 ? 'pattern' : 'mention',
     engage_pattern: mg.is_group === 0 ? '.' : null,
     sender_scope: 'all',
@@ -225,40 +252,88 @@ async function main(): Promise<void> {
     console.log(`Reusing messaging group: ${dmMg.id} (${platformId})`);
   }
 
-  // 4. Wire DM.
+  // 4. Wire DM (auto-creates companion agent_destinations row) and,
+  // unless suppressed, also wire the CLI channel so `pnpm run chat` works
+  // against the new agent immediately. `/new-setup-2` sets --no-cli-bonus
+  // so the scratch CLI agent from `/new-setup` keeps owning CLI routing.
   wireIfMissing(dmMg, ag, now, 'dm');
+  if (!args.noCliBonus) {
+    const cliMg = ensureCliMessagingGroup(now);
+    wireIfMissing(cliMg, ag, now, 'cli-bonus');
+  }
 
-  // 5. Seed the welcome directly into the session's inbound.db. The running
-  // service's sweep will observe trigger=1 and wake the container on its next
-  // pass — no IPC, no CLI socket, no `cli:local` sender in the router path.
-  seedWelcome(ag.id, dmMg, args.welcome);
+  // 5. Welcome delivery over the CLI socket. Router picks up the line,
+  // writes the message into the DM session's inbound.db, and wakes the
+  // container synchronously — no sweep wait.
+  await sendWelcomeViaCliSocket(dmMg, args.welcome);
 
   console.log('');
   console.log('Init complete.');
   console.log(`  owner:   ${userId}${promotedToOwner ? ' (promoted on first owner)' : ''}`);
   console.log(`  agent:   ${ag.name} [${ag.id}] @ groups/${folder}`);
   console.log(`  channel: ${args.channel} ${dmMg.platform_id}`);
+  if (!args.noCliBonus) {
+    console.log(`  cli:     cli/${CLI_PLATFORM_ID} wired — try \`pnpm run chat hi\``);
+  }
   console.log('');
-  console.log('Welcome seeded — the agent will greet you on the next sweep pass.');
+  console.log('Welcome DM queued — the agent will greet you shortly.');
 }
 
 /**
- * Write the welcome as a due inbound message on a shared session for the
- * new agent group + messaging group pair. Sender is tagged "System" — the
- * welcome carries no real user identity and never crosses the router's
- * sender-approval gate.
+ * Hand the welcome to the running service via its CLI Unix socket. The
+ * service's CLI adapter receives `{text, to}`, builds an InboundEvent
+ * targeting the DM messaging group, and calls routeInbound(). Router writes
+ * the message into inbound.db and wakes the container synchronously.
+ *
+ * Throws if the socket isn't reachable — this script requires the service
+ * to be running.
  */
-function seedWelcome(agentGroupId: string, mg: MessagingGroup, welcome: string): void {
-  const { session } = resolveSession(agentGroupId, mg.id, null, 'shared');
-  writeSessionMessage(agentGroupId, session.id, {
-    id: generateId('welcome'),
-    kind: 'chat',
-    timestamp: new Date().toISOString(),
-    channelType: mg.channel_type,
-    platformId: mg.platform_id,
-    threadId: null,
-    content: JSON.stringify({ text: welcome, sender: 'System' }),
-    trigger: 1,
+async function sendWelcomeViaCliSocket(dmMg: MessagingGroup, welcome: string): Promise<void> {
+  const sockPath = path.join(DATA_DIR, 'cli.sock');
+
+  await new Promise<void>((resolve, reject) => {
+    const socket = net.connect(sockPath);
+    let settled = false;
+
+    const settle = (err: Error | null) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.end();
+      } catch {
+        /* noop */
+      }
+      if (err) reject(err);
+      else resolve();
+    };
+
+    socket.once('error', (err) =>
+      settle(
+        new Error(
+          `CLI socket at ${sockPath} not reachable: ${err.message}. Is the NanoClaw service running?`,
+        ),
+      ),
+    );
+    socket.once('connect', () => {
+      const payload =
+        JSON.stringify({
+          text: welcome,
+          to: {
+            channelType: dmMg.channel_type,
+            platformId: dmMg.platform_id,
+            threadId: null,
+          },
+        }) + '\n';
+      socket.write(payload, (err) => {
+        if (err) {
+          settle(err);
+          return;
+        }
+        // Brief flush delay so the router picks up the line before we close.
+        // Router handles it synchronously once read, so 50ms is plenty.
+        setTimeout(() => settle(null), 50);
+      });
+    });
   });
 }
 
