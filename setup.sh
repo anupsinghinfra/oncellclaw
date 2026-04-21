@@ -72,6 +72,11 @@ install_deps() {
 
   cd "$PROJECT_ROOT"
 
+  # Corepack's first-use "Do you want to continue? [Y/n]" prompt would hang
+  # the script since we redirect stdout/stderr to the log file — the prompt
+  # is invisible but corepack still blocks on stdin. Auto-accept.
+  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
   # Enable corepack so `pnpm` shim lands on PATH.
   log "Enabling corepack"
   corepack enable >> "$LOG_FILE" 2>&1 || true
@@ -131,6 +136,16 @@ log "=== Bootstrap started ==="
 detect_platform
 
 check_node
+if [ "$NODE_OK" = "false" ]; then
+  log "Node missing or too old — running setup/install-node.sh"
+  echo "Node not found — installing via setup/install-node.sh"
+  if bash "$PROJECT_ROOT/setup/install-node.sh" 2>&1 | tee -a "$LOG_FILE"; then
+    hash -r 2>/dev/null || true
+    check_node
+  else
+    log "install-node.sh failed"
+  fi
+fi
 install_deps
 check_build_tools
 
