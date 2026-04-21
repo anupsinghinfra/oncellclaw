@@ -9,11 +9,12 @@
  * Config via env:
  *   NANOCLAW_TZ    IANA zone override (skip autodetect)
  *   NANOCLAW_SKIP  comma-separated step names to skip
- *                  (environment|timezone|container|mounts|service|verify)
+ *                  (environment|timezone|container|onecli|mounts|service|verify)
  *
- * Credential setup (OneCLI + channel auth + `/manage-channels`) is *not*
- * scripted — those require interactive platform flows and are handled by
- * `/setup`, `/add-<channel>`, and `/manage-channels` afterwards.
+ * OneCLI is installed and configured here, but secret registration (the
+ * Anthropic token or API key), channel auth, and `/manage-channels` stay
+ * interactive — they need human input. Finish those with `/setup` §4
+ * onwards, `/add-<channel>`, and `/manage-channels`.
  */
 import { spawn } from 'child_process';
 
@@ -114,6 +115,22 @@ async function main(): Promise<void> {
     }
   }
 
+  if (!skip.has('onecli')) {
+    const res = await runStep('onecli');
+    if (!res.ok) {
+      if (res.fields.ERROR === 'onecli_not_on_path_after_install') {
+        fail(
+          'OneCLI installed but not on PATH.',
+          'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"`, then retry.',
+        );
+      }
+      fail(
+        `OneCLI install failed (${res.fields.ERROR ?? 'unknown'})`,
+        'Check that curl + a writable ~/.local/bin are available; re-run `pnpm run setup:auto`.',
+      );
+    }
+  }
+
   if (!skip.has('mounts')) {
     const res = await runStep('mounts', ['--empty']);
     if (!res.ok && res.fields.STATUS !== 'skipped') {
@@ -143,7 +160,7 @@ async function main(): Promise<void> {
     if (!res.ok) {
       console.log('\n[setup:auto] Scripted steps done. Remaining (interactive):');
       if (res.fields.CREDENTIALS !== 'configured') {
-        console.log('  • OneCLI + Anthropic secret — see `/setup` §4 or https://onecli.sh');
+        console.log('  • Register an Anthropic secret in OneCLI — see `/setup` §4');
       }
       if (!res.fields.CONFIGURED_CHANNELS) {
         console.log('  • Install a channel: `/add-discord`, `/add-slack`, `/add-telegram`, …');
