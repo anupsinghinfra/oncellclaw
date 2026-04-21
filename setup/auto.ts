@@ -7,9 +7,12 @@
  * module check). This driver picks up from there.
  *
  * Config via env:
- *   NANOCLAW_TZ    IANA zone override (skip autodetect)
- *   NANOCLAW_SKIP  comma-separated step names to skip
- *                  (environment|timezone|container|onecli|auth|mounts|service|verify)
+ *   NANOCLAW_TZ            IANA zone override (skip autodetect)
+ *   NANOCLAW_DISPLAY_NAME  operator name for the CLI agent (default: $USER)
+ *   NANOCLAW_AGENT_NAME    agent persona name (default: display name)
+ *   NANOCLAW_SKIP          comma-separated step names to skip
+ *                          (environment|timezone|container|onecli|auth|
+ *                           mounts|service|cli-agent|verify)
  *
  * Anthropic credential registration runs via setup/register-claude-token.sh
  * (the only step that truly requires human input — browser sign-in or a
@@ -194,6 +197,24 @@ async function main(): Promise<void> {
     }
   }
 
+  if (!skip.has('cli-agent')) {
+    const displayName =
+      process.env.NANOCLAW_DISPLAY_NAME?.trim() ||
+      process.env.USER?.trim() ||
+      'Operator';
+    const agentName = process.env.NANOCLAW_AGENT_NAME?.trim();
+    const args = ['--display-name', displayName];
+    if (agentName) args.push('--agent-name', agentName);
+
+    const res = await runStep('cli-agent', args);
+    if (!res.ok) {
+      fail(
+        'CLI agent wiring failed',
+        'Re-run `pnpm exec tsx scripts/init-cli-agent.ts --display-name "<your name>"` to fix.',
+      );
+    }
+  }
+
   if (!skip.has('verify')) {
     const res = await runStep('verify');
     if (!res.ok) {
@@ -202,10 +223,10 @@ async function main(): Promise<void> {
         console.log('  • Anthropic secret not detected — re-run `bash setup/register-claude-token.sh`');
       }
       if (!res.fields.CONFIGURED_CHANNELS) {
-        console.log('  • Install a channel: `/add-discord`, `/add-slack`, `/add-telegram`, …');
-      }
-      if (res.fields.REGISTERED_GROUPS === '0') {
-        console.log('  • Wire the channel to an agent group: `/manage-channels`');
+        console.log(
+          '  • Optional: add a messaging channel — `/add-discord`, `/add-slack`, `/add-telegram`, …',
+        );
+        console.log('    (CLI channel is already wired: `pnpm run chat hi`)');
       }
       return;
     }
