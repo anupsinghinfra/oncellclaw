@@ -3,7 +3,7 @@ import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } 
 import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { getStoredSessionId, setStoredSessionId, clearStoredSessionId } from './db/session-state.js';
-import { formatMessages, extractRouting, categorizeMessage, stripInternalTags, type RoutingContext } from './formatter.js';
+import { formatMessages, extractRouting, categorizeMessage, isClearCommand, stripInternalTags, type RoutingContext } from './formatter.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -23,12 +23,6 @@ export interface PollLoopConfig {
   systemContext?: {
     instructions?: string;
   };
-  /**
-   * Set of user IDs allowed to run admin commands (e.g. /clear) in this
-   * agent group. Host populates from owners + global admins + scoped admins
-   * at container wake time, so role changes take effect on next spawn.
-   */
-  adminUserIds?: Set<string>;
 }
 
 /**
@@ -90,74 +84,36 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     const routing = extractRouting(messages);
 
-    // Handle commands: categorize chat messages
-    const adminUserIds = config.adminUserIds ?? new Set<string>();
-    const normalMessages = [];
+    // Command handling: the host router gates filtered and unauthorized
+    // admin commands before they reach the container. The only command
+    // the runner handles directly is /clear (session reset).
+    const normalMessages: MessageInRow[] = [];
     const commandIds: string[] = [];
 
     for (const msg of messages) {
-      if (msg.kind !== 'chat' && msg.kind !== 'chat-sdk') {
-        normalMessages.push(msg);
-        continue;
-      }
-
-      const cmdInfo = categorizeMessage(msg);
-
-      if (cmdInfo.category === 'filtered') {
-        // Silently drop — mark completed, don't process
-        log(`Filtered command: ${cmdInfo.command} (msg: ${msg.id})`);
+      if ((msg.kind === 'chat' || msg.kind === 'chat-sdk') && isClearCommand(msg)) {
+        log('Clearing session (resetting continuation)');
+        continuation = undefined;
+        clearStoredSessionId();
+        writeMessageOut({
+          id: generateId(),
+          kind: 'chat',
+          platform_id: routing.platformId,
+          channel_type: routing.channelType,
+          thread_id: routing.threadId,
+          content: JSON.stringify({ text: 'Session cleared.' }),
+        });
         commandIds.push(msg.id);
         continue;
       }
-
-      if (cmdInfo.category === 'admin') {
-        if (!cmdInfo.senderId || !adminUserIds.has(cmdInfo.senderId)) {
-          log(`Admin command denied: ${cmdInfo.command} from ${cmdInfo.senderId} (msg: ${msg.id})`);
-          writeMessageOut({
-            id: generateId(),
-            kind: 'chat',
-            platform_id: routing.platformId,
-            channel_type: routing.channelType,
-            thread_id: routing.threadId,
-            content: JSON.stringify({ text: `Permission denied: ${cmdInfo.command} requires admin access.` }),
-          });
-          commandIds.push(msg.id);
-          continue;
-        }
-        // Handle admin commands directly
-        if (cmdInfo.command === '/clear') {
-          log('Clearing session (resetting continuation)');
-          continuation = undefined;
-          clearStoredSessionId();
-          writeMessageOut({
-            id: generateId(),
-            kind: 'chat',
-            platform_id: routing.platformId,
-            channel_type: routing.channelType,
-            thread_id: routing.threadId,
-            content: JSON.stringify({ text: 'Session cleared.' }),
-          });
-          commandIds.push(msg.id);
-          continue;
-        }
-
-        // Other admin commands — pass through to agent
-        normalMessages.push(msg);
-        continue;
-      }
-
-      // passthrough or none
       normalMessages.push(msg);
     }
 
-    // Mark filtered/denied command messages as completed immediately
     if (commandIds.length > 0) {
       markCompleted(commandIds);
     }
 
-    // If all messages were filtered commands, skip processing
     if (normalMessages.length === 0) {
-      // Mark remaining processing IDs as completed
       const remainingIds = ids.filter((id) => !commandIds.includes(id));
       if (remainingIds.length > 0) markCompleted(remainingIds);
       log(`All ${messages.length} message(s) were commands, skipping query`);
@@ -289,17 +245,14 @@ async function processQuery(query: AgentQuery, routing: RoutingContext): Promise
   const pollHandle = setInterval(() => {
     if (done) return;
 
-    // Skip system messages (MCP tool responses) and admin commands (need fresh query).
+    // Skip system messages (MCP tool responses) and /clear (needs fresh query).
     // Also defer messages whose thread_id differs from the active turn's routing
     // — mixing threads into one streaming turn would send the reply to the wrong
     // thread because `routing` is captured at turn start. The next turn will pick
     // them up with fresh routing.
     const newMessages = getPendingMessages().filter((m) => {
       if (m.kind === 'system') return false;
-      if (m.kind === 'chat' || m.kind === 'chat-sdk') {
-        const cmd = categorizeMessage(m);
-        if (cmd.category === 'admin') return false;
-      }
+      if ((m.kind === 'chat' || m.kind === 'chat-sdk') && isClearCommand(m)) return false;
       if ((m.thread_id ?? null) !== (routing.threadId ?? null)) return false;
       return true;
     });

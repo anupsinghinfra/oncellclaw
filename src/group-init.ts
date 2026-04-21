@@ -37,12 +37,12 @@ const DEFAULT_SETTINGS_JSON =
  * an already-initialized group is a no-op.
  *
  * Called once per group lifetime: at creation, or defensively from
- * `buildMounts()` for groups that pre-date this code path. After init, the
- * host never overwrites any of these paths automatically — agents own them.
- * To pull in upstream changes, use the host-mediated reset/refresh tools.
+ * `buildMounts()` for groups that pre-date this code path.
+ *
+ * Source code and skills are shared RO mounts — not copied per-group.
+ * Skill symlinks are synced at spawn time by container-runner.ts.
  */
 export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: string }): void {
-  const projectRoot = process.cwd();
   const initialized: string[] = [];
 
   // 1. groups/<folder>/ — group memory + working dir
@@ -97,23 +97,12 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
     initialized.push('settings.json');
   }
 
+  // Skills directory — created empty here; symlinks are synced at spawn
+  // time by container-runner.ts based on container.json skills selection.
   const skillsDst = path.join(claudeDir, 'skills');
   if (!fs.existsSync(skillsDst)) {
-    const skillsSrc = path.join(projectRoot, 'container', 'skills');
-    if (fs.existsSync(skillsSrc)) {
-      fs.cpSync(skillsSrc, skillsDst, { recursive: true });
-      initialized.push('skills/');
-    }
-  }
-
-  // 3. data/v2-sessions/<id>/agent-runner-src/ — per-group source copy
-  const groupRunnerDir = path.join(DATA_DIR, 'v2-sessions', group.id, 'agent-runner-src');
-  if (!fs.existsSync(groupRunnerDir)) {
-    const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
-    if (fs.existsSync(agentRunnerSrc)) {
-      fs.cpSync(agentRunnerSrc, groupRunnerDir, { recursive: true });
-      initialized.push('agent-runner-src/');
-    }
+    fs.mkdirSync(skillsDst, { recursive: true });
+    initialized.push('skills/');
   }
 
   if (initialized.length > 0) {
