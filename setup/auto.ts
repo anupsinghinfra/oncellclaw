@@ -20,65 +20,247 @@
  * Run `pnpm exec tsx setup/index.ts --step timezone -- --tz <zone>` later
  * if autodetect is wrong (e.g. headless server with TZ=UTC).
  *
- * Anthropic credential registration runs via setup/register-claude-token.sh
- * (the only step that truly requires human input — browser sign-in or a
- * pasted token/key). Channel auth and `/manage-channels` remain separate
- * because they're platform-specific and typically handled via `/add-<channel>`
- * and `/manage-channels` after this driver completes.
+ * UI is rendered with @clack/prompts: spinners wrap each step, child output
+ * is captured quietly and only dumped on failure. Interactive children
+ * (register-claude-token.sh, add-telegram.sh) bypass the spinner and run
+ * with inherited stdio — clack resumes cleanly on the next step.
  */
 import { spawn, spawnSync } from 'child_process';
-import { createInterface } from 'readline/promises';
+
+import * as p from '@clack/prompts';
+import k from 'kleur';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
 const DEFAULT_AGENT_NAME = 'Nano';
 
-type Fields = Record<string, string>;
-type StepResult = { ok: boolean; fields: Fields; exitCode: number };
+/**
+ * Brand palette, pulled from assets/nanoclaw-logo.png:
+ *   brand cyan  ≈ #2BB7CE  — the "Claw" wordmark + mascot body
+ *   brand navy  ≈ #171B3B  — the dark logo background + outlines
+ * Gated on TTY + NO_COLOR so piped / CI output stays plain. Falls back to
+ * kleur's 16-color cyan when the terminal isn't truecolor.
+ */
+const USE_ANSI = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+const TRUECOLOR =
+  USE_ANSI &&
+  (process.env.COLORTERM === 'truecolor' || process.env.COLORTERM === '24bit');
 
-function parseStatus(stdout: string): Fields {
-  const out: Fields = {};
-  let inBlock = false;
-  for (const line of stdout.split('\n')) {
-    if (line.startsWith('=== NANOCLAW SETUP:')) {
-      inBlock = true;
-      continue;
+const brand = (s: string): string => {
+  if (!USE_ANSI) return s;
+  if (TRUECOLOR) return `\x1b[38;2;43;183;206m${s}\x1b[0m`;
+  return k.cyan(s);
+};
+const brandBold = (s: string): string => {
+  if (!USE_ANSI) return s;
+  if (TRUECOLOR) return `\x1b[1;38;2;43;183;206m${s}\x1b[0m`;
+  return k.bold(k.cyan(s));
+};
+const brandChip = (s: string): string => {
+  if (!USE_ANSI) return s;
+  if (TRUECOLOR) {
+    return `\x1b[48;2;43;183;206m\x1b[38;2;23;27;59m\x1b[1m${s}\x1b[0m`;
+  }
+  return k.bgCyan(k.black(k.bold(s)));
+};
+
+type Fields = Record<string, string>;
+type Block = { type: string; fields: Fields };
+type StepResult = {
+  ok: boolean;
+  exitCode: number;
+  blocks: Block[];
+  transcript: string;
+  /** The last block matching `stepName.toUpperCase()` if any. */
+  terminal: Block | null;
+};
+
+/**
+ * Streaming parser for `=== NANOCLAW SETUP: TYPE ===` blocks. Emits each
+ * block as it closes so the UI can react mid-stream (e.g. render a pairing
+ * code card as soon as pair-telegram emits it, rather than after the step
+ * has finished).
+ */
+class StatusStream {
+  private lineBuf = '';
+  private current: Block | null = null;
+  readonly blocks: Block[] = [];
+  transcript = '';
+
+  constructor(private readonly onBlock: (block: Block) => void) {}
+
+  write(chunk: string): void {
+    this.transcript += chunk;
+    this.lineBuf += chunk;
+    let idx: number;
+    while ((idx = this.lineBuf.indexOf('\n')) !== -1) {
+      const line = this.lineBuf.slice(0, idx);
+      this.lineBuf = this.lineBuf.slice(idx + 1);
+      this.processLine(line);
+    }
+  }
+
+  private processLine(line: string): void {
+    const start = line.match(/^=== NANOCLAW SETUP: (\S+) ===/);
+    if (start) {
+      this.current = { type: start[1], fields: {} };
+      return;
     }
     if (line.startsWith('=== END ===')) {
-      inBlock = false;
-      continue;
+      if (this.current) {
+        this.blocks.push(this.current);
+        this.onBlock(this.current);
+        this.current = null;
+      }
+      return;
     }
-    if (!inBlock) continue;
-    const idx = line.indexOf(':');
-    if (idx === -1) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
-    if (key) out[key] = value;
+    if (!this.current) return;
+    const colon = line.indexOf(':');
+    if (colon === -1) return;
+    const key = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+    if (key) this.current.fields[key] = value;
   }
-  return out;
 }
 
-function runStep(name: string, extra: string[] = []): Promise<StepResult> {
+/**
+ * Spawn a setup step as a child process, swallowing stdout/stderr into a
+ * buffer. The provided onBlock callback fires per status block as they
+ * parse. Returns when the child exits.
+ */
+function spawnStep(
+  stepName: string,
+  extra: string[],
+  onBlock: (block: Block) => void,
+): Promise<StepResult> {
   return new Promise((resolve) => {
-    console.log(`\n── ${name} ────────────────────────────────────`);
-    const args = ['exec', 'tsx', 'setup/index.ts', '--step', name];
+    const args = ['exec', 'tsx', 'setup/index.ts', '--step', stepName];
     if (extra.length > 0) args.push('--', ...extra);
 
-    const child = spawn('pnpm', args, { stdio: ['inherit', 'pipe', 'inherit'] });
-    let buf = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      const s = chunk.toString('utf-8');
-      buf += s;
-      process.stdout.write(s);
+    const child = spawn('pnpm', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const stream = new StatusStream(onBlock);
+
+    child.stdout.on('data', (chunk: Buffer) => stream.write(chunk.toString('utf-8')));
+    child.stderr.on('data', (chunk: Buffer) => {
+      stream.transcript += chunk.toString('utf-8');
     });
+
     child.on('close', (code) => {
-      const fields = parseStatus(buf);
+      // Step block types don't always mirror step names (e.g. `mounts` emits
+      // CONFIGURE_MOUNTS, `container` emits SETUP_CONTAINER). Any block with
+      // a STATUS field is a terminal block; the last one wins.
+      const terminal =
+        [...stream.blocks].reverse().find((b) => b.fields.STATUS) ?? null;
+      const status = terminal?.fields.STATUS;
+      const ok = code === 0 && (status === 'success' || status === 'skipped');
       resolve({
-        ok: code === 0 && fields.STATUS === 'success',
-        fields,
+        ok,
         exitCode: code ?? 1,
+        blocks: stream.blocks,
+        transcript: stream.transcript,
+        terminal,
       });
     });
   });
+}
+
+type SpinnerLabels = {
+  running: string;
+  done: string;
+  skipped?: string;
+  failed?: string;
+};
+
+/** Run a step under a clack spinner. Child output is captured; shown only on failure. */
+async function runQuietStep(
+  stepName: string,
+  labels: SpinnerLabels,
+  extra: string[] = [],
+): Promise<StepResult> {
+  return runUnderSpinner(labels, () => spawnStep(stepName, extra, () => {}));
+}
+
+/** Run an arbitrary child under a spinner, capturing its stdout/stderr. */
+async function runQuietChild(
+  cmd: string,
+  args: string[],
+  labels: SpinnerLabels,
+): Promise<{ ok: boolean; exitCode: number; transcript: string }> {
+  return runUnderSpinner(labels, () => spawnQuiet(cmd, args));
+}
+
+async function runUnderSpinner<
+  T extends { ok: boolean; transcript: string; terminal?: Block | null },
+>(
+  labels: SpinnerLabels,
+  work: () => Promise<T>,
+): Promise<T> {
+  const s = p.spinner();
+  const start = Date.now();
+  s.start(labels.running);
+  const tick = setInterval(() => {
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    s.message(`${labels.running} ${k.dim(`(${elapsed}s)`)}`);
+  }, 1000);
+
+  const result = await work();
+
+  clearInterval(tick);
+  const elapsed = Math.round((Date.now() - start) / 1000);
+  if (result.ok) {
+    const isSkipped = result.terminal?.fields.STATUS === 'skipped';
+    const msg = isSkipped && labels.skipped ? labels.skipped : labels.done;
+    s.stop(`${msg} ${k.dim(`(${elapsed}s)`)}`);
+  } else {
+    const failMsg = labels.failed ?? labels.running.replace(/…$/, ' failed');
+    s.stop(`${failMsg} ${k.dim(`(${elapsed}s)`)}`, 1);
+    dumpTranscriptOnFailure(result.transcript);
+  }
+  return result;
+}
+
+function spawnQuiet(
+  cmd: string,
+  args: string[],
+): Promise<{ ok: boolean; exitCode: number; transcript: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let transcript = '';
+    child.stdout.on('data', (c: Buffer) => { transcript += c.toString('utf-8'); });
+    child.stderr.on('data', (c: Buffer) => { transcript += c.toString('utf-8'); });
+    child.on('close', (code) => {
+      resolve({ ok: code === 0, exitCode: code ?? 1, transcript });
+    });
+  });
+}
+
+function dumpTranscriptOnFailure(transcript: string): void {
+  const lines = transcript.split('\n').filter((l) => {
+    if (l.startsWith('=== NANOCLAW SETUP:')) return false;
+    if (l.startsWith('=== END ===')) return false;
+    return true;
+  });
+  const tail = lines.slice(-40).join('\n').trimEnd();
+  if (tail) {
+    console.log();
+    console.log(k.dim(tail));
+    console.log();
+  }
+}
+
+function fail(msg: string, hint?: string): never {
+  p.log.error(msg);
+  if (hint) p.log.message(k.dim(hint));
+  p.log.message(k.dim('Logs: logs/setup.log'));
+  p.cancel('Setup aborted.');
+  process.exit(1);
+}
+
+function ensureAnswer<T>(value: T | symbol): T {
+  if (p.isCancel(value)) {
+    p.cancel('Setup cancelled.');
+    process.exit(0);
+  }
+  return value as T;
 }
 
 /**
@@ -89,7 +271,7 @@ function runStep(name: string, extra: string[] = []): Promise<StepResult> {
  * so the rest of the run inherits the docker group without a re-login.
  */
 function maybeReexecUnderSg(): void {
-  if (process.env.NANOCLAW_REEXEC_SG === '1') return; // already re-exec'd
+  if (process.env.NANOCLAW_REEXEC_SG === '1') return;
   if (process.platform !== 'linux') return;
   const info = spawnSync('docker', ['info'], { encoding: 'utf-8' });
   if (info.status === 0) return;
@@ -97,10 +279,7 @@ function maybeReexecUnderSg(): void {
   if (!/permission denied/i.test(err)) return;
   if (spawnSync('which', ['sg'], { stdio: 'ignore' }).status !== 0) return;
 
-  console.log(
-    '\n[setup:auto] Docker socket not accessible in current group — ' +
-      're-executing under `sg docker` to pick up new group membership.',
-  );
+  p.log.warn('Docker socket not accessible in current group — re-executing under `sg docker`.');
   const res = spawnSync('sg', ['docker', '-c', 'pnpm run setup:auto'], {
     stdio: 'inherit',
     env: { ...process.env, NANOCLAW_REEXEC_SG: '1' },
@@ -121,67 +300,121 @@ function anthropicSecretExists(): boolean {
   }
 }
 
-async function askDisplayName(fallback: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await rl.question(
-      `\nWhat should your agents call you? [${fallback}]: `,
-    );
-    return answer.trim() || fallback;
-  } finally {
-    rl.close();
+function runInheritScript(cmd: string, args: string[]): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: 'inherit' });
+    child.on('close', (code) => resolve(code ?? 1));
+  });
+}
+
+function formatCodeCard(code: string): string {
+  const spaced = code.split('').join('   ');
+  return [
+    '',
+    `   ${brandBold(spaced)}`,
+    '',
+    k.dim('   Send these digits from Telegram to your bot.'),
+  ].join('\n');
+}
+
+async function runPairTelegram(): Promise<StepResult> {
+  const s = p.spinner();
+  s.start('Creating pairing code…');
+  let spinnerActive = true;
+
+  const stopSpinner = (msg: string, code?: number) => {
+    if (spinnerActive) {
+      s.stop(msg, code);
+      spinnerActive = false;
+    }
+  };
+
+  const result = await spawnStep('pair-telegram', ['--intent', 'main'], (block) => {
+    if (block.type === 'PAIR_TELEGRAM_CODE') {
+      const reason = block.fields.REASON ?? 'initial';
+      if (reason === 'initial') {
+        stopSpinner('Pairing code ready.');
+      } else {
+        stopSpinner('Previous code invalidated. New code below.');
+      }
+      p.note(formatCodeCard(block.fields.CODE ?? '????'), 'Pairing code');
+      s.start('Waiting for the code from Telegram…');
+      spinnerActive = true;
+    } else if (block.type === 'PAIR_TELEGRAM_ATTEMPT') {
+      stopSpinner(`Received "${block.fields.CANDIDATE ?? '?'}" — doesn't match.`);
+      s.start('Waiting for the correct code…');
+      spinnerActive = true;
+    } else if (block.type === 'PAIR_TELEGRAM') {
+      if (block.fields.STATUS === 'success') {
+        stopSpinner('Telegram paired.');
+      } else {
+        stopSpinner(`Pairing failed: ${block.fields.ERROR ?? 'unknown'}`, 1);
+      }
+    }
+  });
+
+  // Safety net: if the child died without emitting a terminal block, make
+  // sure we don't leave the spinner running.
+  if (spinnerActive) {
+    stopSpinner(result.ok ? 'Done.' : 'Pairing exited unexpectedly.', result.ok ? 0 : 1);
+    if (!result.ok) dumpTranscriptOnFailure(result.transcript);
   }
+  return result;
+}
+
+async function askDisplayName(fallback: string): Promise<string> {
+  const answer = ensureAnswer(
+    await p.text({
+      message: 'What should your agents call you?',
+      placeholder: fallback,
+      defaultValue: fallback,
+    }),
+  );
+  return (answer as string).trim() || fallback;
 }
 
 async function askAgentName(fallback: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await rl.question(
-      `\nWhat should your agent be called? [${fallback}]: `,
-    );
-    return answer.trim() || fallback;
-  } finally {
-    rl.close();
-  }
+  const answer = ensureAnswer(
+    await p.text({
+      message: 'What should your messaging agent be called?',
+      placeholder: fallback,
+      defaultValue: fallback,
+    }),
+  );
+  return (answer as string).trim() || fallback;
 }
 
 async function askChannelChoice(): Promise<'telegram' | 'skip'> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    console.log('\nConnect a messaging app so you can chat from your phone?');
-    console.log('  1) Telegram');
-    console.log('  2) Skip — just use the CLI for now');
-    const answer = (await rl.question('Choose [1/2]: ')).trim();
-    return answer === '1' ? 'telegram' : 'skip';
-  } finally {
-    rl.close();
+  const choice = ensureAnswer(
+    await p.select({
+      message: 'Connect a messaging app so you can chat from your phone?',
+      options: [
+        { value: 'telegram', label: 'Telegram', hint: 'recommended' },
+        { value: 'skip', label: 'Skip — use the CLI only' },
+      ],
+    }),
+  );
+  return choice as 'telegram' | 'skip';
+}
+
+function printIntro(): void {
+  const isReexec = process.env.NANOCLAW_REEXEC_SG === '1';
+  const wordmark = `${k.bold('Nano')}${brandBold('Claw')}`;
+
+  if (isReexec) {
+    p.intro(`${brandChip(' setup:auto ')}  ${wordmark}  ${k.dim('· resuming under docker group')}`);
+    return;
   }
-}
 
-function runBashScript(relPath: string): Promise<number> {
-  return new Promise((resolve) => {
-    const child = spawn('bash', [relPath], { stdio: 'inherit' });
-    child.on('close', (code) => resolve(code ?? 1));
-  });
-}
-
-function runTsxScript(relPath: string, args: string[] = []): Promise<number> {
-  return new Promise((resolve) => {
-    const child = spawn('pnpm', ['exec', 'tsx', relPath, ...args], {
-      stdio: 'inherit',
-    });
-    child.on('close', (code) => resolve(code ?? 1));
-  });
-}
-
-function fail(msg: string, hint?: string): never {
-  console.error(`\n[setup:auto] ${msg}`);
-  if (hint) console.error(`            ${hint}`);
-  console.error('            Logs: logs/setup.log');
-  process.exit(1);
+  console.log();
+  console.log(`  ${wordmark}`);
+  console.log(`  ${k.dim('end-to-end scripted setup of your personal assistant')}`);
+  p.intro(`${brandChip(' setup:auto ')}`);
 }
 
 async function main(): Promise<void> {
+  printIntro();
+
   const skip = new Set(
     (process.env.NANOCLAW_SKIP ?? '')
       .split(',')
@@ -190,92 +423,113 @@ async function main(): Promise<void> {
   );
 
   if (!skip.has('environment')) {
-    const env = await runStep('environment');
-    if (!env.ok) fail('environment check failed');
+    const res = await runQuietStep(
+      'environment',
+      { running: 'Checking environment…', done: 'Environment OK.' },
+    );
+    if (!res.ok) fail('Environment check failed.');
   }
 
   if (!skip.has('container')) {
-    const res = await runStep('container');
+    const res = await runQuietStep('container', {
+      running: 'Building the agent container image…',
+      done: 'Container image ready.',
+      failed: 'Container build failed.',
+    });
     if (!res.ok) {
-      if (res.fields.ERROR === 'runtime_not_available') {
+      const err = res.terminal?.fields.ERROR;
+      if (err === 'runtime_not_available') {
         fail(
           'Docker is not available and could not be started automatically.',
           'Install Docker Desktop or start it manually, then retry.',
         );
       }
-      if (res.fields.ERROR === 'docker_group_not_active') {
+      if (err === 'docker_group_not_active') {
         fail(
           'Docker was just installed but your shell is not yet in the `docker` group.',
-          'Log out and back in (or run `newgrp docker` in a new shell), then retry `pnpm run setup:auto`.',
+          'Log out and back in (or run `newgrp docker` in a new shell), then retry.',
         );
       }
       fail(
-        'container build/test failed',
-        'For stale build cache: `docker builder prune -f`, then retry `pnpm run setup:auto`.',
+        'Container build/test failed.',
+        'For stale cache: `docker builder prune -f`, then retry `pnpm run setup:auto`.',
       );
     }
     maybeReexecUnderSg();
   }
 
   if (!skip.has('onecli')) {
-    const res = await runStep('onecli');
+    const res = await runQuietStep('onecli', {
+      running: 'Installing OneCLI credential vault…',
+      done: 'OneCLI installed.',
+    });
     if (!res.ok) {
-      if (res.fields.ERROR === 'onecli_not_on_path_after_install') {
+      const err = res.terminal?.fields.ERROR;
+      if (err === 'onecli_not_on_path_after_install') {
         fail(
           'OneCLI installed but not on PATH.',
           'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"`, then retry.',
         );
       }
       fail(
-        `OneCLI install failed (${res.fields.ERROR ?? 'unknown'})`,
-        'Check that curl + a writable ~/.local/bin are available; re-run `pnpm run setup:auto`.',
+        `OneCLI install failed (${err ?? 'unknown'}).`,
+        'Check that curl + a writable ~/.local/bin are available, then retry.',
       );
     }
   }
 
   if (!skip.has('auth')) {
     if (anthropicSecretExists()) {
-      console.log(
-        '\n── auth ────────────────────────────────────\n' +
-          '[setup:auto] OneCLI already has an Anthropic secret — skipping.',
-      );
+      p.log.success('OneCLI already has an Anthropic secret — skipping.');
     } else {
-      console.log('\n── auth ────────────────────────────────────');
-      const code = await runBashScript('setup/register-claude-token.sh');
+      p.log.step('Registering your Anthropic credential…');
+      console.log(
+        k.dim('   (browser sign-in or paste a token/key — this part is interactive)'),
+      );
+      console.log();
+      const code = await runInheritScript('bash', ['setup/register-claude-token.sh']);
+      console.log();
       if (code !== 0) {
         fail(
           'Anthropic credential registration failed or was aborted.',
           'Re-run `bash setup/register-claude-token.sh` or handle via `/setup` §4.',
         );
       }
+      p.log.success('Anthropic credential registered with OneCLI.');
     }
   }
 
   if (!skip.has('mounts')) {
-    const res = await runStep('mounts', ['--empty']);
-    if (!res.ok && res.fields.STATUS !== 'skipped') {
-      fail('mount allowlist step failed');
-    }
+    const res = await runQuietStep('mounts', {
+      running: 'Writing mount allowlist…',
+      done: 'Mount allowlist in place.',
+      skipped: 'Mount allowlist already configured.',
+    }, ['--empty']);
+    if (!res.ok) fail('Mount allowlist step failed.');
   }
 
   if (!skip.has('service')) {
-    const res = await runStep('service');
+    const res = await runQuietStep('service', {
+      running: 'Installing the background service…',
+      done: 'Service installed and running.',
+    });
     if (!res.ok) {
       fail(
-        'service install failed',
+        'Service install failed.',
         'Check logs/nanoclaw.error.log, or run `/setup` to iterate interactively.',
       );
     }
-    if (res.fields.DOCKER_GROUP_STALE === 'true') {
-      console.warn(
-        '\n[setup:auto] Docker group stale in systemd session. Run:\n' +
-          '             sudo setfacl -m u:$(whoami):rw /var/run/docker.sock\n' +
-          '             systemctl --user restart nanoclaw',
+    if (res.terminal?.fields.DOCKER_GROUP_STALE === 'true') {
+      p.log.warn('Docker group stale in systemd session.');
+      p.log.message(
+        k.dim(
+          '  sudo setfacl -m u:$(whoami):rw /var/run/docker.sock\n' +
+            '  systemctl --user restart nanoclaw',
+        ),
       );
     }
   }
 
-  // Resolved once, reused by cli-agent + channel wiring.
   let displayName: string | undefined;
   const needsDisplayName = !skip.has('cli-agent') || !skip.has('channel');
   if (needsDisplayName) {
@@ -285,15 +539,17 @@ async function main(): Promise<void> {
   }
 
   if (!skip.has('cli-agent')) {
-    const res = await runStep('cli-agent', [
-      '--display-name',
-      displayName!,
-      '--agent-name',
-      CLI_AGENT_NAME,
-    ]);
+    const res = await runQuietStep(
+      'cli-agent',
+      {
+        running: 'Wiring the terminal agent…',
+        done: 'Terminal agent wired (try `pnpm run chat hi`).',
+      },
+      ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME],
+    );
     if (!res.ok) {
       fail(
-        'CLI agent wiring failed',
+        'CLI agent wiring failed.',
         `Re-run \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName!}" --agent-name "${CLI_AGENT_NAME}"\` to fix.`,
       );
     }
@@ -302,15 +558,19 @@ async function main(): Promise<void> {
   if (!skip.has('channel')) {
     const choice = await askChannelChoice();
     if (choice === 'telegram') {
-      const installCode = await runBashScript('setup/add-telegram.sh');
+      p.log.step('Installing the Telegram adapter and collecting your bot token…');
+      console.log();
+      const installCode = await runInheritScript('bash', ['setup/add-telegram.sh']);
+      console.log();
       if (installCode !== 0) {
         fail(
           'Telegram install failed.',
-          'Re-run `bash setup/add-telegram.sh`, then `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent main`.',
+          'Re-run `bash setup/add-telegram.sh`, then retry `pnpm run setup:auto`.',
         );
       }
+      p.log.success('Telegram adapter installed.');
 
-      const pair = await runStep('pair-telegram', ['--intent', 'main']);
+      const pair = await runPairTelegram();
       if (!pair.ok) {
         fail(
           'Telegram pairing failed.',
@@ -318,8 +578,8 @@ async function main(): Promise<void> {
         );
       }
 
-      const platformId = pair.fields.PLATFORM_ID;
-      const pairedUserId = pair.fields.PAIRED_USER_ID;
+      const platformId = pair.terminal?.fields.PLATFORM_ID;
+      const pairedUserId = pair.terminal?.fields.PAIRED_USER_ID;
       if (!platformId || !pairedUserId) {
         fail(
           'pair-telegram succeeded but did not return PLATFORM_ID and PAIRED_USER_ID.',
@@ -331,54 +591,72 @@ async function main(): Promise<void> {
         process.env.NANOCLAW_AGENT_NAME?.trim() ||
         (await askAgentName(DEFAULT_AGENT_NAME));
 
-      console.log('\n── wiring first agent ──────────────────────────');
-      const initCode = await runTsxScript('scripts/init-first-agent.ts', [
-        '--channel', 'telegram',
-        '--user-id', pairedUserId,
-        '--platform-id', platformId,
-        '--display-name', displayName!,
-        '--agent-name', agentName,
-      ]);
-      if (initCode !== 0) {
+      const init = await runQuietChild(
+        'pnpm',
+        [
+          'exec', 'tsx', 'scripts/init-first-agent.ts',
+          '--channel', 'telegram',
+          '--user-id', pairedUserId,
+          '--platform-id', platformId,
+          '--display-name', displayName!,
+          '--agent-name', agentName,
+        ],
+        {
+          running: `Wiring ${agentName} to your Telegram chat…`,
+          done: `${agentName} is wired — welcome DM incoming.`,
+        },
+      );
+      if (!init.ok) {
         fail(
           'Wiring the Telegram agent failed.',
           `Re-run \`pnpm exec tsx scripts/init-first-agent.ts --channel telegram --user-id "${pairedUserId}" --platform-id "${platformId}" --display-name "${displayName!}" --agent-name "${agentName}"\`.`,
         );
       }
-
-      console.log(
-        `\n[setup:auto] Telegram is wired. ${agentName} will DM you a welcome shortly.`,
-      );
+    } else {
+      p.log.info('No messaging channel wired — you can add one later with `/add-<channel>`.');
     }
   }
 
   if (!skip.has('verify')) {
-    const res = await runStep('verify');
+    const res = await runQuietStep('verify', {
+      running: 'Verifying the install…',
+      done: 'Install verified.',
+      failed: 'Verification found issues.',
+    });
     if (!res.ok) {
-      console.log('\n[setup:auto] Scripted steps done. Remaining (interactive):');
-      if (res.fields.CREDENTIALS !== 'configured') {
-        console.log('  • Anthropic secret not detected — re-run `bash setup/register-claude-token.sh`');
+      const notes: string[] = [];
+      if (res.terminal?.fields.CREDENTIALS !== 'configured') {
+        notes.push('• Anthropic secret not detected — re-run `bash setup/register-claude-token.sh`.');
       }
-      if (res.fields.AGENT_PING && res.fields.AGENT_PING !== 'ok' && res.fields.AGENT_PING !== 'skipped') {
-        console.log(
-          `  • CLI agent did not reply (status: ${res.fields.AGENT_PING}). ` +
+      const agentPing = res.terminal?.fields.AGENT_PING;
+      if (agentPing && agentPing !== 'ok' && agentPing !== 'skipped') {
+        notes.push(
+          `• CLI agent did not reply (status: ${agentPing}). ` +
             'Check `logs/nanoclaw.log` and `groups/*/logs/container-*.log`, then try `pnpm run chat hi`.',
         );
       }
-      if (!res.fields.CONFIGURED_CHANNELS) {
-        console.log(
-          '  • Optional: add a messaging channel — `/add-discord`, `/add-slack`, `/add-telegram`, …',
-        );
-        console.log('    (CLI channel is already wired: `pnpm run chat hi`)');
+      if (!res.terminal?.fields.CONFIGURED_CHANNELS) {
+        notes.push('• Optional: add a messaging channel — `/add-discord`, `/add-slack`, `/add-telegram`, …');
       }
+      if (notes.length > 0) {
+        p.note(notes.join('\n'), 'What’s left');
+      }
+      p.outro(k.yellow('Scripted steps done — some pieces still need you.'));
       return;
     }
   }
 
-  console.log('\n[setup:auto] Complete.');
+  const nextSteps = [
+    `${k.cyan('Chat from the CLI:')}     pnpm run chat hi`,
+    `${k.cyan('Tail host logs:')}        tail -f logs/nanoclaw.log`,
+    `${k.cyan('Open Claude Code:')}      claude`,
+  ].join('\n');
+  p.note(nextSteps, 'Next steps');
+  p.outro(k.green('Setup complete.'));
 }
 
 main().catch((err) => {
-  console.error(err);
+  p.log.error(err instanceof Error ? err.message : String(err));
+  p.cancel('Setup aborted.');
   process.exit(1);
 });

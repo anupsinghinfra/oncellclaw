@@ -2,11 +2,16 @@
  * Step: pair-telegram — issue a one-time pairing code and wait for the
  * operator to send the code from the chat they want to register.
  *
- * Used exclusively by `setup:auto` / `bash nanoclaw.sh` on this branch. Human-
- * facing output is a focused banner for the code (no parseable block), plus a
- * short line for wrong attempts / regenerations. A single machine-readable
- * PAIR_TELEGRAM status block is still emitted at the end so the parent driver
- * can pick up PLATFORM_ID / PAIRED_USER_ID / IS_GROUP.
+ * Emits machine-readable status blocks only. The parent driver
+ * (`setup:auto`) renders the code / attempt / success UI with clack. Running
+ * this step directly will look sparse — that's intentional.
+ *
+ * Blocks emitted:
+ *   PAIR_TELEGRAM_CODE       { CODE, REASON=initial|regenerated }
+ *   PAIR_TELEGRAM_ATTEMPT    { CANDIDATE }
+ *   PAIR_TELEGRAM (final)    { STATUS=success, CODE, INTENT, PLATFORM_ID,
+ *                              IS_GROUP, PAIRED_USER_ID }
+ *                         or { STATUS=failed, CODE, ERROR }
  *
  * Depends on src/channels/telegram-pairing.js, which setup/add-telegram.sh
  * copies in from the `channels` branch before this step runs. setup/ is
@@ -50,22 +55,6 @@ function intentToString(intent: PairingIntent): string {
   return `${intent.kind}:${intent.folder}`;
 }
 
-function printCodeBanner(code: string): void {
-  const digits = code.split('').join('  ');
-  const content = [
-    '',
-    `     PAIRING CODE:   ${digits}`,
-    '',
-    '     Send these digits from Telegram to your bot.',
-    '',
-  ];
-  const width = Math.max(...content.map((l) => l.length));
-  const top = '  ╔' + '═'.repeat(width + 2) + '╗';
-  const bot = '  ╚' + '═'.repeat(width + 2) + '╝';
-  const mid = content.map((l) => '  ║ ' + l.padEnd(width) + ' ║');
-  console.log(['', top, ...mid, bot, ''].join('\n'));
-}
-
 export async function run(args: string[]): Promise<void> {
   const intent = parseArgs(args);
 
@@ -78,19 +67,21 @@ export async function run(args: string[]): Promise<void> {
 
   const MAX_REGENERATIONS = 5;
   let record = await createPairing(intent);
-  printCodeBanner(record.code);
+  emitStatus('PAIR_TELEGRAM_CODE', {
+    CODE: record.code,
+    REASON: 'initial',
+  });
 
   for (let regen = 0; regen <= MAX_REGENERATIONS; regen++) {
     try {
       const consumed = await waitForPairing(record.code, {
         onAttempt: (a) => {
-          console.log(
-            `   Got "${a.candidate}" — doesn't match. A new code is on its way.`,
-          );
+          emitStatus('PAIR_TELEGRAM_ATTEMPT', {
+            CANDIDATE: a.candidate,
+          });
         },
       });
 
-      console.log('\n   ✓ Telegram paired.\n');
       emitStatus('PAIR_TELEGRAM', {
         STATUS: 'success',
         CODE: record.code,
@@ -107,12 +98,13 @@ export async function run(args: string[]): Promise<void> {
       const invalidated = /invalidated by wrong code/.test(message);
       if (invalidated && regen < MAX_REGENERATIONS) {
         record = await createPairing(intent);
-        console.log('\n   Previous code invalidated. New code:');
-        printCodeBanner(record.code);
+        emitStatus('PAIR_TELEGRAM_CODE', {
+          CODE: record.code,
+          REASON: 'regenerated',
+        });
         continue;
       }
       const reason = invalidated ? 'max-regenerations-exceeded' : message;
-      console.error(`\n   ✗ Pairing failed: ${reason}`);
       emitStatus('PAIR_TELEGRAM', {
         STATUS: 'failed',
         CODE: record.code,

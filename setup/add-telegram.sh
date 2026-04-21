@@ -27,7 +27,7 @@ if need_install; then
 
   # pair-telegram.ts is maintained in this branch (setup-auto), so it's NOT
   # in this list — do not overwrite the local version with the channels copy.
-  echo "[add-telegram] Copying adapter files from $CHANNELS_BRANCH…"
+  echo "[add-telegram] Copying adapter files from ${CHANNELS_BRANCH}…"
   for f in \
     src/channels/telegram.ts \
     src/channels/telegram-pairing.ts \
@@ -59,7 +59,7 @@ if need_install; then
     }
   '
 
-  echo "[add-telegram] Installing $ADAPTER_VERSION…"
+  echo "[add-telegram] Installing ${ADAPTER_VERSION}…"
   pnpm install "$ADAPTER_VERSION"
 
   echo "[add-telegram] Building…"

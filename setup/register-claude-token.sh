@@ -117,7 +117,7 @@ esac
 
 echo
 echo "Got token: ${TOKEN:0:16}…${TOKEN: -4}"
-echo "Registering with OneCLI as '$SECRET_NAME' (host pattern: $HOST_PATTERN)…"
+echo "Registering with OneCLI as '${SECRET_NAME}' (host pattern: ${HOST_PATTERN})…"
 
 onecli secrets create \
   --name "$SECRET_NAME" \
