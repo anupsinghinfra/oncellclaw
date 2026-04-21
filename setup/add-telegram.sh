@@ -111,9 +111,45 @@ EOF
   fi
 fi
 
+# Validate the token via getMe so a typo surfaces before we restart the
+# service, and capture the bot's username for the deep link.
+TELEGRAM_BOT_TOKEN_VALUE="$(grep '^TELEGRAM_BOT_TOKEN=' .env | head -1 | cut -d= -f2-)"
+BOT_USERNAME=""
+if [[ -n "$TELEGRAM_BOT_TOKEN_VALUE" ]]; then
+  INFO=$(curl -fsS --max-time 8 \
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN_VALUE}/getMe" 2>/dev/null || true)
+  if echo "$INFO" | grep -q '"ok":true'; then
+    # Crude JSON parse — the response is always a flat object here.
+    BOT_USERNAME=$(echo "$INFO" | sed -nE 's/.*"username":"([^"]+)".*/\1/p')
+    if [[ -n "$BOT_USERNAME" ]]; then
+      echo "[add-telegram] Token validated — bot is @${BOT_USERNAME}."
+    fi
+  else
+    echo "[add-telegram] Warning: getMe did not return ok. Continuing, but the token may be wrong."
+  fi
+fi
+
 # Container reads from data/env/env (the host mounts it).
 mkdir -p data/env
 cp .env data/env/env
+
+# Deep-link into the bot's chat in the installed Telegram app so the user
+# is already on the right screen when pair-telegram prints the code.
+if [[ -n "$BOT_USERNAME" ]]; then
+  case "$(uname -s)" in
+    Darwin)
+      open "tg://resolve?domain=${BOT_USERNAME}" >/dev/null 2>&1 \
+        || open "https://t.me/${BOT_USERNAME}" >/dev/null 2>&1 \
+        || true
+      ;;
+    Linux)
+      xdg-open "tg://resolve?domain=${BOT_USERNAME}" >/dev/null 2>&1 \
+        || xdg-open "https://t.me/${BOT_USERNAME}" >/dev/null 2>&1 \
+        || true
+      ;;
+  esac
+  echo "[add-telegram] Opened Telegram → @${BOT_USERNAME}. Keep it open for the pairing code."
+fi
 
 echo "[add-telegram] Restarting service so the new adapter picks up the token…"
 case "$(uname -s)" in
