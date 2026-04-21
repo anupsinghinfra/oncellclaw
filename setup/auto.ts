@@ -7,12 +7,15 @@
  * module check). This driver picks up from there.
  *
  * Config via env:
- *   NANOCLAW_TZ            IANA zone override (skip autodetect)
  *   NANOCLAW_DISPLAY_NAME  operator name for the CLI agent (default: $USER)
  *   NANOCLAW_AGENT_NAME    agent persona name (default: display name)
  *   NANOCLAW_SKIP          comma-separated step names to skip
- *                          (environment|timezone|container|onecli|auth|
+ *                          (environment|container|onecli|auth|
  *                           mounts|service|cli-agent|verify)
+ *
+ * Timezone is not configured here — it defaults to the host system's TZ.
+ * Run `pnpm exec tsx setup/index.ts --step timezone -- --tz <zone>` later
+ * if autodetect is wrong (e.g. headless server with TZ=UTC).
  *
  * Anthropic credential registration runs via setup/register-claude-token.sh
  * (the only step that truly requires human input — browser sign-in or a
@@ -132,22 +135,10 @@ async function main(): Promise<void> {
       .map((s) => s.trim())
       .filter(Boolean),
   );
-  const tz = process.env.NANOCLAW_TZ;
 
   if (!skip.has('environment')) {
     const env = await runStep('environment');
     if (!env.ok) fail('environment check failed');
-  }
-
-  if (!skip.has('timezone')) {
-    const res = await runStep('timezone', tz ? ['--tz', tz] : []);
-    if (res.fields.NEEDS_USER_INPUT === 'true') {
-      fail(
-        'Timezone could not be autodetected.',
-        'Set NANOCLAW_TZ to an IANA zone (e.g. NANOCLAW_TZ=America/New_York).',
-      );
-    }
-    if (!res.ok) fail('timezone step failed');
   }
 
   if (!skip.has('container')) {

@@ -3,14 +3,13 @@
 # NanoClaw — scripted end-to-end install.
 #
 # Runs `bash setup.sh` (bootstrap: Node check, pnpm install, native module
-# verify), then `pnpm run setup:auto` (environment → timezone → container →
-# onecli → auth → mounts → service → verify).
+# verify), then `pnpm run setup:auto` (environment → container → onecli →
+# auth → mounts → service → cli-agent → verify).
 #
 # Everything that can be scripted runs unattended; the one interactive pause
 # is the auth step (browser sign-in or paste token/API key).
 #
 # Config via env — passed through unchanged:
-#   NANOCLAW_TZ    IANA zone override
 #   NANOCLAW_SKIP  comma-separated setup:auto step names to skip
 #   SECRET_NAME    OneCLI secret name (default: Anthropic)
 #   HOST_PATTERN   OneCLI host pattern (default: api.anthropic.com)
