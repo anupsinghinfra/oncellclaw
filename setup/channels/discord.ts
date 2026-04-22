@@ -23,12 +23,11 @@
  * entries in logs/setup.log, full raw output in per-step files under
  * logs/setup-steps/. See docs/setup-flow.md.
  */
-import { spawn } from 'child_process';
-
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
+import { confirmThenOpen } from '../lib/browser.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
@@ -147,11 +146,11 @@ async function walkThroughBotCreation(): Promise<void> {
       '  3. On the same tab, enable "Message Content Intent"',
       '     (under Privileged Gateway Intents)',
       '',
-      k.dim(`Opening ${url} …`),
+      k.dim(url),
     ].join('\n'),
     'Create a Discord bot',
   );
-  openUrl(url);
+  await confirmThenOpen(url, 'Press Enter to open the Developer Portal');
 
   ensureAnswer(
     await p.confirm({
@@ -360,11 +359,11 @@ async function promptInviteBot(
       '  1. Pick any server you\'re in (a personal one is fine)',
       '  2. Click "Authorize"',
       '',
-      k.dim(`Opening ${url}`),
+      k.dim(url),
     ].join('\n'),
     'Add bot to a server',
   );
-  openUrl(url);
+  await confirmThenOpen(url, 'Press Enter to open the invite page');
 
   ensureAnswer(
     await p.confirm({
@@ -439,17 +438,3 @@ async function resolveAgentName(): Promise<string> {
   return value;
 }
 
-/** Best-effort open of a URL in the user's default browser. Silent on failure. */
-function openUrl(url: string): void {
-  try {
-    const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-    const child = spawn(cmd, [url], { stdio: 'ignore', detached: true });
-    child.on('error', () => {
-      // Headless / no browser / unknown command — the URL is already
-      // printed in the note above, so the user can copy-paste.
-    });
-    child.unref();
-  } catch {
-    // swallow — URL is visible in the note.
-  }
-}

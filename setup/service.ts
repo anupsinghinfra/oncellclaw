@@ -116,13 +116,30 @@ function setupLaunchd(
   fs.writeFileSync(plistPath, plist);
   log.info('Wrote launchd plist', { plistPath });
 
+  // Unload first to force launchd to drop any cached plist and re-read from
+  // disk. Bare `launchctl load` on an already-loaded plist errors with
+  // "already loaded" and keeps the ORIGINAL plist's ProgramArguments /
+  // WorkingDirectory in memory — even if the file on disk changed. That
+  // bit us when the plist target shifted between installs: kickstart kept
+  // relaunching the old binary and the CLI socket landed in the wrong dir.
+  // unload succeeds whether or not the service was previously loaded; the
+  // failure case is "Could not find specified service" which is harmless.
+  try {
+    execSync(`launchctl unload ${JSON.stringify(plistPath)}`, {
+      stdio: 'ignore',
+    });
+    log.info('launchctl unload succeeded');
+  } catch {
+    log.info('launchctl unload noop (plist was not previously loaded)');
+  }
+
   try {
     execSync(`launchctl load ${JSON.stringify(plistPath)}`, {
       stdio: 'ignore',
     });
     log.info('launchctl load succeeded');
-  } catch {
-    log.warn('launchctl load failed (may already be loaded)');
+  } catch (err) {
+    log.error('launchctl load failed', { err });
   }
 
   // Verify
@@ -316,10 +333,15 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     log.error('systemctl enable failed', { err });
   }
 
+  // restart (not start) so a previously-running instance picks up edits to
+  // the unit file. `start` on an active unit is a no-op, which would leave
+  // the old ExecStart / WorkingDirectory in effect even after daemon-reload.
+  // `restart` on a stopped unit is equivalent to `start`, so this is safe
+  // as a first-install path too.
   try {
-    execSync(`${systemctlPrefix} start nanoclaw`, { stdio: 'ignore' });
+    execSync(`${systemctlPrefix} restart nanoclaw`, { stdio: 'ignore' });
   } catch (err) {
-    log.error('systemctl start failed', { err });
+    log.error('systemctl restart failed', { err });
   }
 
   // Verify

@@ -43,6 +43,7 @@ import {
 } from '../src/db/messaging-groups.js';
 import { runMigrations } from '../src/db/migrations/index.js';
 import { normalizeName } from '../src/modules/agent-to-agent/db/agent-destinations.js';
+import { addMember } from '../src/modules/permissions/db/agent-group-members.js';
 import { grantRole, hasAnyOwner } from '../src/modules/permissions/db/user-roles.js';
 import { upsertUser } from '../src/modules/permissions/db/users.js';
 import { initGroupFilesystem } from '../src/group-init.js';
@@ -118,7 +119,13 @@ function namespacedUserId(channel: string, raw: string): string {
 }
 
 function namespacedPlatformId(channel: string, raw: string): string {
-  return raw.startsWith(`${channel}:`) ? raw : `${channel}:${raw}`;
+  if (raw.startsWith(`${channel}:`)) return raw;
+  // Adapters using native JID format (WhatsApp: <phone>@s.whatsapp.net,
+  // <groupId>@g.us) store platform_id without a channel prefix. The '@' is
+  // the discriminator — telegram/discord platform_ids don't contain it
+  // except after a channel prefix, which is already handled above.
+  if (raw.includes('@')) return raw;
+  return `${channel}:${raw}`;
 }
 
 function generateId(prefix: string): string {
@@ -200,6 +207,19 @@ async function main(): Promise<void> {
       `# ${args.agentName}\n\n` +
       `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
       'When the user first reaches out (or you receive a system welcome prompt), introduce yourself briefly and invite them to chat. Keep replies concise.',
+  });
+
+  // 2b. Grant the user access to this agent group. Owner role is only
+  // assigned to the first user (above); subsequent DMs need explicit
+  // membership or the strict unknown_sender_policy on the DM messaging
+  // group will drop every message with accessReason='not_member'. addMember
+  // is INSERT OR IGNORE — idempotent when the global owner already has
+  // access by virtue of their role.
+  addMember({
+    user_id: userId,
+    agent_group_id: ag.id,
+    added_by: null,
+    added_at: now,
   });
 
   // 3. DM messaging group.

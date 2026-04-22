@@ -119,7 +119,8 @@ else
 fi
 
 # Look up the bot username (auto.ts already validated; we re-query here so
-# standalone invocations still work).
+# standalone invocations still work — BOT_USERNAME is emitted in the status
+# block for parent drivers to display).
 INFO=$(curl -fsS --max-time 8 \
   "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null || true)
 BOT_USERNAME=""
@@ -131,23 +132,10 @@ fi
 mkdir -p data/env
 cp .env data/env/env
 
-# Deep-link into the bot's chat so the user is already on the right screen
-# when pair-telegram prints the code. Silent best-effort — runs under a
-# spinner, any output (from `open` / `xdg-open`) goes to the raw log.
-if [ -n "$BOT_USERNAME" ]; then
-  case "$(uname -s)" in
-    Darwin)
-      open "tg://resolve?domain=${BOT_USERNAME}" >&2 2>/dev/null \
-        || open "https://t.me/${BOT_USERNAME}" >&2 2>/dev/null \
-        || true
-      ;;
-    Linux)
-      xdg-open "tg://resolve?domain=${BOT_USERNAME}" >&2 2>/dev/null \
-        || xdg-open "https://t.me/${BOT_USERNAME}" >&2 2>/dev/null \
-        || true
-      ;;
-  esac
-fi
+# Browser/app deep-link is done by the parent driver (setup/channels/telegram.ts)
+# BEFORE this script runs — gated on a clack confirm so focus-stealing doesn't
+# surprise the user. Keeping it out of here means this script stays pure
+# non-interactive install.
 
 log "Restarting service so the new adapter picks up the token…"
 case "$(uname -s)" in

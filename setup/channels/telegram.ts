@@ -7,10 +7,11 @@
  *   1. BotFather instructions (clack note)
  *   2. Paste the bot token (clack password) — format-validated
  *   3. getMe via the Bot API to resolve the bot's username
- *   4. Install the adapter (setup/add-telegram.sh, non-interactive)
- *   5. Run the pair-telegram step, rendering code events as clack notes
- *   6. Ask for the messaging-agent name (defaulting to "Nano")
- *   7. Wire the agent via scripts/init-first-agent.ts
+ *   4. Confirm + deep-link into the bot's Telegram chat (tg://resolve)
+ *   5. Install the adapter (setup/add-telegram.sh, non-interactive)
+ *   6. Run the pair-telegram step, rendering code events as clack notes
+ *   7. Ask for the messaging-agent name (defaulting to "Nano")
+ *   8. Wire the agent via scripts/init-first-agent.ts
  *
  * All output obeys the three-level contract: clack UI for the user,
  * structured entries in logs/setup.log, full raw output in per-step files
@@ -20,6 +21,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
+import { confirmThenOpen } from '../lib/browser.js';
 import {
   type Block,
   type StepResult,
@@ -37,6 +39,22 @@ const DEFAULT_AGENT_NAME = 'Nano';
 export async function runTelegramChannel(displayName: string): Promise<void> {
   const token = await collectTelegramToken();
   const botUsername = await validateTelegramToken(token);
+
+  // Deep-link the user into the bot's chat so they're on the right screen
+  // by the time pair-telegram prints the code. https://t.me/<bot> works
+  // everywhere: browsers show an "Open in Telegram" button when the app is
+  // installed, or the bot's web profile if not. tg://resolve?domain= is
+  // more direct but silently fails when the scheme isn't registered.
+  const botUrl = `https://t.me/${botUsername}`;
+  p.note(
+    [
+      `Opening @${botUsername} in Telegram so it's ready when the pairing code shows up.`,
+      '',
+      k.dim(botUrl),
+    ].join('\n'),
+    'Open Telegram',
+  );
+  await confirmThenOpen(botUrl, 'Press Enter to open Telegram');
 
   const install = await runQuietChild(
     'telegram-install',

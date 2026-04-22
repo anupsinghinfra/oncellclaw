@@ -27,6 +27,7 @@ import k from 'kleur';
 
 import { runDiscordChannel } from './channels/discord.js';
 import { runTelegramChannel } from './channels/telegram.js';
+import { runWhatsAppChannel } from './channels/whatsapp.js';
 import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
@@ -209,10 +210,12 @@ async function main(): Promise<void> {
       await runTelegramChannel(displayName!);
     } else if (choice === 'discord') {
       await runDiscordChannel(displayName!);
+    } else if (choice === 'whatsapp') {
+      await runWhatsAppChannel(displayName!);
     } else {
       p.log.info(
         wrapForGutter(
-          'No messaging app for now. You can add one later (like Telegram, Discord, or Slack).',
+          'No messaging app for now. You can add one later (like Telegram, Discord, WhatsApp, or Slack).',
           4,
         ),
       );
@@ -493,19 +496,20 @@ async function askDisplayName(fallback: string): Promise<string> {
   return value;
 }
 
-async function askChannelChoice(): Promise<'telegram' | 'discord' | 'skip'> {
+async function askChannelChoice(): Promise<'telegram' | 'discord' | 'whatsapp' | 'skip'> {
   const choice = ensureAnswer(
     await p.select({
       message: 'Want to chat with your assistant from your phone?',
       options: [
         { value: 'telegram', label: 'Yes, connect Telegram', hint: 'recommended' },
         { value: 'discord', label: 'Yes, connect Discord' },
+        { value: 'whatsapp', label: 'Yes, connect WhatsApp' },
         { value: 'skip', label: 'Skip for now', hint: "I'll just use the terminal" },
       ],
     }),
   );
   setupLog.userInput('channel_choice', String(choice));
-  return choice as 'telegram' | 'discord' | 'skip';
+  return choice as 'telegram' | 'discord' | 'whatsapp' | 'skip';
 }
 
 // ─── interactive / env helpers ─────────────────────────────────────────
