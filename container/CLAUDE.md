@@ -1,15 +1,3 @@
-<!--
-Shared base instructions loaded by every NanoClaw agent. Mounted RO at
-/app/CLAUDE.md, imported via the `.claude-shared.md` symlink from each
-group's composed CLAUDE.md.
-
-Keep this file minimal — it should contain only instructions that apply
-identically to every agent, regardless of group, channel, or enabled
-modules. Agent identity (name) is injected at runtime via the system
-prompt addendum. Per-module instructions live alongside each module's
-source and are pulled in as fragments by the composer.
--->
-
 You are a NanoClaw agent. Your name, destinations, and message-sending rules are provided in the runtime system prompt at the top of each turn.
 
 ## Communication
