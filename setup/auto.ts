@@ -115,10 +115,44 @@ async function main(): Promise<void> {
         4,
       ),
     );
-    const res = await runQuietStep('onecli', {
-      running: "Setting up OneCLI, your agent's vault…",
-      done: 'OneCLI vault ready.',
-    });
+
+    // Respect an existing OneCLI install. Re-running the installer would
+    // rebind the listener and knock any other app using that gateway
+    // offline — confirm with the user before doing that.
+    const existing = detectExistingOnecli();
+    let reuse = false;
+    if (existing) {
+      const choice = ensureAnswer(
+        await p.select({
+          message: `Found an existing OneCLI at ${existing.apiHost}. What would you like to do?`,
+          options: [
+            {
+              value: 'reuse',
+              label: 'Use the existing instance',
+              hint: 'recommended — keeps other apps bound to this vault working',
+            },
+            {
+              value: 'fresh',
+              label: 'Install a fresh instance for NanoClaw',
+              hint: 'reinstalls onecli; other apps may need to reconnect',
+            },
+          ],
+        }),
+      ) as 'reuse' | 'fresh';
+      setupLog.userInput('onecli_choice', choice);
+      reuse = choice === 'reuse';
+    }
+
+    const res = await runQuietStep(
+      'onecli',
+      {
+        running: reuse
+          ? 'Hooking up to your existing OneCLI…'
+          : "Setting up OneCLI, your agent's vault…",
+        done: 'OneCLI vault ready.',
+      },
+      reuse ? ['--reuse'] : [],
+    );
     if (!res.ok) {
       const err = res.terminal?.fields.ERROR;
       if (err === 'onecli_not_on_path_after_install') {
@@ -688,6 +722,46 @@ function anthropicSecretExists(): boolean {
     return /anthropic/i.test(res.stdout ?? '');
   } catch {
     return false;
+  }
+}
+
+/**
+ * Probe the host for a working OneCLI install so we can offer to reuse it
+ * instead of re-running the installer (which rebinds the listener and breaks
+ * any other app already using that gateway).
+ */
+function detectExistingOnecli(): { version: string; apiHost: string } | null {
+  try {
+    const ver = spawnSync('onecli', ['version'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (ver.status !== 0) return null;
+    const version = (ver.stdout ?? '').trim();
+    if (!version) return null;
+
+    const host = spawnSync('onecli', ['config', 'get', 'api-host'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (host.status !== 0) return null;
+    const raw = (host.stdout ?? '').trim();
+    if (!raw) return null;
+
+    // onecli 1.3+ emits JSON by default. Older versions would print raw text.
+    try {
+      const parsed = JSON.parse(raw) as { data?: unknown; value?: unknown };
+      const val = parsed.data ?? parsed.value;
+      if (typeof val === 'string' && val.trim()) {
+        return { version, apiHost: val.trim() };
+      }
+    } catch {
+      // not JSON — try to extract a URL directly
+    }
+    const m = raw.match(/https?:\/\/[\w.\-]+(?::\d+)?/);
+    return m ? { version, apiHost: m[0] } : null;
+  } catch {
+    return null;
   }
 }
 

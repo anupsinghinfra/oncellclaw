@@ -1,13 +1,15 @@
 /**
  * Step: onecli — Install + configure the OneCLI gateway and CLI.
  *
- * Aggregates what the old /setup + /init-onecli skills ran as loose shell
- * commands. Idempotent: skips install if `onecli` already works, and safely
- * re-applies PATH, api-host, and .env updates.
+ * Two modes:
+ *   (default) run the OneCLI installer, configure api-host, write .env.
+ *   --reuse   skip the installer; reuse the onecli instance already running
+ *             on the host. Required for users who have other apps bound to
+ *             an existing gateway, since re-running the installer rebinds
+ *             the listener and breaks those consumers.
  *
- * Emits ONECLI_URL so /new-setup SKILL.md can forward it downstream (e.g. as
- * ${ONECLI_URL} in status messages). Polls /health to give downstream steps
- * (auth, service) a ready gateway.
+ * Emits ONECLI_URL and polls /health so downstream steps (auth, service)
+ * get a ready gateway.
  */
 import { execFileSync, execSync } from 'child_process';
 import fs from 'fs';
@@ -32,6 +34,32 @@ function onecliVersion(): string | null {
       env: childEnv(),
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask the installed onecli CLI for its configured api-host. Returns null if
+ * onecli isn't on PATH, errors, or has no api-host configured.
+ *
+ * Tolerates both JSON output (onecli 1.3+) and older raw-text output.
+ */
+export function getOnecliApiHost(): string | null {
+  try {
+    const out = execFileSync('onecli', ['config', 'get', 'api-host'], {
+      encoding: 'utf-8',
+      env: childEnv(),
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    try {
+      const parsed = JSON.parse(out) as { data?: unknown; value?: unknown };
+      const val = parsed.data ?? parsed.value;
+      if (typeof val === 'string' && val.trim()) return val.trim();
+    } catch {
+      // not JSON — fall through to URL extraction
+    }
+    return extractUrlFromOutput(out);
   } catch {
     return null;
   }
@@ -106,8 +134,48 @@ async function pollHealth(url: string, timeoutMs: number): Promise<boolean> {
   return false;
 }
 
-export async function run(_args: string[]): Promise<void> {
+export async function run(args: string[]): Promise<void> {
+  const reuse = args.includes('--reuse');
   ensureShellProfilePath();
+
+  if (reuse) {
+    // Reuse-mode: don't touch the running gateway at all. Just verify it
+    // exists, read its api-host, write ONECLI_URL to .env, and move on.
+    const version = onecliVersion();
+    if (!version) {
+      emitStatus('ONECLI', {
+        INSTALLED: false,
+        STATUS: 'failed',
+        ERROR: 'onecli_not_found_for_reuse',
+        HINT: 'onecli not on PATH. Re-run setup and choose "install fresh".',
+        LOG: 'logs/setup.log',
+      });
+      process.exit(1);
+    }
+    const url = getOnecliApiHost();
+    if (!url) {
+      emitStatus('ONECLI', {
+        INSTALLED: true,
+        STATUS: 'failed',
+        ERROR: 'onecli_api_host_not_configured',
+        HINT: 'Existing onecli has no api-host set. Run `onecli config set api-host <url>` or re-run setup with install-fresh.',
+        LOG: 'logs/setup.log',
+      });
+      process.exit(1);
+    }
+    writeEnvOnecliUrl(url);
+    log.info('Reusing existing OneCLI', { url });
+    const healthy = await pollHealth(url, 5000);
+    emitStatus('ONECLI', {
+      INSTALLED: true,
+      REUSED: true,
+      ONECLI_URL: url,
+      HEALTHY: healthy,
+      STATUS: 'success',
+      LOG: 'logs/setup.log',
+    });
+    return;
+  }
 
   log.info('Installing OneCLI gateway and CLI');
   const res = installOnecli();
