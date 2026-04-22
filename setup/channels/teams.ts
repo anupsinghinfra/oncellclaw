@@ -72,7 +72,7 @@ export async function runTeamsChannel(_displayName: string): Promise<void> {
   await installAdapter(collected);
   completed.push('Adapter installed and service restarted.');
 
-  printPostInstallGuidance();
+  await finishWithHandoff(collected, completed);
 }
 
 // ─── step: intro / prereqs ──────────────────────────────────────────────
@@ -494,28 +494,71 @@ async function installAdapter(collected: Collected): Promise<void> {
   }
 }
 
-// ─── post-install: how to finish wiring ────────────────────────────────
+// ─── post-install: hand off to Claude for the final wiring ────────────
 
-function printPostInstallGuidance(): void {
+async function finishWithHandoff(
+  collected: Collected,
+  completed: string[],
+): Promise<void> {
   p.note(
     [
-      "The Teams adapter is live and the service is running. To finish",
-      "hooking up an agent:",
+      'The Teams adapter is live and the service is running.',
       '',
-      '  1. Find your bot in Teams (search by name, or via the sideloaded',
-      '     app) and send it a message ("hi" is fine)',
-      '  2. NanoClaw auto-creates a messaging group on the first inbound',
-      '     activity (Teams platform IDs are only discoverable after a',
-      '     real message arrives)',
-      '  3. Run ' + k.cyan('/manage-channels') + ' to wire that messaging',
-      '     group to an agent group',
-      '',
-      k.dim('If the bot never replies, check logs/nanoclaw.log — most'),
-      k.dim("first-run failures are webhook reachability ('messages never"),
-      k.dim("reach the bot') or auth ('app password rejected')."),
+      "One thing left: your Teams bot's platform ID (which NanoClaw needs",
+      'to wire to an agent group) only becomes known after you DM the bot',
+      'for the first time. Claude can walk you through that interactively —',
+      'watch the logs for your first inbound, find the auto-created',
+      'messaging group in the DB, run scripts/init-first-agent.ts with',
+      'the right flags, and verify end-to-end.',
     ].join('\n'),
     'Step 6 of 6 — Finish wiring',
   );
+
+  const choice = ensureAnswer(
+    await p.select({
+      message: 'Ready to finish?',
+      options: [
+        {
+          value: 'handoff',
+          label: 'Hand me off to Claude to walk me through it',
+          hint: 'recommended',
+        },
+        { value: 'self', label: "I'll do it myself" },
+      ],
+    }),
+  );
+
+  if (choice === 'self') {
+    p.note(
+      [
+        '  1. Find your bot in Teams (search by name, or via the sideloaded',
+        '     app) and send it a message ("hi" is fine)',
+        '  2. Tail ' + k.cyan('logs/nanoclaw.log') + ' for the inbound; the router',
+        '     auto-creates a row in ' + k.cyan('messaging_groups') + ' in data/v2.db',
+        '  3. Run ' + k.cyan('scripts/init-first-agent.ts') + ' with --channel teams,',
+        '     the discovered platform_id, and your AAD user id, OR use',
+        '     ' + k.cyan('/manage-channels') + ' to wire interactively',
+      ].join('\n'),
+      'Manual finish',
+    );
+    return;
+  }
+
+  await offerClaudeHandoff({
+    channel: CHANNEL,
+    step: 'teams-finish-wiring',
+    stepDescription:
+      'finishing the Teams wiring: watch for the first inbound, discover the auto-created messaging group in data/v2.db, and run scripts/init-first-agent.ts to wire it to an agent group',
+    completedSteps: completed,
+    collectedValues: redactCollected(collected),
+    files: [
+      'scripts/init-first-agent.ts',
+      'src/router.ts',
+      'src/db/messaging-groups.ts',
+      'logs/nanoclaw.log',
+      '.claude/skills/manage-channels/SKILL.md',
+    ],
+  });
 }
 
 // ─── shared step gate ──────────────────────────────────────────────────
