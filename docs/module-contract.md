@@ -173,7 +173,7 @@ Some code stays in core but references module-owned tables. These use `sqlite_ma
 | `delivery.ts` channel-permission check (`agent_destinations`) | agent-to-agent | permit (origin-chat always OK) |
 | `delivery.ts` `createPendingQuestion` (`pending_questions`) | interactive | no-op (log warning) |
 
-`container/agent-runner/src/formatter.ts` has a related non-DB fallback: when `NANOCLAW_ADMIN_USER_IDS` is empty, every sender is treated as admin (permissionless mode). This is the one-line change from the current deny-all behavior.
+Container-side admin gating no longer exists. Admin authorization is now performed host-side in `src/command-gate.ts`, which queries `user_roles` directly — no env var is passed to the container, and no agent-runner fallback exists.
 
 ## Migrations
 

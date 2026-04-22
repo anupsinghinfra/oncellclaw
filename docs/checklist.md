@@ -149,9 +149,9 @@ Status: [x] done, [~] partial, [ ] not started
 
 ## Permissions and Approval Flows
 
-- [x] User-level privilege model — `users` + `user_roles` (owner / admin, global or scoped to an agent group). Replaces the old `agent_groups.is_admin` / `messaging_groups.admin_user_id` coupling. See `src/db/users.ts`, `src/db/user-roles.ts`, `src/access.ts`.
-- [x] Admin-only command filtering in container — host passes `NANOCLAW_ADMIN_USER_IDS` (owners + global admins + scoped admins for the agent group) to the agent-runner; `poll-loop.ts` gates slash commands against that set.
-- [x] Approval routing — `pickApprover` (scoped admin → global admin → owner, dedup) + `pickApprovalDelivery` (first reachable, same-channel-kind tie-break); delivery lands in the approver's DM via `ensureUserDm` / `user_dms` cache. See `src/access.ts`, `src/onecli-approvals.ts`.
+- [x] User-level privilege model — `users` + `user_roles` (owner / admin, global or scoped to an agent group). Replaces the old `agent_groups.is_admin` / `messaging_groups.admin_user_id` coupling. See `src/modules/permissions/db/users.ts`, `src/modules/permissions/db/user-roles.ts`, `src/modules/permissions/access.ts`.
+- [x] Admin-only command filtering — gate runs host-side in `src/command-gate.ts`, querying `user_roles` directly. The container receives no admin identity (no env var, no fallback).
+- [x] Approval routing — `pickApprover` (scoped admin → global admin → owner, dedup) + `pickApprovalDelivery` (first reachable, same-channel-kind tie-break); delivery lands in the approver's DM via `ensureUserDm` / `user_dms` cache. See `src/modules/approvals/primitive.ts`, `src/modules/approvals/onecli-approvals.ts`.
 - [x] Per-messaging-group unknown-sender gating — `messaging_groups.unknown_sender_policy` (`strict` | `request_approval` | `public`), enforced in `src/router.ts`.
 - [x] Approval flow (sensitive action -> card to admin -> approve/reject -> execute) — `pending_approvals` table, `requestApproval()` helper, reuses interactive card infra
 - [x] Agent requests dependency/package install (install_packages, admin approval, rebuild on approval)
