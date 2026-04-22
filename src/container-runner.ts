@@ -215,7 +215,7 @@ function buildMounts(
   // Session folder at /workspace (contains inbound.db, outbound.db, outbox/, .claude/)
   mounts.push({ hostPath: sessDir, containerPath: '/workspace', readonly: false });
 
-  // Agent group folder at /workspace/agent (RW for working files + CLAUDE.md)
+  // Agent group folder at /workspace/agent (RW for working files + CLAUDE.local.md)
   mounts.push({ hostPath: groupDir, containerPath: '/workspace/agent', readonly: false });
 
   // container.json — nested RO mount on top of RW group dir so the agent
@@ -223,6 +223,22 @@ function buildMounts(
   const containerJsonPath = path.join(groupDir, 'container.json');
   if (fs.existsSync(containerJsonPath)) {
     mounts.push({ hostPath: containerJsonPath, containerPath: '/workspace/agent/container.json', readonly: true });
+  }
+
+  // Composer-managed CLAUDE.md artifacts — nested RO mounts. These are
+  // regenerated from the shared base + fragments on every spawn; any
+  // agent-side writes would be clobbered, so enforce read-only. Only
+  // CLAUDE.local.md (per-group memory) remains RW via the group-dir mount.
+  // `.claude-shared.md` is a symlink whose target (`/app/CLAUDE.md`) is
+  // already RO-mounted, so writes through it fail regardless — no need for
+  // a nested mount there.
+  const composedClaudeMd = path.join(groupDir, 'CLAUDE.md');
+  if (fs.existsSync(composedClaudeMd)) {
+    mounts.push({ hostPath: composedClaudeMd, containerPath: '/workspace/agent/CLAUDE.md', readonly: true });
+  }
+  const fragmentsDir = path.join(groupDir, '.claude-fragments');
+  if (fs.existsSync(fragmentsDir)) {
+    mounts.push({ hostPath: fragmentsDir, containerPath: '/workspace/agent/.claude-fragments', readonly: true });
   }
 
   // Global memory directory — always read-only.

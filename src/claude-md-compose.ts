@@ -26,6 +26,11 @@ import type { AgentGroup } from './types.js';
 // dance instead of existsSync), valid inside the container via RO mounts.
 const SHARED_CLAUDE_MD_CONTAINER_PATH = '/app/CLAUDE.md';
 const SHARED_SKILLS_CONTAINER_BASE = '/app/skills';
+const SHARED_MCP_TOOLS_CONTAINER_BASE = '/app/src/mcp-tools';
+
+// Host-side source paths used to discover fragment sources at compose time.
+// Resolved at call time (process.cwd() = project root) so tests can swap cwd.
+const MCP_TOOLS_HOST_SUBPATH = path.join('container', 'agent-runner', 'src', 'mcp-tools');
 
 const COMPOSED_HEADER = '<!-- Composed at spawn — do not edit. Edit CLAUDE.local.md for per-group content. -->';
 
@@ -59,7 +64,7 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
     for (const skillName of fs.readdirSync(skillsHostDir)) {
       const hostFragment = path.join(skillsHostDir, skillName, 'instructions.md');
       if (fs.existsSync(hostFragment)) {
-        desired.set(`${skillName}.md`, {
+        desired.set(`skill-${skillName}.md`, {
           type: 'symlink',
           content: `${SHARED_SKILLS_CONTAINER_BASE}/${skillName}/instructions.md`,
         });
@@ -67,7 +72,25 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
     }
   }
 
-  // MCP server fragments — inline instructions from container.json.
+  // Built-in module fragments — every MCP tool source file that ships a
+  // sibling `<name>.instructions.md`. These describe how the agent should
+  // use that module's MCP tools (schedule_task, install_packages, etc.).
+  // Always included — these are built-in, not toggleable.
+  const mcpToolsHostDir = path.join(process.cwd(), MCP_TOOLS_HOST_SUBPATH);
+  if (fs.existsSync(mcpToolsHostDir)) {
+    for (const entry of fs.readdirSync(mcpToolsHostDir)) {
+      const match = entry.match(/^(.+)\.instructions\.md$/);
+      if (!match) continue;
+      const moduleName = match[1];
+      desired.set(`module-${moduleName}.md`, {
+        type: 'symlink',
+        content: `${SHARED_MCP_TOOLS_CONTAINER_BASE}/${entry}`,
+      });
+    }
+  }
+
+  // MCP server fragments — inline instructions from container.json for
+  // user-added external MCP servers.
   for (const [name, mcp] of Object.entries(config.mcpServers)) {
     if (mcp.instructions) {
       desired.set(`mcp-${name}.md`, {
