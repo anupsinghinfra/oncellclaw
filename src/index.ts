@@ -7,6 +7,7 @@
 import path from 'path';
 
 import { DATA_DIR } from './config.js';
+import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
@@ -62,6 +63,9 @@ async function main(): Promise<void> {
   const db = initDb(dbPath);
   runMigrations(db);
   log.info('Central DB ready', { path: dbPath });
+
+  // 1b. One-time filesystem cutover — idempotent, no-op after first run.
+  migrateGroupsToClaudeLocal();
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();

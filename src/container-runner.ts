@@ -12,6 +12,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, ONECLI_URL, TIMEZONE } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
+import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { initGroupFilesystem } from './group-init.js';
@@ -195,6 +196,10 @@ function buildMounts(
   const claudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
   syncSkillSymlinks(claudeDir, containerConfig);
 
+  // Compose CLAUDE.md fresh every spawn from the shared base, enabled skill
+  // fragments, and MCP server instructions. See `claude-md-compose.ts`.
+  composeGroupClaudeMd(agentGroup);
+
   const mounts: VolumeMount[] = [];
   const sessDir = sessionDir(agentGroup.id, session.id);
   const groupDir = path.resolve(GROUPS_DIR, agentGroup.folder);
@@ -216,6 +221,13 @@ function buildMounts(
   const globalDir = path.join(GROUPS_DIR, 'global');
   if (fs.existsSync(globalDir)) {
     mounts.push({ hostPath: globalDir, containerPath: '/workspace/global', readonly: true });
+  }
+
+  // Shared CLAUDE.md — read-only, imported by the composed entry point via
+  // the `.claude-shared.md` symlink inside the group dir.
+  const sharedClaudeMd = path.join(process.cwd(), 'container', 'CLAUDE.md');
+  if (fs.existsSync(sharedClaudeMd)) {
+    mounts.push({ hostPath: sharedClaudeMd, containerPath: '/app/CLAUDE.md', readonly: true });
   }
 
   // Per-group .claude-shared at /home/node/.claude (Claude state, settings,
