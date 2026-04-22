@@ -14,11 +14,12 @@
  *                          "Terminal Agent".
  *   NANOCLAW_SKIP          comma-separated step names to skip
  *                          (environment|container|onecli|auth|mounts|
- *                           service|cli-agent|channel|verify|first-chat)
+ *                           service|cli-agent|timezone|channel|verify|
+ *                           first-chat)
  *
- * Timezone defaults to the host system's TZ. Run
- *   pnpm exec tsx setup/index.ts --step timezone -- --tz <zone>
- * later if autodetect is wrong.
+ * Timezone is auto-detected after the CLI agent step. UTC resolves are
+ * confirmed with the user, and free-text replies fall through to a
+ * headless `claude -p` call for IANA-zone resolution.
  */
 import { spawn, spawnSync } from 'child_process';
 
@@ -31,9 +32,14 @@ import { runTelegramChannel } from './channels/telegram.js';
 import { runWhatsAppChannel } from './channels/whatsapp.js';
 import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
 import { offerClaudeAssist } from './lib/claude-assist.js';
+import {
+  claudeCliAvailable,
+  resolveTimezoneViaClaude,
+} from './lib/tz-from-claude.js';
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
 import { brandBold, brandChip, dimWrap, fitToWidth, wrapForGutter } from './lib/theme.js';
+import { isValidTimezone } from '../src/timezone.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
@@ -215,6 +221,10 @@ async function main(): Promise<void> {
         });
       }
     }
+  }
+
+  if (!skip.has('timezone')) {
+    await runTimezoneStep();
   }
 
   if (!skip.has('channel')) {
@@ -507,6 +517,115 @@ async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
       `Couldn't save your ${label} to the vault.`,
       'Make sure OneCLI is running (`onecli version`), then retry.',
     );
+  }
+}
+
+// ─── timezone step ─────────────────────────────────────────────────────
+
+/**
+ * Auto-detect TZ, confirm with the user when it comes back as UTC (a
+ * common sign we're on a VPS that wasn't localised), and persist through
+ * the usual `--step timezone -- --tz <zone>` path. Free-text answers get
+ * a headless `claude -p` pass to resolve them to a real IANA zone.
+ */
+async function runTimezoneStep(): Promise<void> {
+  const res = await runQuietStep('timezone', {
+    running: 'Checking your timezone…',
+    done: 'Timezone set.',
+  });
+  if (!res.ok && res.terminal?.fields.NEEDS_USER_INPUT !== 'true') {
+    await fail('timezone', "Couldn't determine your timezone.");
+  }
+
+  const fields = res.terminal?.fields ?? {};
+  const resolvedTz = fields.RESOLVED_TZ;
+  const needsInput = fields.NEEDS_USER_INPUT === 'true';
+  const isUtc =
+    resolvedTz === 'UTC' ||
+    resolvedTz === 'Etc/UTC' ||
+    resolvedTz === 'Universal';
+
+  if (!needsInput && !isUtc && resolvedTz && resolvedTz !== 'none') {
+    return;
+  }
+
+  // Either autodetect failed outright, or it landed on UTC and we should
+  // check that's really what the user wants before leaving it there.
+  const message = needsInput
+    ? "Your system didn't expose a timezone. Which one are you in?"
+    : "Your system reports UTC as the timezone. Is that right, or are you somewhere else?";
+
+  const choice = ensureAnswer(
+    await p.select({
+      message,
+      options: needsInput
+        ? [
+            { value: 'answer', label: "I'll tell you where I am" },
+            { value: 'keep', label: 'Leave it as UTC' },
+          ]
+        : [
+            { value: 'keep', label: 'Keep UTC', hint: 'remote server / happy with UTC' },
+            { value: 'answer', label: "I'm somewhere else" },
+          ],
+    }),
+  ) as 'keep' | 'answer';
+  setupLog.userInput('timezone_choice', choice);
+
+  if (choice === 'keep') return;
+
+  const answer = ensureAnswer(
+    await p.text({
+      message: "Where are you? (city, region, or IANA zone)",
+      placeholder: 'e.g. New York, London, Asia/Tokyo',
+      validate: (v) => (v && v.trim() ? undefined : 'Required'),
+    }),
+  );
+  const raw = (answer as string).trim();
+  setupLog.userInput('timezone_input', raw);
+
+  let tz: string | null = isValidTimezone(raw) ? raw : null;
+  if (!tz) {
+    if (claudeCliAvailable()) {
+      tz = await resolveTimezoneViaClaude(raw);
+    } else {
+      p.log.warn(
+        wrapForGutter(
+          "That's not a standard IANA zone and I can't call Claude to interpret it here — try again with a zone like `America/New_York` or `Europe/London`.",
+          4,
+        ),
+      );
+    }
+  }
+
+  if (!tz) {
+    // One retry with a direct-IANA ask; if that fails too, leave the
+    // previously-detected value in .env and move on rather than looping.
+    const retryAnswer = ensureAnswer(
+      await p.text({
+        message: 'Enter an IANA timezone string',
+        placeholder: 'e.g. America/New_York',
+        validate: (v) => {
+          const s = (v ?? '').trim();
+          if (!s) return 'Required';
+          if (!isValidTimezone(s)) return 'Not a valid IANA zone';
+          return undefined;
+        },
+      }),
+    );
+    tz = (retryAnswer as string).trim();
+    setupLog.userInput('timezone_retry', tz);
+  }
+
+  const persist = await runQuietStep(
+    'timezone',
+    {
+      running: `Saving timezone ${tz}…`,
+      done: `Timezone set to ${tz}.`,
+    },
+    ['--tz', tz],
+  );
+  if (!persist.ok) {
+    await fail('timezone', `Couldn't save timezone ${tz}.`);
   }
 }
 
