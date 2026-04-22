@@ -363,7 +363,7 @@ async function sendWelcomeViaCliSocket(
           to: {
             channelType: dmMg.channel_type,
             platformId: dmMg.platform_id,
-            threadId: null,
+            threadId: dmMg.platform_id,
           },
         }) + '\n';
       socket.write(payload, (err) => {

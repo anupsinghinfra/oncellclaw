@@ -4,14 +4,8 @@
  * Runs inside a container. All IO goes through the session DB.
  * No stdin, no stdout markers, no IPC files.
  *
- * Config:
- *   - SESSION_INBOUND_DB_PATH:  path to host-owned inbound DB (default: /workspace/inbound.db)
- *   - SESSION_OUTBOUND_DB_PATH: path to container-owned outbound DB (default: /workspace/outbound.db)
- *   - SESSION_HEARTBEAT_PATH:   heartbeat file path (default: /workspace/.heartbeat)
- *   - AGENT_PROVIDER: any registered provider name (default: claude). The
- *     set of registered providers is whatever `providers/index.ts` imports.
- *   - NANOCLAW_ASSISTANT_NAME: assistant name for transcript archiving
- *   - NANOCLAW_ADMIN_USER_IDS: comma-separated user IDs allowed to run admin commands
+ * Config is read from /workspace/agent/container.json (mounted RO).
+ * Only TZ and OneCLI networking vars come from env.
  *
  * Mount structure:
  *   /workspace/
@@ -19,14 +13,19 @@
  *     outbound.db       ← container-owned session DB
  *     .heartbeat        ← container touches for liveness detection
  *     outbox/           ← outbound files
- *     agent/            ← agent group folder (CLAUDE.md, skills, working files)
- *     .claude/          ← Claude SDK session data
+ *     agent/            ← agent group folder (CLAUDE.md, container.json, working files)
+ *       container.json  ← per-group config (RO nested mount)
+ *     global/           ← shared global memory (RO)
+ *   /app/src/           ← shared agent-runner source (RO)
+ *   /app/skills/        ← shared skills (RO)
+ *   /home/node/.claude/ ← Claude SDK state + skill symlinks (RW)
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { loadConfig } from './config.js';
 import { buildSystemPromptAddendum } from './destinations.js';
 // Providers barrel — each enabled provider self-registers on import.
 // Provider skills append imports to providers/index.ts.
@@ -41,21 +40,16 @@ function log(msg: string): void {
 const CWD = '/workspace/agent';
 
 async function main(): Promise<void> {
-  const providerName = (process.env.AGENT_PROVIDER || 'claude').toLowerCase() as ProviderName;
-  const assistantName = process.env.NANOCLAW_ASSISTANT_NAME;
-  const adminUserIds = new Set(
-    (process.env.NANOCLAW_ADMIN_USER_IDS || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
+  const config = loadConfig();
+  const providerName = config.provider.toLowerCase() as ProviderName;
 
   log(`Starting v2 agent-runner (provider: ${providerName})`);
 
   // Destinations addendum is the only runtime-generated context we inject.
-  // Global CLAUDE.md is loaded by Claude Code from /workspace/agent/CLAUDE.md
-  // (which imports /workspace/global/CLAUDE.md via @-syntax) — no need to
-  // read it manually anymore.
+  // Agent instructions are loaded by Claude Code from /workspace/agent/CLAUDE.md
+  // (host-composed at spawn, imports /app/CLAUDE.md and fragments) plus
+  // /workspace/agent/CLAUDE.local.md (agent memory) — no need to read them
+  // manually.
   const instructions = buildSystemPromptAddendum();
 
   // Discover additional directories mounted at /workspace/extra/*
@@ -77,34 +71,22 @@ async function main(): Promise<void> {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'mcp-tools', 'index.ts');
 
-  // Build MCP servers config: nanoclaw built-in + any additional from host
+  // Build MCP servers config: nanoclaw built-in + any from container.json
   const mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {
     nanoclaw: {
       command: 'bun',
       args: ['run', mcpServerPath],
-      env: {
-        SESSION_INBOUND_DB_PATH: process.env.SESSION_INBOUND_DB_PATH || '/workspace/inbound.db',
-        SESSION_OUTBOUND_DB_PATH: process.env.SESSION_OUTBOUND_DB_PATH || '/workspace/outbound.db',
-        SESSION_HEARTBEAT_PATH: process.env.SESSION_HEARTBEAT_PATH || '/workspace/.heartbeat',
-      },
+      env: {},
     },
   };
 
-  // Merge additional MCP servers from host configuration
-  if (process.env.NANOCLAW_MCP_SERVERS) {
-    try {
-      const additional = JSON.parse(process.env.NANOCLAW_MCP_SERVERS) as Record<string, { command: string; args: string[]; env: Record<string, string> }>;
-      for (const [name, config] of Object.entries(additional)) {
-        mcpServers[name] = config;
-        log(`Additional MCP server: ${name} (${config.command})`);
-      }
-    } catch (e) {
-      log(`Failed to parse NANOCLAW_MCP_SERVERS: ${e}`);
-    }
+  for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
+    mcpServers[name] = serverConfig;
+    log(`Additional MCP server: ${name} (${serverConfig.command})`);
   }
 
   const provider = createProvider(providerName, {
-    assistantName,
+    assistantName: config.assistantName || undefined,
     mcpServers,
     env: { ...process.env },
     additionalDirectories: additionalDirectories.length > 0 ? additionalDirectories : undefined,
@@ -114,7 +96,6 @@ async function main(): Promise<void> {
     provider,
     cwd: CWD,
     systemContext: { instructions },
-    adminUserIds,
   });
 }
 
