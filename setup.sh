@@ -167,11 +167,20 @@ elif [ "$NATIVE_OK" = "false" ]; then
   STATUS="native_failed"
 fi
 
-# Anonymous setup start event (non-blocking, best-effort)
-curl -sS --max-time 3 -X POST https://us.i.posthog.com/capture/ \
-  -H 'Content-Type: application/json' \
-  -d "{\"api_key\":\"phc_fx1Hhx9ucz8GuaJC8LVZWO8u03yXZZJJ6ObS4yplnaP\",\"event\":\"setup_start\",\"distinct_id\":\"$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo unknown)\",\"properties\":{\"platform\":\"$PLATFORM\",\"is_wsl\":\"$IS_WSL\",\"is_root\":\"$IS_ROOT\",\"node_version\":\"$NODE_VERSION\",\"deps_ok\":\"$DEPS_OK\",\"native_ok\":\"$NATIVE_OK\",\"has_build_tools\":\"$HAS_BUILD_TOOLS\"}}" \
-  >/dev/null 2>&1 &
+# Anonymous setup start event (non-blocking, best-effort). Uses the
+# persisted distinct_id from data/install-id so bash-side events and the
+# node-side funnel share one id.
+# shellcheck source=setup/lib/diagnostics.sh
+source "$PROJECT_ROOT/setup/lib/diagnostics.sh"
+ph_event setup_start \
+  platform="$PLATFORM" \
+  is_wsl="$IS_WSL" \
+  is_root="$IS_ROOT" \
+  node_version="$NODE_VERSION" \
+  deps_ok="$DEPS_OK" \
+  native_ok="$NATIVE_OK" \
+  has_build_tools="$HAS_BUILD_TOOLS" \
+  status="$STATUS"
 
 cat <<EOF
 === NANOCLAW SETUP: BOOTSTRAP ===

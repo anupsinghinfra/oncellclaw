@@ -19,6 +19,7 @@ import k from 'kleur';
 
 import * as setupLog from '../logs.js';
 import { offerClaudeAssist } from './claude-assist.js';
+import { emit as phEmit } from './diagnostics.js';
 import { fitToWidth } from './theme.js';
 
 export type Fields = Record<string, string>;
@@ -186,11 +187,17 @@ export async function runQuietStep(
 ): Promise<StepResult & { rawLog: string; durationMs: number }> {
   const rawLog = setupLog.stepRawLog(stepName);
   const start = Date.now();
+  phEmit('step_started', { step: stepName });
   const result = await runUnderSpinner(labels, () =>
     spawnStep(stepName, extra, () => {}, rawLog),
   );
   const durationMs = Date.now() - start;
   writeStepEntry(stepName, result, durationMs, rawLog);
+  phEmit('step_completed', {
+    step: stepName,
+    status: outcomeStatus(result),
+    duration_ms: durationMs,
+  });
   return { ...result, rawLog, durationMs };
 }
 
@@ -209,6 +216,7 @@ export async function runQuietChild(
 ): Promise<QuietChildResult & { rawLog: string; durationMs: number }> {
   const rawLog = setupLog.stepRawLog(logName);
   const start = Date.now();
+  phEmit('step_started', { step: logName });
   const result = await runUnderSpinner(labels, () =>
     spawnQuiet(cmd, args, rawLog, opts?.env),
   );
@@ -223,7 +231,15 @@ export async function runQuietChild(
       ? 'skipped'
       : 'success';
   setupLog.step(logName, status, durationMs, fields, rawLog);
+  phEmit('step_completed', { step: logName, status, duration_ms: durationMs });
   return { ...result, rawLog, durationMs };
+}
+
+/** Collapse a step run into the three-way status used by diagnostics + progression log. */
+function outcomeStatus(result: StepResult): 'success' | 'skipped' | 'failed' {
+  const rawStatus = result.terminal?.fields.STATUS;
+  if (!result.ok) return 'failed';
+  return rawStatus === 'skipped' ? 'skipped' : 'success';
 }
 
 /** Turn a step's terminal-block fields into a concise progression-log entry. */
@@ -318,6 +334,7 @@ export async function fail(
   rawLogPath?: string,
 ): Promise<never> {
   setupLog.abort(stepName, msg);
+  phEmit('setup_aborted', { step: stepName, reason: msg });
   p.log.error(msg);
   if (hint) p.log.message(k.dim(hint));
   p.log.message(k.dim('Logs: logs/setup.log · Raw: logs/setup-steps/'));

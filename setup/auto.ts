@@ -38,6 +38,7 @@ import {
 } from './lib/tz-from-claude.js';
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
+import { emit as phEmit } from './lib/diagnostics.js';
 import { brandBold, brandChip, dimWrap, fitToWidth, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
 
@@ -47,6 +48,7 @@ const RUN_START = Date.now();
 async function main(): Promise<void> {
   printIntro();
   initProgressionLog();
+  phEmit('auto_started');
 
   const skip = new Set(
     (process.env.NANOCLAW_SKIP ?? '')
@@ -205,8 +207,10 @@ async function main(): Promise<void> {
     if (!skip.has('first-chat')) {
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
+        phEmit('first_chat_ready');
         await runFirstChat();
       } else {
+        phEmit('first_chat_failed', { reason: ping });
         renderPingFailureNote(ping);
         await offerClaudeAssist({
           stepName: 'cli-agent',
@@ -292,6 +296,12 @@ async function main(): Promise<void> {
         .map((n) => n.replace(/^•\s*/, '').split('\n')[0].trim())
         .filter(Boolean)
         .join(' · ');
+      phEmit('setup_incomplete', {
+        unresolved_count: notes.length,
+        service_running: res.terminal?.fields.SERVICE === 'running',
+        has_credentials: res.terminal?.fields.CREDENTIALS === 'configured',
+        agent_responds: res.terminal?.fields.AGENT_PING === 'ok',
+      });
       await offerClaudeAssist({
         stepName: 'verify',
         msg: summary || 'Verification completed with unresolved issues.',
@@ -314,6 +324,7 @@ async function main(): Promise<void> {
     .join('\n');
   p.note(nextSteps, 'Try these');
   setupLog.complete(Date.now() - RUN_START);
+  phEmit('setup_completed', { duration_ms: Date.now() - RUN_START });
   p.outro(k.green("You're ready! Enjoy NanoClaw."));
 }
 
@@ -440,6 +451,7 @@ async function runAuthStep(): Promise<void> {
     }),
   ) as 'subscription' | 'oauth' | 'api';
   setupLog.userInput('auth_method', method);
+  phEmit('auth_method_chosen', { method });
 
   if (method === 'subscription') {
     await runSubscriptionAuth();
@@ -660,6 +672,7 @@ async function askChannelChoice(): Promise<
     }),
   );
   setupLog.userInput('channel_choice', String(choice));
+  phEmit('channel_chosen', { channel: String(choice) });
   return choice as 'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip';
 }
 

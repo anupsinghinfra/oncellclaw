@@ -29,6 +29,14 @@ LOGS_DIR="$PROJECT_ROOT/logs"
 STEPS_DIR="$LOGS_DIR/setup-steps"
 PROGRESS_LOG="$LOGS_DIR/setup.log"
 
+# Diagnostics: persisted install-id + fire-and-forget emit. Sourced early
+# so `setup_launched` covers dropoff before bootstrap even starts.
+# shellcheck source=setup/lib/diagnostics.sh
+source "$PROJECT_ROOT/setup/lib/diagnostics.sh"
+ph_event setup_launched \
+  platform="$(uname -s | tr 'A-Z' 'a-z')" \
+  is_wsl="$([ -f /proc/version ] && grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null && echo true || echo false)"
+
 # ─── log helpers ────────────────────────────────────────────────────────
 
 ts_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
