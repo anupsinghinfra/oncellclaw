@@ -77,6 +77,28 @@ function visibleLength(s: string): number {
   return s.replace(ANSI_RE, '').length;
 }
 
+/**
+ * Truncate a label so the final line — base + reserved suffix — fits in
+ * the terminal width. Use on spinner labels that get an elapsed counter
+ * appended: if the total exceeds terminal width, clack's cursor-up
+ * redraw math breaks and each tick stacks a copy of the line instead
+ * of replacing it.
+ *
+ * `suffix` is the reserved space for what we'll append after `fit()`
+ * returns (e.g. ` (999s)` or a tool-use breadcrumb). We don't include
+ * it in the output — caller appends it.
+ */
+export function fitToWidth(base: string, suffix: string): string {
+  const cols = process.stdout.columns ?? 80;
+  // Overhead we reserve before sizing the label:
+  //   spinner icon (1) + 2 padding spaces = 3
+  //   clack's animated ellipsis after the label = up to 3 (". " -> "...")
+  //   1-char safety margin so wide-char glyphs don't tip over the edge
+  // Total reserved budget = 7 cols plus the caller's suffix.
+  const budget = Math.max(20, cols - 7 - visibleLength(suffix));
+  return base.length > budget ? base.slice(0, budget - 1) + '…' : base;
+}
+
 function wrapLine(line: string, width: number): string {
   if (visibleLength(line) <= width) return line;
   const words = line.split(' ');

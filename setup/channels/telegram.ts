@@ -70,7 +70,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
     },
   );
   if (!install.ok) {
-    fail(
+    await fail(
       'telegram-install',
       "Couldn't connect Telegram.",
       'See logs/setup-steps/ for details, then retry setup.',
@@ -79,7 +79,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
 
   const pair = await runPairTelegram();
   if (!pair.ok) {
-    fail(
+    await fail(
       'pair-telegram',
       "Couldn't pair with Telegram.",
       'Re-run setup to try again.',
@@ -89,7 +89,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   const platformId = pair.terminal?.fields.PLATFORM_ID;
   const pairedUserId = pair.terminal?.fields.PAIRED_USER_ID;
   if (!platformId || !pairedUserId) {
-    fail(
+    await fail(
       'pair-telegram',
       'Pairing completed but came back incomplete.',
       'Re-run setup to try again.',
@@ -118,7 +118,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
     },
   );
   if (!init.ok) {
-    fail(
+    await fail(
       'init-first-agent',
       `Couldn't finish connecting ${agentName}.`,
       'You can retry later with `/manage-channels`.',
@@ -188,7 +188,7 @@ async function validateTelegramToken(token: string): Promise<string> {
     setupLog.step('telegram-validate', 'failed', Date.now() - start, {
       ERROR: reason,
     });
-    fail(
+    await fail(
       'telegram-validate',
       "Telegram didn't accept that token.",
       'Copy the token again from @BotFather and try setup once more.',
@@ -200,7 +200,7 @@ async function validateTelegramToken(token: string): Promise<string> {
     setupLog.step('telegram-validate', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'telegram-validate',
       "Couldn't reach Telegram.",
       'Check your internet connection and retry setup.',

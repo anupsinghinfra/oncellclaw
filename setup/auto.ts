@@ -29,9 +29,10 @@ import { runDiscordChannel } from './channels/discord.js';
 import { runTelegramChannel } from './channels/telegram.js';
 import { runWhatsAppChannel } from './channels/whatsapp.js';
 import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
+import { offerClaudeAssist } from './lib/claude-assist.js';
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
-import { brandBold, brandChip, dimWrap, wrapForGutter } from './lib/theme.js';
+import { brandBold, brandChip, dimWrap, fitToWidth, wrapForGutter } from './lib/theme.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
       done: 'Your system looks good.',
     });
     if (!res.ok) {
-      fail(
+      await fail(
         'environment',
         "Your system doesn't look quite right.",
         'See logs/setup-steps/ for details, then retry.',
@@ -69,27 +70,27 @@ async function main(): Promise<void> {
       ),
     );
     const res = await runQuietStep('container', {
-      running: 'Preparing the sandbox your assistant runs in…',
+      running: "Preparing your assistant's sandbox…",
       done: 'Sandbox ready.',
       failed: "Couldn't prepare the sandbox.",
     });
     if (!res.ok) {
       const err = res.terminal?.fields.ERROR;
       if (err === 'runtime_not_available') {
-        fail(
+        await fail(
           'container',
           "Docker isn't available.",
           'Install Docker Desktop (or start it if already installed), then retry.',
         );
       }
       if (err === 'docker_group_not_active') {
-        fail(
+        await fail(
           'container',
           "Docker was just installed but your shell doesn't know yet.",
           'Log out and back in (or run `newgrp docker` in a new shell), then retry.',
         );
       }
-      fail(
+      await fail(
         'container',
         "Couldn't build the sandbox.",
         'If Docker has a stale cache, try: `docker builder prune -f`, then retry.',
@@ -112,13 +113,13 @@ async function main(): Promise<void> {
     if (!res.ok) {
       const err = res.terminal?.fields.ERROR;
       if (err === 'onecli_not_on_path_after_install') {
-        fail(
+        await fail(
           'onecli',
           'OneCLI was installed but your shell needs to refresh to see it.',
           'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"`, then retry.',
         );
       }
-      fail(
+      await fail(
         'onecli',
         `Couldn't set up OneCLI (${err ?? 'unknown error'}).`,
         'Make sure curl is installed and ~/.local/bin is writable, then retry.',
@@ -141,7 +142,7 @@ async function main(): Promise<void> {
       ['--empty'],
     );
     if (!res.ok) {
-      fail('mounts', "Couldn't write access rules.");
+      await fail('mounts', "Couldn't write access rules.");
     }
   }
 
@@ -151,7 +152,7 @@ async function main(): Promise<void> {
       done: 'NanoClaw is running.',
     });
     if (!res.ok) {
-      fail(
+      await fail(
         'service',
         "Couldn't start NanoClaw.",
         'See logs/nanoclaw.error.log for details.',
@@ -188,7 +189,7 @@ async function main(): Promise<void> {
       ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME],
     );
     if (!res.ok) {
-      fail(
+      await fail(
         'cli-agent',
         "Couldn't bring your assistant online.",
         `You can retry later with \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName!}" --agent-name "${CLI_AGENT_NAME}"\`.`,
@@ -200,6 +201,17 @@ async function main(): Promise<void> {
         await runFirstChat();
       } else {
         renderPingFailureNote(ping);
+        await offerClaudeAssist({
+          stepName: 'cli-agent',
+          msg:
+            ping === 'socket_error'
+              ? "NanoClaw service isn't listening on its CLI socket."
+              : "No reply from the assistant within 30 seconds.",
+          hint:
+            ping === 'socket_error'
+              ? 'Socket at data/cli.sock did not accept a connection.'
+              : 'Agent container may be failing to start or authenticate.',
+        });
       }
     }
   }
@@ -261,6 +273,18 @@ async function main(): Promise<void> {
       if (notes.length > 0) {
         p.note(notes.join('\n'), "What's left");
       }
+      // "What's left" is a soft failure — we don't abort like fail(), but the
+      // user is still stuck and a fix is exactly what claude-assist is for.
+      const summary = notes
+        .map((n) => n.replace(/^•\s*/, '').split('\n')[0].trim())
+        .filter(Boolean)
+        .join(' · ');
+      await offerClaudeAssist({
+        stepName: 'verify',
+        msg: summary || 'Verification completed with unresolved issues.',
+        hint: `Terminal block: ${JSON.stringify(res.terminal?.fields ?? {})}`,
+        rawLogPath: res.rawLog,
+      });
       p.outro(k.yellow('Almost there. A few things still need your attention.'));
       return;
     }
@@ -293,24 +317,26 @@ async function confirmAssistantResponds(): Promise<PingResult> {
   const s = p.spinner();
   const start = Date.now();
   const label = 'Waking your assistant…';
-  s.start(label);
+  s.start(fitToWidth(label, ' (999s)'));
   const tick = setInterval(() => {
     const elapsed = Math.round((Date.now() - start) / 1000);
-    s.message(`${label} ${k.dim(`(${elapsed}s)`)}`);
+    const suffix = ` (${elapsed}s)`;
+    s.message(`${fitToWidth(label, suffix)}${k.dim(suffix)}`);
   }, 1000);
 
   const result = await pingCliAgent();
 
   clearInterval(tick);
   const elapsed = Math.round((Date.now() - start) / 1000);
+  const suffix = ` (${elapsed}s)`;
   if (result === 'ok') {
-    s.stop(`Your assistant is ready. ${k.dim(`(${elapsed}s)`)}`);
+    s.stop(`${fitToWidth('Your assistant is ready.', suffix)}${k.dim(suffix)}`);
   } else {
     const msg =
       result === 'socket_error'
         ? "Couldn't reach the NanoClaw service."
         : "Your assistant didn't reply in time.";
-    s.stop(`${msg} ${k.dim(`(${elapsed}s)`)}`, 1);
+    s.stop(`${fitToWidth(msg, suffix)}${k.dim(suffix)}`, 1);
   }
   return result;
 }
@@ -426,7 +452,7 @@ async function runSubscriptionAuth(): Promise<void> {
       EXIT_CODE: code,
       METHOD: 'subscription',
     });
-    fail(
+    await fail(
       'auth',
       "Couldn't complete the Claude sign-in.",
       'Re-run setup and try again, or choose a paste option instead.',
@@ -473,7 +499,7 @@ async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
     },
   );
   if (!res.ok) {
-    fail(
+    await fail(
       'auth',
       `Couldn't save your ${label} to the vault.`,
       'Make sure OneCLI is running (`onecli version`), then retry.',

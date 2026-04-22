@@ -78,7 +78,7 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
     },
   );
   if (!install.ok) {
-    fail(
+    await fail(
       'discord-install',
       "Couldn't connect Discord.",
       'See logs/setup-steps/ for details, then retry setup.',
@@ -114,7 +114,7 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
     },
   );
   if (!init.ok) {
-    fail(
+    await fail(
       'init-first-agent',
       `Couldn't finish connecting ${agentName}.`,
       'Most likely the bot and you don\'t share a server yet — invite the bot, then retry later with `/manage-channels`.',
@@ -211,7 +211,7 @@ async function validateDiscordToken(token: string): Promise<string> {
     setupLog.step('discord-validate', 'failed', Date.now() - start, {
       ERROR: reason,
     });
-    fail(
+    await fail(
       'discord-validate',
       "Discord didn't accept that token.",
       'Copy the token again from the Developer Portal and retry setup.',
@@ -223,7 +223,7 @@ async function validateDiscordToken(token: string): Promise<string> {
     setupLog.step('discord-validate', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'discord-validate',
       "Couldn't reach Discord.",
       'Check your internet connection and retry setup.',
@@ -253,7 +253,7 @@ async function fetchApplicationInfo(token: string): Promise<AppInfo> {
       setupLog.step('discord-app-info', 'failed', Date.now() - start, {
         ERROR: reason,
       });
-      fail(
+      await fail(
         'discord-app-info',
         "Couldn't read your Discord application details.",
         'Re-run setup. If it keeps failing, check the bot token has the right scopes.',
@@ -283,7 +283,7 @@ async function fetchApplicationInfo(token: string): Promise<AppInfo> {
     setupLog.step('discord-app-info', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'discord-app-info',
       "Couldn't reach Discord.",
       'Check your internet connection and retry setup.',
@@ -394,7 +394,7 @@ async function openDmChannel(token: string, userId: string): Promise<string> {
       setupLog.step('discord-open-dm', 'failed', Date.now() - start, {
         ERROR: reason,
       });
-      fail(
+      await fail(
         'discord-open-dm',
         "Couldn't open a DM channel with you.",
         'Make sure the bot is in a server you\'re also in, then retry setup.',
@@ -412,7 +412,7 @@ async function openDmChannel(token: string, userId: string): Promise<string> {
     setupLog.step('discord-open-dm', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'discord-open-dm',
       "Couldn't reach Discord.",
       'Check your internet connection and retry setup.',
