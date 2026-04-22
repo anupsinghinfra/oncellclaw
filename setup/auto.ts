@@ -25,6 +25,7 @@ import { spawn, spawnSync } from 'child_process';
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
+import { runDiscordChannel } from './channels/discord.js';
 import { runTelegramChannel } from './channels/telegram.js';
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
@@ -195,9 +196,11 @@ async function main(): Promise<void> {
     const choice = await askChannelChoice();
     if (choice === 'telegram') {
       await runTelegramChannel(displayName!);
+    } else if (choice === 'discord') {
+      await runDiscordChannel(displayName!);
     } else {
       p.log.info(
-        "No messaging app for now. You can add one later (like Telegram, Slack, or Discord).",
+        "No messaging app for now. You can add one later (like Telegram, Discord, or Slack).",
       );
     }
   }
@@ -372,18 +375,19 @@ async function askDisplayName(fallback: string): Promise<string> {
   return value;
 }
 
-async function askChannelChoice(): Promise<'telegram' | 'skip'> {
+async function askChannelChoice(): Promise<'telegram' | 'discord' | 'skip'> {
   const choice = ensureAnswer(
     await p.select({
       message: 'Want to chat with your assistant from your phone?',
       options: [
         { value: 'telegram', label: 'Yes, connect Telegram', hint: 'recommended' },
+        { value: 'discord', label: 'Yes, connect Discord' },
         { value: 'skip', label: 'Skip for now', hint: "I'll just use the terminal" },
       ],
     }),
   );
   setupLog.userInput('channel_choice', String(choice));
-  return choice as 'telegram' | 'skip';
+  return choice as 'telegram' | 'discord' | 'skip';
 }
 
 // ─── interactive / env helpers ─────────────────────────────────────────
