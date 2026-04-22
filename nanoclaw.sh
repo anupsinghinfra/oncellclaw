@@ -126,6 +126,54 @@ write_header
 printf '\n  %s%s\n' "$(bold 'Nano')" "$(brand_bold 'Claw')"
 printf '  %s\n\n' "$(dim 'Setting up your personal AI assistant')"
 
+# ─── pre-flight: Homebrew on macOS ─────────────────────────────────────
+# setup/install-node.sh and setup/install-docker.sh both require `brew` on
+# macOS. On a factory Mac there's no brew, and those helpers would fail
+# later inside the bootstrap spinner with a cryptic error. Prompt here,
+# before the spinner starts, so the user knows what's about to happen and
+# brew's own interactive sudo/CLT prompts stay readable.
+if [ "$(uname -s)" = "Darwin" ] && ! command -v brew >/dev/null 2>&1; then
+  printf '  %s\n' \
+    "$(dim "Homebrew isn't installed. NanoClaw uses it to install Node and Docker on your Mac.")"
+  printf '  %s\n\n' \
+    "$(dim "This also installs Apple's Command Line Tools, which can take 5-10 minutes.")"
+  read -r -p "  $(bold 'Install Homebrew now?') [Y/n] " BREW_ANS </dev/tty
+
+  case "${BREW_ANS:-Y}" in
+    [Yy]*|'')
+      printf '\n'
+      # Official installer. Runs interactively, triggers xcode-select --install
+      # for Command Line Tools, and prompts for the user's password for sudo.
+      # `|| true` so a user-cancelled install doesn't kill us via `set -e`;
+      # the PATH check below is the real gate.
+      /bin/bash -c \
+        "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+        || true
+
+      # Put brew on PATH for this session (the installer writes to
+      # .zprofile/.bash_profile for future shells, but not this one).
+      if [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+      elif [ -x /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+      fi
+
+      if ! command -v brew >/dev/null 2>&1; then
+        printf '\n  %s %s\n' "$(red '✗')" "Homebrew install didn't complete."
+        printf '  %s\n\n' \
+          "$(dim 'Install manually from https://brew.sh and re-run: bash nanoclaw.sh')"
+        exit 1
+      fi
+      printf '\n'
+      ;;
+    *)
+      printf '\n  %s\n\n' \
+        "$(dim 'NanoClaw needs Homebrew. Install it from https://brew.sh and re-run.')"
+      exit 1
+      ;;
+  esac
+fi
+
 # ─── first step: install the basics (Node + pnpm + native modules) ─────
 
 BOOTSTRAP_RAW="${STEPS_DIR}/01-bootstrap.log"
