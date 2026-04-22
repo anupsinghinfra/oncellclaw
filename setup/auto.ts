@@ -14,7 +14,7 @@
  *                          "Terminal Agent".
  *   NANOCLAW_SKIP          comma-separated step names to skip
  *                          (environment|container|onecli|auth|mounts|
- *                           service|cli-agent|channel|verify)
+ *                           service|cli-agent|channel|verify|first-chat)
  *
  * Timezone defaults to the host system's TZ. Run
  *   pnpm exec tsx setup/index.ts --step timezone -- --tz <zone>
@@ -27,9 +27,10 @@ import k from 'kleur';
 
 import { runDiscordChannel } from './channels/discord.js';
 import { runTelegramChannel } from './channels/telegram.js';
+import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
-import { brandBold, brandChip } from './lib/theme.js';
+import { brandBold, brandChip, dimWrap, wrapForGutter } from './lib/theme.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
@@ -61,8 +62,9 @@ async function main(): Promise<void> {
 
   if (!skip.has('container')) {
     p.log.message(
-      k.dim(
+      dimWrap(
         'Your assistant lives in its own sandbox. It can only see what you explicitly share.',
+        4,
       ),
     );
     const res = await runQuietStep('container', {
@@ -97,8 +99,9 @@ async function main(): Promise<void> {
 
   if (!skip.has('onecli')) {
     p.log.message(
-      k.dim(
+      dimWrap(
         'Your assistant never gets your API keys directly. The vault adds them to approved requests as they leave the sandbox.',
+        4,
       ),
     );
     const res = await runQuietStep('onecli', {
@@ -178,17 +181,25 @@ async function main(): Promise<void> {
     const res = await runQuietStep(
       'cli-agent',
       {
-        running: 'Setting up your terminal chat…',
-        done: 'Terminal chat ready. Try `pnpm run chat hi`.',
+        running: 'Bringing your assistant online…',
+        done: 'Assistant wired up.',
       },
       ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME],
     );
     if (!res.ok) {
       fail(
         'cli-agent',
-        "Couldn't set up the terminal chat.",
+        "Couldn't bring your assistant online.",
         `You can retry later with \`pnpm exec tsx scripts/init-cli-agent.ts --display-name "${displayName!}" --agent-name "${CLI_AGENT_NAME}"\`.`,
       );
+    }
+    if (!skip.has('first-chat')) {
+      const ping = await confirmAssistantResponds();
+      if (ping === 'ok') {
+        await runFirstChat();
+      } else {
+        renderPingFailureNote(ping);
+      }
     }
   }
 
@@ -200,7 +211,10 @@ async function main(): Promise<void> {
       await runDiscordChannel(displayName!);
     } else {
       p.log.info(
-        "No messaging app for now. You can add one later (like Telegram, Discord, or Slack).",
+        wrapForGutter(
+          'No messaging app for now. You can add one later (like Telegram, Discord, or Slack).',
+          4,
+        ),
       );
     }
   }
@@ -216,12 +230,27 @@ async function main(): Promise<void> {
       if (res.terminal?.fields.CREDENTIALS !== 'configured') {
         notes.push('• Your Claude account isn\'t connected. Re-run setup and try again.');
       }
-      const agentPing = res.terminal?.fields.AGENT_PING;
-      if (agentPing && agentPing !== 'ok' && agentPing !== 'skipped') {
+      const service = res.terminal?.fields.SERVICE;
+      if (service === 'running_other_checkout') {
         notes.push(
-          "• Your assistant didn't reply to a test message. " +
-            'Check `logs/nanoclaw.log` for clues, then try `pnpm run chat hi`.',
+          wrapForGutter(
+            [
+              '• Your NanoClaw service is running from a different folder on this machine.',
+              '  Point it at this checkout with:',
+              '    launchctl bootout gui/$(id -u)/com.nanoclaw',
+              '    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nanoclaw.plist',
+            ].join('\n'),
+            6,
+          ),
         );
+      } else {
+        const agentPing = res.terminal?.fields.AGENT_PING;
+        if (agentPing && agentPing !== 'ok' && agentPing !== 'skipped') {
+          notes.push(
+            "• Your assistant didn't reply to a test message. " +
+              'Check `logs/nanoclaw.log` for clues, then try `pnpm run chat hi`.',
+          );
+        }
       }
       if (!res.terminal?.fields.CONFIGURED_CHANNELS) {
         notes.push('• Want to chat from your phone? Add a messaging app with `/add-telegram`, `/add-slack`, or `/add-discord`.');
@@ -246,6 +275,95 @@ async function main(): Promise<void> {
   p.note(nextSteps, 'Try these');
   setupLog.complete(Date.now() - RUN_START);
   p.outro(k.green("You're ready! Enjoy NanoClaw."));
+}
+
+// ─── first-chat step ───────────────────────────────────────────────────
+
+/**
+ * Round-trip ping against the CLI socket before we ask the user to chat.
+ * Renders its own spinner with elapsed time because a cold-start container
+ * boot can take 30–60s — the elapsed counter is the difference between
+ * "patient" and "is this hung?". Returns the raw result so the caller can
+ * branch between the chat loop (ok) and a diagnostic note (anything else).
+ */
+async function confirmAssistantResponds(): Promise<PingResult> {
+  const s = p.spinner();
+  const start = Date.now();
+  const label = 'Waking your assistant…';
+  s.start(label);
+  const tick = setInterval(() => {
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    s.message(`${label} ${k.dim(`(${elapsed}s)`)}`);
+  }, 1000);
+
+  const result = await pingCliAgent();
+
+  clearInterval(tick);
+  const elapsed = Math.round((Date.now() - start) / 1000);
+  if (result === 'ok') {
+    s.stop(`Your assistant is ready. ${k.dim(`(${elapsed}s)`)}`);
+  } else {
+    const msg =
+      result === 'socket_error'
+        ? "Couldn't reach the NanoClaw service."
+        : "Your assistant didn't reply in time.";
+    s.stop(`${msg} ${k.dim(`(${elapsed}s)`)}`, 1);
+  }
+  return result;
+}
+
+function renderPingFailureNote(result: PingResult): void {
+  const body =
+    result === 'socket_error'
+      ? [
+          wrapForGutter(
+            "The NanoClaw service isn't listening on its local socket. Try restarting it, then chat with `pnpm run chat hi`:",
+            6,
+          ),
+          '',
+          k.dim('  macOS:  launchctl kickstart -k gui/$(id -u)/com.nanoclaw'),
+          k.dim('  Linux:  systemctl --user restart nanoclaw'),
+        ].join('\n')
+      : wrapForGutter(
+          'No reply from your assistant within 30 seconds. Check `logs/nanoclaw.log` for clues, then try `pnpm run chat hi`.',
+          6,
+        );
+  p.note(body, 'Skipping the first chat');
+}
+
+/**
+ * Chat loop. Each message is piped through `pnpm run chat`, which uses
+ * the same Unix-socket path the ping just exercised, so output streams
+ * back inline as the agent replies. An empty input ends the loop.
+ */
+async function runFirstChat(): Promise<void> {
+  while (true) {
+    const answer = ensureAnswer(
+      await p.text({
+        message: 'Say something to your assistant',
+        placeholder: 'press Enter with nothing to continue',
+      }),
+    );
+    const text = ((answer as string | undefined) ?? '').trim();
+    if (!text) return;
+    await sendChatMessage(text);
+  }
+}
+
+function sendChatMessage(message: string): Promise<void> {
+  return new Promise((resolve) => {
+    // `pnpm --silent` suppresses the `> nanoclaw@… chat` preamble so the
+    // agent's reply reads as a clean block under the prompt. Splitting on
+    // whitespace mirrors `pnpm run chat hello world` — chat.ts joins argv
+    // with spaces on the far side.
+    const child = spawn(
+      'pnpm',
+      ['--silent', 'run', 'chat', ...message.split(/\s+/)],
+      { stdio: ['ignore', 'inherit', 'inherit'] },
+    );
+    child.on('close', () => resolve());
+    child.on('error', () => resolve());
+  });
 }
 
 // ─── auth step (select → branch) ────────────────────────────────────────
@@ -440,7 +558,6 @@ function maybeReexecUnderSg(): void {
 
 function printIntro(): void {
   const isReexec = process.env.NANOCLAW_REEXEC_SG === '1';
-  const isBootstrapped = process.env.NANOCLAW_BOOTSTRAPPED === '1';
   const wordmark = `${k.bold('Nano')}${brandBold('Claw')}`;
 
   if (isReexec) {
@@ -450,18 +567,11 @@ function printIntro(): void {
     return;
   }
 
-  // When we were called via nanoclaw.sh, the wordmark + subtitle were
-  // already printed in bash. Just open the clack gutter with a short,
-  // neutral intro so the flow continues without duplication.
-  if (isBootstrapped) {
-    p.intro(k.dim("Let's get you set up."));
-    return;
-  }
-
-  console.log();
-  console.log(`  ${wordmark}`);
-  console.log(`  ${k.dim('Setting up your personal AI assistant')}`);
-  p.intro(k.dim("Let's get you set up."));
+  // Always include the wordmark inside the clack intro line. When bash ran
+  // first (NANOCLAW_BOOTSTRAPPED=1) it already printed its own wordmark
+  // above us; the small repeat is worth it to keep the brand anchored at
+  // the visible top of the clack session once the bash output scrolls away.
+  p.intro(`${wordmark}  ${k.dim("Let's get you set up.")}`);
 }
 
 /**

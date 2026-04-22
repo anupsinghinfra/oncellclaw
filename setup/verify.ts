@@ -4,7 +4,7 @@
  *
  * Uses better-sqlite3 directly (no sqlite3 CLI), platform-aware service checks.
  */
-import { execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -14,6 +14,7 @@ import Database from 'better-sqlite3';
 import { DATA_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
 import { log } from '../src/log.js';
+import { pingCliAgent } from './lib/agent-ping.js';
 import {
   getPlatform,
   getServiceManager,
@@ -29,19 +30,35 @@ export async function run(_args: string[]): Promise<void> {
 
   log.info('Starting verification');
 
-  // 1. Check service status
-  let service = 'not_found';
+  // 1. Check service status + detect checkout mismatch.
+  //
+  // Why the mismatch matters: the host binds `<DATA_DIR>/cli.sock` relative
+  // to the project root it was started from. If the running service is from
+  // a sibling checkout (common for developers with multiple clones), this
+  // repo's `data/cli.sock` won't exist — AGENT_PING would return a
+  // misleading `socket_error`. Surface the mismatch directly instead.
+  let service:
+    | 'not_found'
+    | 'stopped'
+    | 'running'
+    | 'running_other_checkout' = 'not_found';
+  let runningFromPath: string | null = null;
   const mgr = getServiceManager();
 
   if (mgr === 'launchd') {
     try {
       const output = execSync('launchctl list', { encoding: 'utf-8' });
-      if (output.includes('com.nanoclaw')) {
-        // Check if it has a PID (actually running)
-        const line = output.split('\n').find((l) => l.includes('com.nanoclaw'));
-        if (line) {
-          const pidField = line.trim().split(/\s+/)[0];
-          service = pidField !== '-' && pidField ? 'running' : 'stopped';
+      const line = output.split('\n').find((l) => l.includes('com.nanoclaw'));
+      if (line) {
+        const pidField = line.trim().split(/\s+/)[0];
+        if (pidField !== '-' && pidField) {
+          service = 'running';
+          const pid = Number(pidField);
+          if (Number.isInteger(pid) && pid > 0) {
+            runningFromPath = resolveBinaryScript(pid);
+          }
+        } else {
+          service = 'stopped';
         }
       }
     } catch {
@@ -52,6 +69,18 @@ export async function run(_args: string[]): Promise<void> {
     try {
       execSync(`${prefix} is-active nanoclaw`, { stdio: 'ignore' });
       service = 'running';
+      try {
+        const pidStr = execSync(
+          `${prefix} show nanoclaw -p MainPID --value`,
+          { encoding: 'utf-8' },
+        ).trim();
+        const pid = Number(pidStr);
+        if (Number.isInteger(pid) && pid > 0) {
+          runningFromPath = resolveBinaryScript(pid);
+        }
+      } catch {
+        // couldn't read MainPID; leave runningFromPath null
+      }
     } catch {
       try {
         const output = execSync(`${prefix} list-unit-files`, {
@@ -74,13 +103,23 @@ export async function run(_args: string[]): Promise<void> {
         if (raw && Number.isInteger(pid) && pid > 0) {
           process.kill(pid, 0);
           service = 'running';
+          runningFromPath = resolveBinaryScript(pid);
         }
       } catch {
         service = 'stopped';
       }
     }
   }
-  log.info('Service status', { service });
+
+  if (
+    service === 'running' &&
+    runningFromPath &&
+    !isPathInside(runningFromPath, projectRoot)
+  ) {
+    service = 'running_other_checkout';
+  }
+
+  log.info('Service status', { service, runningFromPath });
 
   // 2. Check container runtime
   let containerRuntime = 'none';
@@ -213,46 +252,27 @@ export async function run(_args: string[]): Promise<void> {
 }
 
 /**
- * Send a one-word message through the CLI channel and check for a reply.
- * Silent by default — stdout/stderr of the child are captured but not
- * forwarded. Kills the child after 90s so verify can't hang on a wedged
- * agent (chat.ts's own timeout is 120s, which is too long for setup).
+ * Given a PID, resolve the script path the process is executing (i.e. the
+ * first `.js` / `.ts` / `.mjs` arg after `node`). Returns null on any
+ * error — callers should treat null as "couldn't tell" and skip the
+ * mismatch check rather than flag a false positive.
  */
-function pingCliAgent(): Promise<'ok' | 'no_reply' | 'socket_error'> {
-  return new Promise((resolve) => {
-    const child = spawn('pnpm', ['run', 'chat', 'ping'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGKILL');
-      resolve('no_reply');
-    }, 90_000);
+function resolveBinaryScript(pid: number): string | null {
+  try {
+    // BSD ps (macOS) and util-linux both honour `-o command=` (full argv,
+    // no header). Node argv: "node /path/to/dist/index.js ...".
+    const out = execSync(`ps -p ${pid} -o command=`, {
+      encoding: 'utf-8',
+    }).trim();
+    const tokens = out.split(/\s+/);
+    const script = tokens.find((t) => /\.(js|mjs|cjs|ts)$/.test(t));
+    return script ?? null;
+  } catch {
+    return null;
+  }
+}
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf-8');
-    });
-    child.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      // chat.ts: exit 0 on reply, 2 on socket error, 3 on no reply.
-      if (code === 2) {
-        resolve('socket_error');
-      } else if (code === 0 && stdout.trim().length > 0) {
-        resolve('ok');
-      } else {
-        resolve('no_reply');
-      }
-    });
-    child.on('error', () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve('socket_error');
-    });
-  });
+function isPathInside(candidate: string, parent: string): boolean {
+  const rel = path.relative(parent, candidate);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }

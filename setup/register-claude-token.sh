@@ -25,8 +25,26 @@ HOST_PATTERN="${HOST_PATTERN:-api.anthropic.com}"
 
 command -v onecli >/dev/null \
   || { echo "onecli not found. Install it first (see /setup §4)." >&2; exit 1; }
-command -v claude >/dev/null \
-  || { echo "claude CLI not found. Install from https://claude.ai/download" >&2; exit 1; }
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "Claude Code CLI not found — installing it now (needed for subscription sign-in)…"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if ! bash "$SCRIPT_DIR/install-claude.sh"; then
+    echo >&2
+    echo "Couldn't install the Claude Code CLI automatically." >&2
+    echo "Install it manually with" >&2
+    echo "  curl -fsSL https://claude.ai/install.sh | bash" >&2
+    echo "and re-run setup." >&2
+    exit 1
+  fi
+  # install-claude.sh PATH additions are scoped to its own subshell; redo
+  # them here so the rest of this script can see the fresh `claude` binary.
+  if [ -d "$HOME/.local/bin" ] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+  hash -r 2>/dev/null || true
+fi
+
 command -v script >/dev/null \
   || { echo "script(1) is required for PTY capture." >&2; exit 1; }
 
