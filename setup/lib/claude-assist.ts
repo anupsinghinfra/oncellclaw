@@ -63,6 +63,8 @@ const STEP_FILES: Record<string, string[]> = {
   'telegram-validate': ['setup/channels/telegram.ts'],
   'pair-telegram': ['setup/pair-telegram.ts', 'setup/channels/telegram.ts'],
   'discord-install': ['setup/add-discord.sh', 'setup/channels/discord.ts'],
+  'teams-install': ['setup/add-teams.sh', 'setup/channels/teams.ts'],
+  'teams-manifest': ['setup/lib/teams-manifest.ts', 'setup/channels/teams.ts'],
   'init-first-agent': [
     'scripts/init-first-agent.ts',
     'setup/channels/telegram.ts',
