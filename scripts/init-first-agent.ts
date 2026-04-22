@@ -24,7 +24,8 @@
  *     --platform-id discord:@me:1491573333382523708 \
  *     --display-name "Gavriel" \
  *     [--agent-name "Andy"] \
- *     [--welcome "System instruction: ..."]
+ *     [--welcome "System instruction: ..."] \
+ *     [--role owner|admin|member]    # default: owner
  *
  * For direct-addressable channels (telegram, whatsapp, etc.), --platform-id
  * is typically the same as the handle in --user-id, with the channel prefix.
@@ -44,10 +45,12 @@ import {
 import { runMigrations } from '../src/db/migrations/index.js';
 import { normalizeName } from '../src/modules/agent-to-agent/db/agent-destinations.js';
 import { addMember } from '../src/modules/permissions/db/agent-group-members.js';
-import { grantRole, hasAnyOwner } from '../src/modules/permissions/db/user-roles.js';
+import { getUserRoles, grantRole } from '../src/modules/permissions/db/user-roles.js';
 import { upsertUser } from '../src/modules/permissions/db/users.js';
 import { initGroupFilesystem } from '../src/group-init.js';
 import type { AgentGroup, MessagingGroup } from '../src/types.js';
+
+type Role = 'owner' | 'admin' | 'member';
 
 interface Args {
   channel: string;
@@ -56,10 +59,13 @@ interface Args {
   displayName: string;
   agentName: string;
   welcome: string;
+  role: Role;
 }
 
 const DEFAULT_WELCOME =
   'System instruction: run /welcome to introduce yourself to the user on this new channel.';
+
+const DEFAULT_ROLE: Role = 'owner';
 
 function parseArgs(argv: string[]): Args {
   const out: Partial<Args> = {};
@@ -91,6 +97,18 @@ function parseArgs(argv: string[]): Args {
         out.welcome = val;
         i++;
         break;
+      case '--role': {
+        const raw = (val ?? '').toLowerCase();
+        if (raw !== 'owner' && raw !== 'admin' && raw !== 'member') {
+          console.error(
+            `Invalid --role: ${raw} (expected 'owner', 'admin', or 'member')`,
+          );
+          process.exit(2);
+        }
+        out.role = raw;
+        i++;
+        break;
+      }
     }
   }
 
@@ -111,6 +129,7 @@ function parseArgs(argv: string[]): Args {
     displayName: out.displayName!,
     agentName: out.agentName?.trim() || out.displayName!,
     welcome: out.welcome?.trim() || DEFAULT_WELCOME,
+    role: out.role ?? DEFAULT_ROLE,
   };
 }
 
@@ -173,17 +192,8 @@ async function main(): Promise<void> {
     created_at: now,
   });
 
-  let promotedToOwner = false;
-  if (!hasAnyOwner()) {
-    grantRole({
-      user_id: userId,
-      role: 'owner',
-      agent_group_id: null,
-      granted_by: null,
-      granted_at: now,
-    });
-    promotedToOwner = true;
-  }
+  // Owner grant is deferred until after the agent group is resolved, since
+  // an admin grant is scoped to that group. See step 2b.
 
   // 2. Agent group + filesystem.
   const folder = `dm-with-${normalizeName(args.displayName)}`;
@@ -209,12 +219,46 @@ async function main(): Promise<void> {
       'When the user first reaches out (or you receive a system welcome prompt), introduce yourself briefly and invite them to chat. Keep replies concise.',
   });
 
-  // 2b. Grant the user access to this agent group. Owner role is only
-  // assigned to the first user (above); subsequent DMs need explicit
-  // membership or the strict unknown_sender_policy on the DM messaging
-  // group will drop every message with accessReason='not_member'. addMember
-  // is INSERT OR IGNORE — idempotent when the global owner already has
-  // access by virtue of their role.
+  // 2b. Assign the user a role for this agent group. The caller picks via
+  // --role; the channel drivers default to 'owner' for the self-host case.
+  //  - owner:  global owner (agent_group_id=null). Cross-channel access.
+  //  - admin:  scoped admin for this agent group only.
+  //  - member: no role grant, just the membership row below.
+  // grantRole inserts a new row per call — idempotence check against
+  // getUserRoles prevents duplicates on re-runs.
+  const existingRoles = getUserRoles(userId);
+  if (args.role === 'owner') {
+    const alreadyOwner = existingRoles.some(
+      (r) => r.role === 'owner' && r.agent_group_id === null,
+    );
+    if (!alreadyOwner) {
+      grantRole({
+        user_id: userId,
+        role: 'owner',
+        agent_group_id: null,
+        granted_by: null,
+        granted_at: now,
+      });
+    }
+  } else if (args.role === 'admin') {
+    const alreadyAdmin = existingRoles.some(
+      (r) => r.role === 'admin' && r.agent_group_id === ag.id,
+    );
+    if (!alreadyAdmin) {
+      grantRole({
+        user_id: userId,
+        role: 'admin',
+        agent_group_id: ag.id,
+        granted_by: null,
+        granted_at: now,
+      });
+    }
+  }
+
+  // Always add a membership row so the access gate has a straightforward
+  // yes/no even for users without a role grant. INSERT OR IGNORE, so this
+  // is a no-op when the row already exists (e.g. re-runs, owners whose
+  // access already passes via role).
   addMember({
     user_id: userId,
     agent_group_id: ag.id,
@@ -254,9 +298,17 @@ async function main(): Promise<void> {
     sender: args.displayName,
   });
 
+  const roleLabel =
+    args.role === 'owner'
+      ? 'owner (global)'
+      : args.role === 'admin'
+        ? `admin (scoped to ${ag.id})`
+        : 'member';
+
   console.log('');
   console.log('Init complete.');
-  console.log(`  owner:   ${userId}${promotedToOwner ? ' (promoted on first owner)' : ''}`);
+  console.log(`  user:    ${userId}`);
+  console.log(`  role:    ${roleLabel}`);
   console.log(`  agent:   ${ag.name} [${ag.id}] @ groups/${folder}`);
   console.log(`  channel: ${args.channel} ${dmMg.platform_id}`);
   console.log('');

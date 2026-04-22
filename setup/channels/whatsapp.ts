@@ -43,6 +43,7 @@ import {
   spawnStep,
   writeStepEntry,
 } from '../lib/runner.js';
+import { askOperatorRole } from '../lib/role-prompt.js';
 import { brandBold } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
@@ -101,6 +102,9 @@ export async function runWhatsAppChannel(displayName: string): Promise<void> {
     writeAssistantHasOwnNumber();
   }
 
+  const role = await askOperatorRole('WhatsApp');
+  setupLog.userInput('whatsapp_role', role);
+
   const agentName = await resolveAgentName();
 
   const platformId = `${chatPhone}@s.whatsapp.net`;
@@ -115,6 +119,7 @@ export async function runWhatsAppChannel(displayName: string): Promise<void> {
       '--platform-id', platformId,
       '--display-name', displayName,
       '--agent-name', agentName,
+      '--role', role,
     ],
     {
       running: `Connecting ${agentName} to WhatsApp…`,
@@ -128,6 +133,7 @@ export async function runWhatsAppChannel(displayName: string): Promise<void> {
         AGENT_NAME: agentName,
         PLATFORM_ID: platformId,
         MODE: isDedicated ? 'dedicated' : 'shared',
+        ROLE: role,
       },
     },
   );

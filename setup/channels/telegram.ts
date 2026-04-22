@@ -22,6 +22,7 @@ import k from 'kleur';
 
 import * as setupLog from '../logs.js';
 import { confirmThenOpen } from '../lib/browser.js';
+import { askOperatorRole } from '../lib/role-prompt.js';
 import {
   type Block,
   type StepResult,
@@ -96,6 +97,9 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
     );
   }
 
+  const role = await askOperatorRole('Telegram');
+  setupLog.userInput('telegram_role', role);
+
   const agentName = await resolveAgentName();
 
   const init = await runQuietChild(
@@ -108,6 +112,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
       '--platform-id', platformId,
       '--display-name', displayName,
       '--agent-name', agentName,
+      '--role', role,
     ],
     {
       running: `Connecting ${agentName} to your Telegram chat…`,

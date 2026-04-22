@@ -28,6 +28,7 @@ import k from 'kleur';
 
 import * as setupLog from '../logs.js';
 import { confirmThenOpen } from '../lib/browser.js';
+import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
@@ -88,6 +89,9 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
   const dmChannelId = await openDmChannel(token, ownerUserId);
   const platformId = `discord:@me:${dmChannelId}`;
 
+  const role = await askOperatorRole('Discord');
+  setupLog.userInput('discord_role', role);
+
   const agentName = await resolveAgentName();
 
   const init = await runQuietChild(
@@ -100,6 +104,7 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
       '--platform-id', platformId,
       '--display-name', displayName,
       '--agent-name', agentName,
+      '--role', role,
     ],
     {
       running: `Connecting ${agentName} to your Discord DMs…`,
