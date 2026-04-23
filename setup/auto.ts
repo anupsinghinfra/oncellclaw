@@ -31,7 +31,9 @@ import { runTeamsChannel } from './channels/teams.js';
 import { runTelegramChannel } from './channels/telegram.js';
 import { runWhatsAppChannel } from './channels/whatsapp.js';
 import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
+import { brightSelect } from './lib/bright-select.js';
 import { offerClaudeAssist } from './lib/claude-assist.js';
+import { runWindowedStep } from './lib/windowed-runner.js';
 import {
   claudeCliAvailable,
   resolveTimezoneViaClaude,
@@ -78,7 +80,13 @@ async function main(): Promise<void> {
         4,
       ),
     );
-    const res = await runQuietStep('container', {
+    p.log.message(
+      dimWrap(
+        'The first build pulls a base image and installs a few tools. On a fresh machine this usually takes 3–10 minutes.',
+        4,
+      ),
+    );
+    const res = await runWindowedStep('container', {
       running: "Preparing your assistant's sandbox…",
       done: 'Sandbox ready.',
       failed: "Couldn't prepare the sandbox.",
@@ -123,7 +131,7 @@ async function main(): Promise<void> {
     let reuse = false;
     if (existing) {
       const choice = ensureAnswer(
-        await p.select({
+        await brightSelect({
           message: `Found an existing OneCLI at ${existing.apiHost}. What would you like to do?`,
           options: [
             {
@@ -265,15 +273,17 @@ async function main(): Promise<void> {
     await runTimezoneStep();
   }
 
+  let channelChoice: 'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip' =
+    'skip';
   if (!skip.has('channel')) {
-    const choice = await askChannelChoice();
-    if (choice === 'telegram') {
+    channelChoice = await askChannelChoice();
+    if (channelChoice === 'telegram') {
       await runTelegramChannel(displayName!);
-    } else if (choice === 'discord') {
+    } else if (channelChoice === 'discord') {
       await runDiscordChannel(displayName!);
-    } else if (choice === 'whatsapp') {
+    } else if (channelChoice === 'whatsapp') {
       await runWhatsAppChannel(displayName!);
-    } else if (choice === 'teams') {
+    } else if (channelChoice === 'teams') {
       await runTeamsChannel(displayName!);
     } else {
       p.log.info(
@@ -357,9 +367,51 @@ async function main(): Promise<void> {
     .map(([l, c]) => `${k.cyan(l.padEnd(labelWidth))}  ${c}`)
     .join('\n');
   p.note(nextSteps, 'Try these');
+
+  // Always-on warning goes before the "check your DMs" directive so the
+  // caveat doesn't land after the user's already looked away at their phone.
+  p.note(
+    wrapForGutter(
+      "NanoClaw runs on this machine. It's only reachable while this computer is on and connected to the internet. For always-on availability, run it on a cloud VM — or keep this machine awake.",
+      6,
+    ),
+    'Heads up',
+  );
+
   setupLog.complete(Date.now() - RUN_START);
   phEmit('setup_completed', { duration_ms: Date.now() - RUN_START });
-  p.outro(k.green("You're ready! Enjoy NanoClaw."));
+
+  const dmTarget = channelDmLabel(channelChoice);
+  if (dmTarget) {
+    // Bright framed banner (not dim) — the whole point of the feedback was
+    // that the welcome-message signal was too easy to miss. Use p.note so it
+    // renders with a visible box, cyan-bold the directive line, and put it
+    // as the last thing before outro.
+    p.note(
+      `${brandBold('→')} ${k.bold(`Check your ${dmTarget} — your assistant is saying hi.`)}`,
+      'Go say hi',
+    );
+    p.outro(k.green("You're set."));
+  } else {
+    p.outro(k.green("You're ready! Chat with `pnpm run chat hi`."));
+  }
+}
+
+function channelDmLabel(
+  choice: 'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip',
+): string | null {
+  switch (choice) {
+    case 'telegram':
+      return 'Telegram';
+    case 'discord':
+      return 'Discord DMs';
+    case 'whatsapp':
+      return 'WhatsApp';
+    case 'teams':
+      return 'Teams';
+    default:
+      return null;
+  }
 }
 
 // ─── first-chat step ───────────────────────────────────────────────────
@@ -422,15 +474,39 @@ function renderPingFailureNote(result: PingResult): void {
  * Chat loop. Each message is piped through `pnpm run chat`, which uses
  * the same Unix-socket path the ping just exercised, so output streams
  * back inline as the agent replies. An empty input ends the loop.
+ *
+ * The intro note teaches the sandbox mental model — users reported being
+ * confused about what the terminal chat *is* (vs the phone channel they'd
+ * set up next) and what happens to the agent when they walk away. We
+ * explain once, then offer "message or Enter to continue" so the chat is
+ * clearly optional.
  */
 async function runFirstChat(): Promise<void> {
+  p.note(
+    wrapForGutter(
+      [
+        'Your assistant runs in a sandbox on this machine.',
+        'It wakes up when you send a message and goes back to sleep when',
+        "you're not talking — so it isn't burning resources in the background.",
+        'Its memory and environment persist between conversations.',
+      ].join(' '),
+      6,
+    ),
+    'How this works',
+  );
+  let first = true;
   while (true) {
     const answer = ensureAnswer(
       await p.text({
-        message: 'Say something to your assistant',
-        placeholder: 'press Enter with nothing to continue',
+        message: first
+          ? 'Try a quick hello — or press Enter to continue setup'
+          : 'Another message? Press Enter to continue setup',
+        placeholder: first
+          ? 'e.g. "hi, what can you do?"'
+          : 'press Enter to continue',
       }),
     );
+    first = false;
     const text = ((answer as string | undefined) ?? '').trim();
     if (!text) return;
     await sendChatMessage(text);
@@ -463,7 +539,7 @@ async function runAuthStep(): Promise<void> {
   }
 
   const method = ensureAnswer(
-    await p.select({
+    await brightSelect({
       message: 'How would you like to connect to Claude?',
       options: [
         {
@@ -591,31 +667,49 @@ async function runTimezoneStep(): Promise<void> {
     resolvedTz === 'Etc/UTC' ||
     resolvedTz === 'Universal';
 
+  // Three branches:
+  //   - no TZ detected: ask where they are (or leave as UTC)
+  //   - detected UTC: confirm (likely VPS, but worth checking)
+  //   - detected specific zone: confirm explicitly rather than silently
+  //     persisting — users shouldn't be surprised the agent "already knew"
+  //     their timezone from system settings they didn't think about.
   if (!needsInput && !isUtc && resolvedTz && resolvedTz !== 'none') {
-    return;
+    const confirmed = ensureAnswer(
+      await p.confirm({
+        message: `I detected ${resolvedTz} from your computer settings. Is that right?`,
+        initialValue: true,
+      }),
+    );
+    setupLog.userInput('timezone_confirm_detected', String(confirmed));
+    if (confirmed) return;
   }
 
-  // Either autodetect failed outright, or it landed on UTC and we should
-  // check that's really what the user wants before leaving it there.
   const message = needsInput
     ? "Your system didn't expose a timezone. Which one are you in?"
-    : "Your system reports UTC as the timezone. Is that right, or are you somewhere else?";
+    : !isUtc
+      ? "Where are you, then?"
+      : "Your system reports UTC as the timezone. Is that right, or are you somewhere else?";
 
-  const choice = ensureAnswer(
-    await p.select({
-      message,
-      options: needsInput
-        ? [
-            { value: 'answer', label: "I'll tell you where I am" },
-            { value: 'keep', label: 'Leave it as UTC' },
-          ]
-        : [
-            { value: 'keep', label: 'Keep UTC', hint: 'remote server / happy with UTC' },
-            { value: 'answer', label: "I'm somewhere else" },
-          ],
-    }),
-  ) as 'keep' | 'answer';
-  setupLog.userInput('timezone_choice', choice);
+  // For the non-UTC "detected-but-wrong" branch we skip the select and jump
+  // straight to the free-text prompt — the user already said "not that".
+  let choice: 'keep' | 'answer' = 'answer';
+  if (needsInput || isUtc) {
+    choice = ensureAnswer(
+      await brightSelect({
+        message,
+        options: needsInput
+          ? [
+              { value: 'answer', label: "I'll tell you where I am" },
+              { value: 'keep', label: 'Leave it as UTC' },
+            ]
+          : [
+              { value: 'keep', label: 'Keep UTC', hint: 'remote server / happy with UTC' },
+              { value: 'answer', label: "I'm somewhere else" },
+            ],
+      }),
+    ) as 'keep' | 'answer';
+    setupLog.userInput('timezone_choice', choice);
+  }
 
   if (choice === 'keep') return;
 
@@ -694,7 +788,7 @@ async function askChannelChoice(): Promise<
   'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip'
 > {
   const choice = ensureAnswer(
-    await p.select({
+    await brightSelect({
       message: 'Want to chat with your assistant from your phone?',
       options: [
         { value: 'telegram', label: 'Yes, connect Telegram', hint: 'recommended' },

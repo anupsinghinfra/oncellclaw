@@ -33,6 +33,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
+import { brightSelect } from '../lib/bright-select.js';
 import {
   type Block,
   type StepResult,
@@ -148,7 +149,7 @@ export async function runWhatsAppChannel(displayName: string): Promise<void> {
 
 async function askAuthMethod(): Promise<AuthMethod> {
   const choice = ensureAnswer(
-    await p.select({
+    await brightSelect({
       message: 'How would you like to authenticate with WhatsApp?',
       options: [
         {
