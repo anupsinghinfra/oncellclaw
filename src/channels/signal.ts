@@ -8,7 +8,7 @@
  * Ported from v1 — see v1 source for commit history.
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { createConnection, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -100,14 +100,19 @@ class SignalTcpClient {
     }
   >();
   private onNotification: ((method: string, params: unknown) => void) | null = null;
+  private onClose: (() => void) | null = null;
 
   constructor(
     private host: string,
     private port: number,
   ) {}
 
-  connect(onNotification?: (method: string, params: unknown) => void): Promise<void> {
-    this.onNotification = onNotification ?? null;
+  connect(handlers?: {
+    onNotification?: (method: string, params: unknown) => void;
+    onClose?: () => void;
+  }): Promise<void> {
+    this.onNotification = handlers?.onNotification ?? null;
+    this.onClose = handlers?.onClose ?? null;
     return new Promise((resolve, reject) => {
       const sock = createConnection(this.port, this.host, () => {
         this.socket = sock;
@@ -122,12 +127,14 @@ class SignalTcpClient {
       });
       sock.on('data', (chunk) => this.onData(chunk));
       sock.on('close', () => {
+        const wasConnected = this.socket !== null;
         this.socket = null;
         for (const [, p] of this.pending) {
           clearTimeout(p.timer);
           p.reject(new Error('Signal TCP connection closed'));
         }
         this.pending.clear();
+        if (wasConnected) this.onClose?.();
       });
     });
   }
@@ -201,15 +208,17 @@ class SignalTcpClient {
 
 async function signalTcpCheck(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const sock = createConnection(port, host, () => {
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       sock.destroy();
-      resolve(true);
-    });
-    sock.on('error', () => resolve(false));
-    setTimeout(() => {
-      sock.destroy();
-      resolve(false);
-    }, 5000);
+      resolve(result);
+    };
+    const sock = createConnection(port, host, () => finish(true));
+    sock.on('error', () => finish(false));
+    const timer = setTimeout(() => finish(false), 5000);
   });
 }
 
@@ -219,19 +228,35 @@ async function signalTcpCheck(host: string, port: number): Promise<boolean> {
 
 const ECHO_TTL_MS = 10_000;
 
+/**
+ * Per-recipient dedup for messages we sent ourselves.
+ *
+ * signal-cli echoes our own outbound back via syncMessage (and, for Note to
+ * Self, via sentMessage-with-self-destination). Without dedup, the agent sees
+ * its own replies as new inbound and loops. We remember `(platformId, text)`
+ * briefly after every send, and drop the first match within TTL.
+ *
+ * Keying on text alone is not enough: if we send "hi" to Alice and Bob then
+ * sends "hi" from a different chat, Bob's real message gets silently dropped.
+ */
 class EchoCache {
   private entries = new Map<string, number>();
 
-  remember(text: string) {
-    const key = text.trim();
-    if (!key) return;
-    this.entries.set(key, Date.now());
+  private keyFor(platformId: string, text: string): string {
+    return `${platformId}\x00${text.trim()}`;
+  }
+
+  remember(platformId: string, text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.entries.set(this.keyFor(platformId, trimmed), Date.now());
     this.cleanup();
   }
 
-  isEcho(text: string): boolean {
-    const key = text.trim();
-    if (!key) return false;
+  isEcho(platformId: string, text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const key = this.keyFor(platformId, trimmed);
     const ts = this.entries.get(key);
     if (!ts) return false;
     if (Date.now() - ts > ECHO_TTL_MS) {
@@ -242,7 +267,7 @@ class EchoCache {
     return true;
   }
 
-  private cleanup() {
+  private cleanup(): void {
     const now = Date.now();
     for (const [key, ts] of this.entries) {
       if (now - ts > ECHO_TTL_MS) this.entries.delete(key);
@@ -325,49 +350,61 @@ interface StyledText {
   textStyles: SignalTextStyle[];
 }
 
+/**
+ * Convert Markdown-ish input to Signal's offset-based style ranges.
+ *
+ * Walks the input recursively: at each level we find the leftmost matching
+ * pattern, descend into its captured inner text (so `**bold with \`code\`
+ * inside**` stays bold-plus-monospace rather than leaking stripped markers),
+ * then continue past the match. Style offsets are recorded against the
+ * *output* text length as it's built, so nested styles always point at the
+ * right span of the final plain text.
+ */
 function parseSignalStyles(input: string): StyledText {
   const styles: SignalTextStyle[] = [];
 
-  const patterns: Array<{
-    regex: RegExp;
-    style: SignalTextStyle['style'];
-  }> = [
-    { regex: /```([\s\S]*?)```/g, style: 'MONOSPACE' },
-    { regex: /`([^`]+)`/g, style: 'MONOSPACE' },
-    { regex: /\*\*(.+?)\*\*/g, style: 'BOLD' },
-    { regex: /\*(.+?)\*/g, style: 'BOLD' },
-    { regex: /_(.+?)_/g, style: 'ITALIC' },
-    { regex: /~~(.+?)~~/g, style: 'STRIKETHROUGH' },
-    { regex: /\|\|(.+?)\|\|/g, style: 'SPOILER' },
+  // Ordering matters: longer/greedier delimiters first so `` ``` `` beats
+  // `` ` ``, `**` beats `*`. The italic-`*` pattern refuses to start on
+  // whitespace so `*` isn't mistakenly opened on " * " in list-like text.
+  const patterns: Array<{ regex: RegExp; style: SignalTextStyle['style'] }> = [
+    { regex: /```([\s\S]+?)```/, style: 'MONOSPACE' },
+    { regex: /`([^`]+)`/, style: 'MONOSPACE' },
+    { regex: /\*\*([^]+?)\*\*/, style: 'BOLD' },
+    { regex: /~~([^]+?)~~/, style: 'STRIKETHROUGH' },
+    { regex: /\|\|([^]+?)\|\|/, style: 'SPOILER' },
+    { regex: /\*([^*\s][^*]*?)\*/, style: 'ITALIC' },
+    { regex: /_([^_\s][^_]*?)_/, style: 'ITALIC' },
   ];
 
-  let text = input;
-
-  for (const { regex, style } of patterns) {
-    const nextText: string[] = [];
-    let lastIndex = 0;
-    let offset = 0;
-
-    for (const match of text.matchAll(regex)) {
-      const fullMatch = match[0];
-      const innerText = match[1];
-      const matchStart = match.index!;
-
-      nextText.push(text.slice(lastIndex, matchStart));
-      const plainStart = matchStart - offset;
-
-      nextText.push(innerText);
-      styles.push({ style, start: plainStart, length: innerText.length });
-
-      const stripped = fullMatch.length - innerText.length;
-      offset += stripped;
-      lastIndex = matchStart + fullMatch.length;
+  function walk(segment: string, outputBase: number): string {
+    let earliest: { start: number; match: RegExpExecArray; style: SignalTextStyle['style'] } | null = null;
+    for (const { regex, style } of patterns) {
+      const m = regex.exec(segment);
+      if (!m) continue;
+      if (earliest === null || m.index < earliest.start) {
+        earliest = { start: m.index, match: m, style };
+      }
     }
+    if (!earliest) return segment;
 
-    nextText.push(text.slice(lastIndex));
-    text = nextText.join('');
+    const before = segment.slice(0, earliest.start);
+    const fullMatch = earliest.match[0];
+    const inner = earliest.match[1];
+    const afterStart = earliest.start + fullMatch.length;
+    const after = segment.slice(afterStart);
+
+    const innerOut = walk(inner, outputBase + before.length);
+    styles.push({
+      style: earliest.style,
+      start: outputBase + before.length,
+      length: innerOut.length,
+    });
+    const afterOut = walk(after, outputBase + before.length + innerOut.length);
+
+    return before + innerOut + afterOut;
   }
 
+  const text = walk(input, 0);
   return { text, textStyles: styles };
 }
 
@@ -421,8 +458,8 @@ export function createSignalAdapter(config: {
       if (dest === config.account) {
         const text = (syncSent.message ?? '').trim();
         if (!text) return;
-        if (echoCache.isEcho(text)) return;
         const platformId = config.account;
+        if (echoCache.isEcho(platformId, text)) return;
         const timestamp = syncSent.timestamp ? new Date(syncSent.timestamp).toISOString() : new Date().toISOString();
 
         setup.onMetadata(platformId, 'Note to Self', false);
@@ -460,17 +497,17 @@ export function createSignalAdapter(config: {
     const sender = (envelope.sourceNumber ?? envelope.sourceUuid ?? envelope.source ?? '').trim();
     if (!sender) return;
 
-    if (text && echoCache.isEcho(text)) {
-      log.debug('Signal: skipping echo');
-      return;
-    }
-
     const senderName = (envelope.sourceName?.trim() || sender).trim();
     const groupInfo = dataMessage.groupInfo;
     const isGroup = Boolean(groupInfo?.groupId);
     const groupId = groupInfo?.groupId;
 
     const platformId = isGroup ? `group:${groupId}` : sender;
+
+    if (text && echoCache.isEcho(platformId, text)) {
+      log.debug('Signal: skipping echo', { platformId });
+      return;
+    }
     const timestamp = dataMessage.timestamp ? new Date(dataMessage.timestamp).toISOString() : new Date().toISOString();
 
     const chatName = groupInfo?.groupName ?? (isGroup ? `Group ${groupId?.slice(0, 8)}` : senderName);
@@ -534,7 +571,7 @@ export function createSignalAdapter(config: {
   async function sendText(platformId: string, text: string): Promise<void> {
     if (!connected || !tcp) return;
 
-    echoCache.remember(text);
+    echoCache.remember(platformId, text);
 
     const MAX_CHUNK = 4000;
     const chunks = text.length <= MAX_CHUNK ? [text] : chunkText(text, MAX_CHUNK);
@@ -617,7 +654,22 @@ export function createSignalAdapter(config: {
       }
 
       tcp = new SignalTcpClient(config.tcpHost, config.tcpPort);
-      await tcp.connect(handleNotification);
+      await tcp.connect({
+        onNotification: handleNotification,
+        // Signal the adapter that the daemon dropped us. No auto-reconnect yet
+        // — subsequent deliver/setTyping calls short-circuit on `connected`
+        // and log rather than throw into the retry loop. Operators see this in
+        // logs/nanoclaw.log and can restart the service.
+        onClose: () => {
+          if (!connected) return;
+          connected = false;
+          log.warn('Signal channel lost TCP connection to signal-cli daemon', {
+            account: config.account,
+            host: config.tcpHost,
+            port: config.tcpPort,
+          });
+        },
+      });
 
       try {
         await tcp.rpc('updateProfile', {
@@ -662,6 +714,17 @@ export function createSignalAdapter(config: {
     },
 
     async deliver(platformId: string, _threadId: string | null, message: OutboundMessage): Promise<string | undefined> {
+      if (message.files && message.files.length > 0) {
+        // Native adapter doesn't yet forward file uploads to signal-cli's
+        // `send --attachment`. Don't silently swallow — operators need to see
+        // that an attachment was requested but not sent.
+        log.warn('Signal: outbound files not supported, dropping', {
+          platformId,
+          count: message.files.length,
+          filenames: message.files.map((f) => f.filename),
+        });
+      }
+
       const content = message.content as Record<string, unknown> | string | undefined;
       let text: string | null = null;
       if (typeof content === 'string') {
@@ -703,8 +766,9 @@ registerChannelAdapter('signal', {
   factory: () => {
     const envVars = readEnvFile([
       'SIGNAL_ACCOUNT',
-      'SIGNAL_HTTP_HOST',
-      'SIGNAL_HTTP_PORT',
+      'SIGNAL_TCP_HOST',
+      'SIGNAL_TCP_PORT',
+      'SIGNAL_CLI_PATH',
       'SIGNAL_MANAGE_DAEMON',
       'SIGNAL_DATA_DIR',
     ]);
@@ -715,14 +779,17 @@ registerChannelAdapter('signal', {
       return null;
     }
 
-    const cliPath = 'signal-cli';
-    const tcpHost = process.env.SIGNAL_HTTP_HOST || envVars.SIGNAL_HTTP_HOST || DEFAULT_TCP_HOST;
-    const tcpPort = parseInt(process.env.SIGNAL_HTTP_PORT || envVars.SIGNAL_HTTP_PORT || String(DEFAULT_TCP_PORT), 10);
+    const cliPath = process.env.SIGNAL_CLI_PATH || envVars.SIGNAL_CLI_PATH || 'signal-cli';
+    const tcpHost = process.env.SIGNAL_TCP_HOST || envVars.SIGNAL_TCP_HOST || DEFAULT_TCP_HOST;
+    const tcpPort = parseInt(process.env.SIGNAL_TCP_PORT || envVars.SIGNAL_TCP_PORT || String(DEFAULT_TCP_PORT), 10);
     const manageDaemon = (process.env.SIGNAL_MANAGE_DAEMON || envVars.SIGNAL_MANAGE_DAEMON || 'true') === 'true';
 
     const signalDataDir =
       process.env.SIGNAL_DATA_DIR || envVars.SIGNAL_DATA_DIR || join(homedir(), '.local', 'share', 'signal-cli');
 
+    // Only check for `signal-cli` on PATH when the operator left cliPath at
+    // the default AND asked us to manage the daemon. A custom absolute path
+    // is treated as an explicit promise and spawn will surface its own ENOENT.
     if (manageDaemon && cliPath === 'signal-cli') {
       try {
         execFileSync('which', ['signal-cli'], { stdio: 'ignore' });

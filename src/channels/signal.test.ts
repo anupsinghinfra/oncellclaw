@@ -583,6 +583,165 @@ describe('SignalAdapter', () => {
 
       await adapter.teardown();
     });
+
+    it('tracks nested styles with correct offsets', async () => {
+      const adapter = createAdapter();
+      await adapter.setup(createMockSetup());
+      tcpRef.fakeSocket.write.mockClear();
+
+      await adapter.deliver('+15555550123', null, {
+        kind: 'text',
+        content: { text: '**bold with `code` inside**' },
+      });
+
+      const sendCalls = getRpcCallsForMethod('send');
+      const last = sendCalls[sendCalls.length - 1];
+      expect(last.params.message).toBe('bold with code inside');
+      // BOLD covers the full inner span, MONOSPACE points at "code" in the
+      // final plain text (offset 10, length 4) — not the intermediate text.
+      const styles = (last.params.textStyle as string[]).slice().sort();
+      expect(styles).toEqual(['0:21:BOLD', '10:4:MONOSPACE']);
+
+      await adapter.teardown();
+    });
+
+    it('maps *single-asterisk* to ITALIC', async () => {
+      const adapter = createAdapter();
+      await adapter.setup(createMockSetup());
+      tcpRef.fakeSocket.write.mockClear();
+
+      await adapter.deliver('+15555550123', null, {
+        kind: 'text',
+        content: { text: 'Hello *world*' },
+      });
+
+      const sendCalls = getRpcCallsForMethod('send');
+      const last = sendCalls[sendCalls.length - 1];
+      expect(last.params.message).toBe('Hello world');
+      expect(last.params.textStyle).toEqual(['6:5:ITALIC']);
+
+      await adapter.teardown();
+    });
+
+    it('maps _underscore_ to ITALIC', async () => {
+      const adapter = createAdapter();
+      await adapter.setup(createMockSetup());
+      tcpRef.fakeSocket.write.mockClear();
+
+      await adapter.deliver('+15555550123', null, {
+        kind: 'text',
+        content: { text: 'hey _there_' },
+      });
+
+      const sendCalls = getRpcCallsForMethod('send');
+      const last = sendCalls[sendCalls.length - 1];
+      expect(last.params.message).toBe('hey there');
+      expect(last.params.textStyle).toEqual(['4:5:ITALIC']);
+
+      await adapter.teardown();
+    });
+  });
+
+  // --- Echo cache ---
+
+  describe('echo cache', () => {
+    it('does not drop same-text inbound from a different recipient', async () => {
+      // Bot sends "Hello" to Alice. Immediately after, Bob sends "Hello" from
+      // a different DM. Bob's message must still route — the earlier echo key
+      // was scoped to Alice.
+      const adapter = createAdapter();
+      const cfg = createMockSetup();
+      await adapter.setup(cfg);
+
+      await adapter.deliver('+15555550123', null, {
+        kind: 'text',
+        content: { text: 'Hello' },
+      });
+
+      pushEvent({
+        sourceNumber: '+15555550999',
+        sourceName: 'Bob',
+        dataMessage: { timestamp: 1700000000000, message: 'Hello' },
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(cfg.onInbound).toHaveBeenCalledWith(
+        '+15555550999',
+        null,
+        expect.objectContaining({
+          content: expect.objectContaining({ text: 'Hello', sender: '+15555550999' }),
+        }),
+      );
+
+      await adapter.teardown();
+    });
+
+    it('still skips echo on the same recipient', async () => {
+      const adapter = createAdapter();
+      const cfg = createMockSetup();
+      await adapter.setup(cfg);
+
+      await adapter.deliver('+15555550123', null, {
+        kind: 'text',
+        content: { text: 'Echo test' },
+      });
+
+      pushEvent({
+        sourceNumber: '+15555550123',
+        dataMessage: { timestamp: 1700000000000, message: 'Echo test' },
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(cfg.onInbound).not.toHaveBeenCalled();
+
+      await adapter.teardown();
+    });
+  });
+
+  // --- Connection drop ---
+
+  describe('connection drop', () => {
+    it('flips isConnected to false when the socket closes', async () => {
+      const adapter = createAdapter();
+      await adapter.setup(createMockSetup());
+      expect(adapter.isConnected()).toBe(true);
+
+      // Simulate the daemon dropping the TCP connection.
+      tcpRef.fakeSocket.destroy();
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(adapter.isConnected()).toBe(false);
+
+      await adapter.teardown();
+    });
+  });
+
+  // --- Outbound files ---
+
+  describe('outbound files', () => {
+    it('logs a warning and drops unsupported file attachments', async () => {
+      const { log } = await import('../log.js');
+      const warnMock = log.warn as unknown as ReturnType<typeof vi.fn>;
+
+      const adapter = createAdapter();
+      await adapter.setup(createMockSetup());
+      warnMock.mockClear();
+
+      await adapter.deliver('+15555550123', null, {
+        kind: 'text',
+        content: { text: 'with an attachment' },
+        files: [{ filename: 'hi.txt', data: Buffer.from('hi') }],
+      });
+
+      const sendCalls = getRpcCallsForMethod('send');
+      expect(sendCalls.length).toBeGreaterThan(0);
+      expect(warnMock).toHaveBeenCalledWith(
+        'Signal: outbound files not supported, dropping',
+        expect.objectContaining({ platformId: '+15555550123', count: 1 }),
+      );
+
+      await adapter.teardown();
+    });
   });
 
   // --- setTyping ---
