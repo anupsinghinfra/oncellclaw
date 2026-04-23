@@ -246,10 +246,33 @@ async function main(): Promise<void> {
       );
     }
     if (!skip.has('first-chat')) {
+      p.log.message(
+        dimWrap(
+          "Your assistant runs in an isolated sandbox. I'm going to send it a quick test message (ping) and wait for a reply (pong) to confirm it's responding. First startup typically takes 30–60 seconds while the sandbox warms up.",
+          4,
+        ),
+      );
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
         phEmit('first_chat_ready');
-        await runFirstChat();
+        const next = ensureAnswer(
+          await p.select({
+            message: 'What next?',
+            options: [
+              {
+                value: 'continue',
+                label: 'Continue with setup',
+                hint: 'recommended',
+              },
+              {
+                value: 'chat',
+                label: 'Pause here and chat with your agent from the terminal',
+              },
+            ],
+          }),
+        ) as 'continue' | 'chat';
+        setupLog.userInput('first_chat_choice', next);
+        if (next === 'chat') await runFirstChat();
       } else {
         phEmit('first_chat_failed', { reason: ping });
         renderPingFailureNote(ping);
