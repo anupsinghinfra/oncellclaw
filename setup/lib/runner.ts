@@ -322,10 +322,12 @@ async function runUnderSpinner<
   if (result.ok) {
     const isSkipped = result.terminal?.fields.STATUS === 'skipped';
     const msg = isSkipped && labels.skipped ? labels.skipped : labels.done;
-    s.stop(`${fitToWidth(msg, suffix)}${k.dim(suffix)}`);
+    // Bold the outcome so the step's headline reads stronger than the prose
+    // body copy around it. The trailing `(Ns)` timing stays dim.
+    s.stop(`${k.bold(fitToWidth(msg, suffix))}${k.dim(suffix)}`);
   } else {
     const failMsg = labels.failed ?? labels.running.replace(/…$/, ' failed');
-    s.stop(`${fitToWidth(failMsg, suffix)}${k.dim(suffix)}`, 1);
+    s.stop(`${k.bold(fitToWidth(failMsg, suffix))}${k.dim(suffix)}`, 1);
     dumpTranscriptOnFailure(result.transcript);
   }
   return result;

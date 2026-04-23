@@ -215,10 +215,8 @@ async function main(): Promise<void> {
         "NanoClaw's permissions need a tweak before it can reach Docker.",
       );
       p.log.message(
-        k.dim(
-          '  sudo setfacl -m u:$(whoami):rw /var/run/docker.sock\n' +
-            '  systemctl --user restart nanoclaw',
-        ),
+        '  sudo setfacl -m u:$(whoami):rw /var/run/docker.sock\n' +
+          `  systemctl --user restart ${getSystemdUnit()}`,
       );
     }
   }
@@ -442,13 +440,13 @@ async function confirmAssistantResponds(): Promise<PingResult> {
   const elapsed = Math.round((Date.now() - start) / 1000);
   const suffix = ` (${elapsed}s)`;
   if (result === 'ok') {
-    s.stop(`${fitToWidth('Your assistant is ready.', suffix)}${k.dim(suffix)}`);
+    s.stop(`${k.bold(fitToWidth('Your assistant is ready.', suffix))}${k.dim(suffix)}`);
   } else {
     const msg =
       result === 'socket_error'
         ? "Couldn't reach the NanoClaw service."
         : "Your assistant didn't reply in time.";
-    s.stop(`${fitToWidth(msg, suffix)}${k.dim(suffix)}`, 1);
+    s.stop(`${k.bold(fitToWidth(msg, suffix))}${k.dim(suffix)}`, 1);
   }
   return result;
 }
@@ -462,8 +460,8 @@ function renderPingFailureNote(result: PingResult): void {
             6,
           ),
           '',
-          k.dim(`  macOS:  launchctl kickstart -k gui/$(id -u)/${getLaunchdLabel()}`),
-          k.dim(`  Linux:  systemctl --user restart ${getSystemdUnit()}`),
+          `  macOS:  launchctl kickstart -k gui/$(id -u)/${getLaunchdLabel()}`,
+          `  Linux:  systemctl --user restart ${getSystemdUnit()}`,
         ].join('\n')
       : wrapForGutter(
           'No reply from your assistant within 30 seconds. Check `logs/nanoclaw.log` for clues, then try `pnpm run chat hi`.',
