@@ -358,11 +358,57 @@ export function inferChannelType(jid: string, channelName: string | null): strin
  * v2's messaging_groups.platform_id is always prefixed with the channel_type
  * (see setup/register.ts:118-120). This helper normalizes v1's `jid` into
  * that shape so router lookups at runtime find the right row.
+ *
+ * Some channels need extra structure on the id itself. Discord's Chat SDK
+ * emits `discord:<guild_id>:<channel_id>` at runtime but v1 only stored
+ * `dc:<channel_id>` (no guild). Callers that know the guild (e.g. bot with
+ * a single guild) can pass it via `extra`; otherwise the returned id will
+ * be the v1-format `discord:<channel_id>` and will be repaired on first
+ * message via v2's channel-registration approval flow.
  */
-export function v2PlatformId(channelType: string, jid: string): string {
+export function v2PlatformId(channelType: string, jid: string, extra?: { guildId?: string }): string {
   const parsed = parseJid(jid);
   const id = parsed?.id ?? jid;
-  return id.startsWith(`${channelType}:`) ? id : `${channelType}:${id}`;
+  const prefixed = id.startsWith(`${channelType}:`) ? id : `${channelType}:${id}`;
+  // For Discord: splice the guild id in between when we know it and the id
+  // isn't already in `<guild>:<channel>` form.
+  if (channelType === 'discord' && extra?.guildId) {
+    const body = prefixed.slice(`discord:`.length);
+    if (!body.includes(':')) return `discord:${extra.guildId}:${body}`;
+  }
+  return prefixed;
+}
+
+/**
+ * Fetch the bot's guild memberships for a channel_type so migrate-db can
+ * form platform_ids matching what the v2 adapter emits at runtime. Returns
+ * null on any failure (network, auth, rate limit, unsupported channel_type)
+ * — callers fall back to the v1-format platform_id, which works but may
+ * trigger v2's channel-registration flow on first message.
+ *
+ * Currently handles Discord. Extending to other channels: the function
+ * needs a "single-or-multi guild?" shape; for single-guild bots the caller
+ * can splice the guild id globally, for multi-guild a per-channel lookup
+ * is needed and the caller should probably bail (rate-limit risk).
+ */
+export async function fetchBotGuilds(
+  channelType: string,
+  v1EnvLookup: (key: string) => string | undefined,
+): Promise<{ guildIds: string[] } | null> {
+  if (channelType !== 'discord') return null;
+  const token = v1EnvLookup('DISCORD_BOT_TOKEN');
+  if (!token) return null;
+  try {
+    const resp = await fetch('https://discord.com/api/v10/users/@me/guilds', {
+      headers: { Authorization: `Bot ${token}` },
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as Array<{ id?: string }>;
+    const guildIds = data.map((g) => g.id).filter((id): id is string => typeof id === 'string');
+    return { guildIds };
+  } catch {
+    return null;
+  }
 }
 
 // ── Trigger rules → engage mode (ports migration 010's backfill) ───────

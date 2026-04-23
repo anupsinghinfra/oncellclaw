@@ -36,6 +36,7 @@ import { runMigrations } from '../../src/db/migrations/index.js';
 import { log } from '../../src/log.js';
 import { emitStatus } from '../status.js';
 import {
+  fetchBotGuilds,
   generateId,
   inferChannelType,
   readHandoff,
@@ -158,6 +159,29 @@ export async function run(args: string[]): Promise<void> {
   }));
   writeHandoff(h);
 
+  // For channels where v2's platform_id includes a component v1 didn't record
+  // (Discord's guild id), fetch the bot's guilds up-front. If the bot is in
+  // a single guild we can splice that id into every platform_id; otherwise
+  // fall back to the v1-format id (v2's channel-registration flow will repair
+  // on first message). Done ONCE per channel_type, not per-row, so this is
+  // cheap regardless of group count.
+  const v1EnvText = fs.existsSync(paths.env) ? fs.readFileSync(paths.env, 'utf-8') : '';
+  const v1EnvMap = new Map<string, string>();
+  for (const line of v1EnvText.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq <= 0) continue;
+    v1EnvMap.set(t.slice(0, eq).trim(), t.slice(eq + 1));
+  }
+  const singleGuildByChannel = new Map<string, string>();
+  for (const channelType of detectedChannels.keys()) {
+    const info = await fetchBotGuilds(channelType, (k) => v1EnvMap.get(k));
+    if (info && info.guildIds.length === 1) {
+      singleGuildByChannel.set(channelType, info.guildIds[0]);
+    }
+  }
+
   // Initialize v2.db (creates schema if not present — runMigrations is no-op
   // when the schema is already current, so this is safe on a live v2 install).
   fs.mkdirSync(path.join(process.cwd(), 'data'), { recursive: true });
@@ -181,7 +205,8 @@ export async function run(args: string[]): Promise<void> {
       continue;
     }
 
-    const platformId = v2PlatformId(channelType, g.jid);
+    const guildId = singleGuildByChannel.get(channelType);
+    const platformId = v2PlatformId(channelType, g.jid, { guildId });
     const createdAt = new Date().toISOString();
 
     try {
