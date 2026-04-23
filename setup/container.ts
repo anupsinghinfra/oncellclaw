@@ -7,6 +7,7 @@ import path from 'path';
 import { setTimeout as sleep } from 'timers/promises';
 
 import { log } from '../src/log.js';
+import { getDefaultContainerImage } from '../src/install-slug.js';
 import { commandExists, getPlatform } from './platform.js';
 import { emitStatus } from './status.js';
 
@@ -81,7 +82,7 @@ function parseArgs(args: string[]): { runtime: string } {
 export async function run(args: string[]): Promise<void> {
   const projectRoot = process.cwd();
   const { runtime } = parseArgs(args);
-  const image = 'nanoclaw-agent:latest';
+  const image = getDefaultContainerImage(projectRoot);
   const logFile = path.join(projectRoot, 'logs', 'setup.log');
 
   if (runtime !== 'docker') {
