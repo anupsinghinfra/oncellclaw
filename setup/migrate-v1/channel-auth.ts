@@ -17,6 +17,7 @@ import path from 'path';
 import { emitStatus } from '../status.js';
 import {
   CHANNEL_AUTH_REGISTRY,
+  autoResolveV2Keys,
   readHandoff,
   recordStep,
   v1PathsFor,
@@ -126,8 +127,56 @@ export async function run(_args: string[]): Promise<void> {
     // Check v2's .env for required keys the v2 adapter needs to boot. v1
     // may not have had all of them (e.g. v1's Discord used discord.js
     // directly and never stored DISCORD_PUBLIC_KEY which v2's Chat SDK
-    // requires). Surface missing ones as actionable followups.
+    // requires). Try to auto-resolve the gap by calling the channel's API
+    // with the v1 credential; fall through to a followup for anything we
+    // can't resolve.
     const v2EnvPath = path.join(process.cwd(), '.env');
+    const v1EnvMap = new Map<string, string>();
+    for (const line of v1Env.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue;
+      v1EnvMap.set(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1));
+    }
+
+    // Also let the resolver reach into v2's .env (migrate-env already merged
+    // v1 keys into v2). Either source is fine for derivation inputs.
+    const v2EnvPre = fs.existsSync(v2EnvPath) ? fs.readFileSync(v2EnvPath, 'utf-8') : '';
+    const v2EnvPreMap = new Map<string, string>();
+    for (const line of v2EnvPre.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue;
+      v2EnvPreMap.set(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1));
+    }
+
+    const resolved = await autoResolveV2Keys(
+      ch.channel_type,
+      (key) => v1EnvMap.get(key) ?? v2EnvPreMap.get(key),
+    );
+    const resolvedKeys = Object.keys(resolved);
+    if (resolvedKeys.length > 0) {
+      // Append to v2 .env (never overwriting existing values) + sync the
+      // container-side copy. Log keys, never values.
+      let text = v2EnvPre;
+      if (text && !text.endsWith('\n')) text += '\n';
+      for (const [key, value] of Object.entries(resolved)) {
+        if (v2EnvPreMap.has(key)) continue;
+        text += `${key}=${value}\n`;
+      }
+      fs.writeFileSync(v2EnvPath, text);
+      try {
+        const containerEnvDir = path.join(process.cwd(), 'data', 'env');
+        fs.mkdirSync(containerEnvDir, { recursive: true });
+        fs.copyFileSync(v2EnvPath, path.join(containerEnvDir, 'env'));
+      } catch {
+        // Best-effort; service restart rehydrates it if needed.
+      }
+    }
+
+    // Re-read v2 .env after possible resolution to compute the real gap.
     const v2Env = fs.existsSync(v2EnvPath) ? fs.readFileSync(v2EnvPath, 'utf-8') : '';
     const v2EnvKeys = new Set(
       v2Env
@@ -179,7 +228,7 @@ export async function run(_args: string[]): Promise<void> {
 
     results.push({
       channel_type: ch.channel_type,
-      env_keys_copied: envKeysPresentInV1,
+      env_keys_copied: [...envKeysPresentInV1, ...resolvedKeys.map((k) => `${k} (auto-resolved)`)],
       files_copied: filesCopied,
       files_missing: filesMissing,
       notes: spec.note ?? '',

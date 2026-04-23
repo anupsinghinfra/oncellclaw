@@ -519,6 +519,50 @@ export const CHANNEL_AUTH_REGISTRY: Record<string, ChannelAuthSpec> = {
 };
 
 /**
+ * For channels where v2's adapter needs keys v1 never stored (e.g. Discord's
+ * Chat SDK wants DISCORD_APPLICATION_ID + DISCORD_PUBLIC_KEY, but v1 used
+ * raw discord.js with just the bot token), try to derive the missing keys
+ * from the v1 creds we already have by calling the channel's API.
+ *
+ * Returns a map of key → value for what we successfully resolved.
+ * Never throws; returns `{}` on any failure (network, auth, unexpected
+ * shape). The caller writes the resolved keys to v2 .env, then re-checks
+ * `requiredV2Keys` so the step reports `success` instead of `partial` when
+ * auto-resolution covered the gap.
+ *
+ * Adding a new channel resolver: pull the needed values from an endpoint
+ * that accepts only the v1-side credential (bot token, API key). Don't
+ * prompt, don't log values. If the endpoint has rate limits, keep this
+ * best-effort and fail silently.
+ */
+export async function autoResolveV2Keys(
+  channelType: string,
+  v1EnvLookup: (key: string) => string | undefined,
+): Promise<Record<string, string>> {
+  if (channelType === 'discord') {
+    const token = v1EnvLookup('DISCORD_BOT_TOKEN');
+    if (!token) return {};
+    try {
+      const resp = await fetch('https://discord.com/api/v10/oauth2/applications/@me', {
+        headers: { Authorization: `Bot ${token}` },
+      });
+      if (!resp.ok) return {};
+      const data = (await resp.json()) as { id?: string; verify_key?: string };
+      const out: Record<string, string> = {};
+      if (typeof data.id === 'string' && data.id) out.DISCORD_APPLICATION_ID = data.id;
+      if (typeof data.verify_key === 'string' && data.verify_key) {
+        out.DISCORD_PUBLIC_KEY = data.verify_key;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+/**
  * Map a v2 `channel_type` name to the corresponding `setup/install-<x>.sh`
  * script, if one exists. `null` means no v2 skill is available yet — the
  * handoff lists the channel as "not supported" and the skill raises it with
