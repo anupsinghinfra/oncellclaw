@@ -33,6 +33,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
+import { getLaunchdLabel, getSystemdUnit } from '../../src/install-slug.js';
 import {
   type Block,
   type StepResult,
@@ -358,17 +359,18 @@ async function restartService(): Promise<void> {
     if (platform === 'darwin') {
       spawnSync(
         'launchctl',
-        ['kickstart', '-k', `gui/${process.getuid?.() ?? 501}/com.nanoclaw`],
+        ['kickstart', '-k', `gui/${process.getuid?.() ?? 501}/${getLaunchdLabel()}`],
         { stdio: 'ignore' },
       );
     } else if (platform === 'linux') {
+      const unit = getSystemdUnit();
       const user = spawnSync(
         'systemctl',
-        ['--user', 'restart', 'nanoclaw'],
+        ['--user', 'restart', unit],
         { stdio: 'ignore' },
       );
       if (user.status !== 0) {
-        spawnSync('sudo', ['systemctl', 'restart', 'nanoclaw'], {
+        spawnSync('sudo', ['systemctl', 'restart', unit], {
           stdio: 'ignore',
         });
       }

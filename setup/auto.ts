@@ -32,6 +32,7 @@ import { runTelegramChannel } from './channels/telegram.js';
 import { runWhatsAppChannel } from './channels/whatsapp.js';
 import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
 import { offerClaudeAssist } from './lib/claude-assist.js';
+import { getLaunchdLabel, getSystemdUnit } from '../src/install-slug.js';
 import {
   claudeCliAvailable,
   resolveTimezoneViaClaude,
@@ -298,13 +299,14 @@ async function main(): Promise<void> {
       }
       const service = res.terminal?.fields.SERVICE;
       if (service === 'running_other_checkout') {
+        const label = getLaunchdLabel();
         notes.push(
           wrapForGutter(
             [
               '• Your NanoClaw service is running from a different folder on this machine.',
               '  Point it at this checkout with:',
-              '    launchctl bootout gui/$(id -u)/com.nanoclaw',
-              '    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nanoclaw.plist',
+              `    launchctl bootout gui/$(id -u)/${label}`,
+              `    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/${label}.plist`,
             ].join('\n'),
             6,
           ),
@@ -408,8 +410,8 @@ function renderPingFailureNote(result: PingResult): void {
             6,
           ),
           '',
-          k.dim('  macOS:  launchctl kickstart -k gui/$(id -u)/com.nanoclaw'),
-          k.dim('  Linux:  systemctl --user restart nanoclaw'),
+          k.dim(`  macOS:  launchctl kickstart -k gui/$(id -u)/${getLaunchdLabel()}`),
+          k.dim(`  Linux:  systemctl --user restart ${getSystemdUnit()}`),
         ].join('\n')
       : wrapForGutter(
           'No reply from your assistant within 30 seconds. Check `logs/nanoclaw.log` for clues, then try `pnpm run chat hi`.',

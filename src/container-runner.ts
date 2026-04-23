@@ -9,7 +9,7 @@ import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
-import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, ONECLI_API_KEY, ONECLI_URL, TIMEZONE } from './config.js';
+import { CONTAINER_IMAGE, CONTAINER_IMAGE_BASE, DATA_DIR, GROUPS_DIR, ONECLI_API_KEY, ONECLI_URL, TIMEZONE } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
@@ -469,7 +469,7 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
   }
   dockerfile += 'USER node\n';
 
-  const imageTag = `nanoclaw-agent:${agentGroupId}`;
+  const imageTag = `${CONTAINER_IMAGE_BASE}:${agentGroupId}`;
 
   log.info('Building per-agent-group image', { agentGroupId, imageTag, apt: aptPackages, npm: npmPackages });
 
