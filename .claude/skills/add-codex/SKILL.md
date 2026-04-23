@@ -70,14 +70,11 @@ Two edits to `container/Dockerfile`, both idempotent (skip if already present):
 ARG CODEX_VERSION=0.121.0
 ```
 
-**(b)** In the `pnpm install -g` block (around line 80), append `"@openai/codex@${CODEX_VERSION}"` to the list:
+**(b)** Add a new standalone `RUN` block for the Codex CLI, after the existing per-CLI install blocks (around line 106, right after the `@anthropic-ai/claude-code` block). The Dockerfile splits each global CLI into its own layer for cache granularity — keep that pattern; do not collapse them into a single combined `pnpm install -g` call:
 
 ```dockerfile
-    pnpm install -g \
-        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-        "@openai/codex@${CODEX_VERSION}" \
-        "agent-browser@${AGENT_BROWSER_VERSION}" \
-        "vercel@${VERCEL_VERSION}"
+RUN --mount=type=cache,target=/root/.cache/pnpm \
+    pnpm install -g "@openai/codex@${CODEX_VERSION}"
 ```
 
 Note: **no agent-runner package dependency** — Codex is a CLI binary, not a library. Unlike OpenCode, there's nothing to add to `container/agent-runner/package.json`.
