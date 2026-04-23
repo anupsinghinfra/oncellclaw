@@ -120,6 +120,7 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
     : senderName
       ? `${senderName} DM'd your agent on ${originChannelType}. Wire it to ${target.name} and let it respond?`
       : `Someone DM'd your agent on ${originChannelType}. Wire it to ${target.name} and let it respond?`;
+  const options = normalizeOptions(APPROVAL_OPTIONS);
 
   createPendingChannelApproval({
     messaging_group_id: messagingGroupId,
@@ -127,6 +128,8 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
     original_message: JSON.stringify(event),
     approver_user_id: delivery.userId,
     created_at: new Date().toISOString(),
+    title,
+    options_json: JSON.stringify(options),
   });
 
   const adapter = getDeliveryAdapter();
@@ -151,7 +154,7 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
         questionId: messagingGroupId,
         title,
         question,
-        options: normalizeOptions(APPROVAL_OPTIONS),
+        options,
       }),
     );
     log.info('Channel registration card delivered', {
