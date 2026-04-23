@@ -88,7 +88,7 @@ export async function requestSenderApproval(input: RequestSenderApprovalInput): 
 
   const approvalId = generateId();
   const senderDisplay = senderName && senderName.length > 0 ? senderName : senderIdentity;
-  const originName = originMg?.name ?? originMg?.platform_id ?? 'an unfamiliar chat';
+  const originName = originMg?.name ?? `a ${originChannelType} channel`;
 
   const title = '👤 New sender';
   const question = `${senderDisplay} wants to talk to your agent in ${originName}. Allow?`;
