@@ -220,7 +220,7 @@ export async function run(_args: string[]): Promise<void> {
 
   // 7. End-to-end: ping the CLI agent and confirm it replies. Only run if
   // everything upstream looks healthy, since a broken socket would just hang.
-  let agentPing: 'ok' | 'no_reply' | 'socket_error' | 'skipped' = 'skipped';
+  let agentPing: 'ok' | 'no_reply' | 'socket_error' | 'auth_error' | 'skipped' = 'skipped';
   if (service === 'running' && registeredGroups > 0) {
     log.info('Pinging CLI agent');
     agentPing = await pingCliAgent();
