@@ -70,7 +70,8 @@ export const CONFIG: Entry[] = [
     surface: 'flag+ui',
     group: 'OneCLI',
     type: 'url',
-    placeholder: 'https://vault.example.internal',
+    default: 'https://app.onecli.sh',
+    placeholder: 'https://app.onecli.sh',
     validate: httpUrl,
   },
   {
