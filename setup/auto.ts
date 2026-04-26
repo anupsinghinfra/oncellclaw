@@ -22,6 +22,8 @@
  * headless `claude -p` call for IANA-zone resolution.
  */
 import { spawn, spawnSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 import * as p from '@clack/prompts';
 import k from 'kleur';
@@ -636,6 +638,16 @@ async function runAuthStep(): Promise<void> {
     return;
   }
 
+  // Custom Anthropic-compatible endpoint flow. Both URL and token must be set;
+  // OneCLI stores the token as a generic Bearer secret keyed to the URL host,
+  // so the container only ever sees ANTHROPIC_BASE_URL + a placeholder.
+  const customBaseUrl = process.env.NANOCLAW_ANTHROPIC_BASE_URL?.trim();
+  const customAuthToken = process.env.NANOCLAW_ANTHROPIC_AUTH_TOKEN?.trim();
+  if (customBaseUrl && customAuthToken) {
+    await runCustomEndpointAuth(customBaseUrl, customAuthToken);
+    return;
+  }
+
   const method = ensureAnswer(
     await brightSelect({
       message: 'How would you like to connect to Claude?',
@@ -739,6 +751,92 @@ async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
       'Make sure OneCLI is running (`onecli version`), then retry.',
     );
   }
+}
+
+/**
+ * Set up Anthropic auth for a custom endpoint. The token is stored as a
+ * OneCLI generic secret with header injection so the proxy rewrites the
+ * Authorization header on the wire — the container only ever sees
+ * ANTHROPIC_BASE_URL + a placeholder bearer.
+ */
+async function runCustomEndpointAuth(
+  baseUrl: string,
+  token: string,
+): Promise<void> {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    await fail(
+      'auth',
+      `Invalid Anthropic base URL: ${baseUrl}`,
+      'Check --anthropic-base-url and retry.',
+    );
+    return;
+  }
+
+  const res = await runQuietChild(
+    'auth',
+    'onecli',
+    [
+      'secrets',
+      'create',
+      '--name',
+      'Anthropic',
+      '--type',
+      'generic',
+      '--value',
+      token,
+      '--host-pattern',
+      host,
+      '--header-name',
+      'Authorization',
+      '--value-format',
+      'Bearer {value}',
+    ],
+    {
+      running: `Saving your Anthropic auth token to your OneCLI vault…`,
+      done: 'Claude account connected.',
+    },
+    { extraFields: { METHOD: 'custom-endpoint', HOST: host } },
+  );
+  if (!res.ok) {
+    await fail(
+      'auth',
+      `Couldn't save your Anthropic auth token to the vault.`,
+      'Make sure OneCLI is running (`onecli version`), then retry.',
+    );
+  }
+
+  // ANTHROPIC_BASE_URL has to be in .env so the runtime provider config
+  // reads it when building container env. The token is *not* written —
+  // OneCLI holds it.
+  writeEnvLine('ANTHROPIC_BASE_URL', baseUrl);
+
+  // Register the claude provider so the runtime passes ANTHROPIC_BASE_URL
+  // and the placeholder bearer into the container. Only appended when the
+  // user has configured a custom endpoint; standard installs don't load
+  // the file at all.
+  appendProviderImport('./claude.js');
+}
+
+function writeEnvLine(key: string, value: string): void {
+  const envFile = path.join(process.cwd(), '.env');
+  const content = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf-8') : '';
+  const re = new RegExp(`^${key}=.*$`, 'm');
+  const next = re.test(content)
+    ? content.replace(re, `${key}=${value}`)
+    : content.trimEnd() + (content ? '\n' : '') + `${key}=${value}\n`;
+  fs.writeFileSync(envFile, next);
+}
+
+function appendProviderImport(modulePath: string): void {
+  const file = path.join(process.cwd(), 'src', 'providers', 'index.ts');
+  const content = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
+  const line = `import '${modulePath}';`;
+  if (content.includes(line)) return;
+  const sep = content && !content.endsWith('\n') ? '\n' : '';
+  fs.writeFileSync(file, content + sep + line + '\n');
 }
 
 // ─── timezone step ─────────────────────────────────────────────────────
