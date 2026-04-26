@@ -95,6 +95,16 @@ export const CONFIG: Entry[] = [
     placeholder: 'https://api.anthropic.com',
     validate: httpUrl,
   },
+  {
+    key: 'anthropicAuthToken',
+    label: 'Anthropic auth token',
+    help: 'Bearer token for the custom Anthropic endpoint. Used together with --anthropic-base-url.',
+    surface: 'flag+ui',
+    group: 'Anthropic',
+    type: 'string',
+    secret: true,
+    validate: (v) => (v.trim() ? undefined : 'Required'),
+  },
 
   // Existing env-var knobs — flag-only so they don't clutter the UI screen.
   {
