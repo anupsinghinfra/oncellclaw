@@ -288,6 +288,18 @@ export async function run(args: string[]): Promise<void> {
     log.info('Wrote ONECLI_URL to .env', { url: remoteUrl });
     const remoteToken = process.env.NANOCLAW_ONECLI_API_TOKEN?.trim();
     if (remoteToken) {
+      // Two auth surfaces: `onecli auth login` persists the key for CLI
+      // calls during setup itself (e.g. detecting an existing Anthropic
+      // secret via `onecli secrets list`), and ONECLI_API_KEY in .env is
+      // read by the runtime SDK at request time. Both are needed.
+      try {
+        execFileSync('onecli', ['auth', 'login', '--api-key', remoteToken], {
+          stdio: 'ignore',
+          env: childEnv(),
+        });
+      } catch (err) {
+        log.warn('onecli auth login failed', { err });
+      }
       writeEnvVar('ONECLI_API_KEY', remoteToken);
       log.info('Wrote ONECLI_API_KEY to .env');
     }
