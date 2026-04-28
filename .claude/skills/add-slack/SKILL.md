@@ -76,7 +76,13 @@ pnpm run build
 10. Under **Subscribe to bot events**, add:
     - `message.channels`, `message.groups`, `message.im`, `app_mention`
 11. Click **Save Changes**
-12. Slack will show a banner asking you to **reinstall the app** — click it to apply the new event subscriptions
+
+### Interactivity
+
+12. Go to **Interactivity & Shortcuts** and toggle **Interactivity** on
+13. Set the **Request URL** to the same `https://your-domain/webhook/slack`
+14. Click **Save Changes**
+15. Slack will show a banner asking you to **reinstall the app** — click it to apply the new settings
 
 ### Configure environment
 
