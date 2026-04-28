@@ -6,7 +6,9 @@ import { log } from './log.js';
 
 const CB_PATH = path.join(DATA_DIR, 'circuit-breaker.json');
 const RESET_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const BACKOFF_SCHEDULE_S = [0, 0, 10, 30, 120, 300, 900]; // index = attempt number, 6+ capped at 15min
+// Index = number of consecutive crashes (0 = clean start, attempt 1).
+// 6+ crashes capped at 15min.
+const BACKOFF_SCHEDULE_S = [0, 0, 10, 30, 120, 300, 900];
 
 interface CircuitBreakerState {
   attempt: number;
@@ -23,11 +25,14 @@ function read(): CircuitBreakerState | null {
 }
 
 function write(state: CircuitBreakerState): void {
+  // The breaker runs before initDb (which is what creates DATA_DIR), so on a
+  // fresh checkout the dir may not exist yet.
+  fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(CB_PATH, JSON.stringify(state, null, 2) + '\n');
 }
 
 function getDelay(attempt: number): number {
-  const idx = Math.min(attempt, BACKOFF_SCHEDULE_S.length - 1);
+  const idx = Math.min(attempt - 1, BACKOFF_SCHEDULE_S.length - 1);
   return BACKOFF_SCHEDULE_S[idx];
 }
 
