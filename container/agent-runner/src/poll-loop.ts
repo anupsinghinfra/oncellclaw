@@ -25,6 +25,7 @@ const AUTH_REQUIRED_USER_TEXT =
   "I can't reach my Anthropic credentials right now. The operator running NanoClaw needs to re-run setup, or run `claude` in the project directory on the machine I'm running on.";
 
 function writeAuthRequiredMessage(routing: RoutingContext): void {
+  log('Auth-required detected — substituting host-aware message for the user');
   writeMessageOut({
     id: generateId(),
     kind: 'chat',

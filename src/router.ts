@@ -450,15 +450,11 @@ async function deliverToAgent(
     startTypingRefresh(session.id, session.agent_group_id, event.channelType, event.platformId, event.threadId);
     const freshSession = getSession(session.id);
     if (freshSession) {
-      try {
-        await wakeContainer(freshSession);
-      } catch (err) {
-        // Transient spawn failure (e.g. OneCLI gateway down). The inbound
-        // row is already persisted — host-sweep will retry the wake on its
-        // next tick. Don't bubble out of the channel adapter.
-        log.warn('wakeContainer failed — host-sweep will retry', { sessionId: freshSession.id, err });
-        stopTypingRefresh(freshSession.id);
-      }
+      const woke = await wakeContainer(freshSession);
+      // wakeContainer never throws — it returns false on transient spawn
+      // failure (host-sweep retries). Stop the typing indicator we just
+      // started so it doesn't leak; the inbound row stays pending.
+      if (!woke) stopTypingRefresh(freshSession.id);
     }
   }
 }

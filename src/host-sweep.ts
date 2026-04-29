@@ -168,14 +168,9 @@ async function sweepSession(session: Session): Promise<void> {
     const dueCount = countDueMessages(inDb);
     if (dueCount > 0 && !isContainerRunning(session.id)) {
       log.info('Waking container for due messages', { sessionId: session.id, count: dueCount });
-      try {
-        await wakeContainer(session);
-      } catch (err) {
-        // Transient spawn failure (e.g. OneCLI gateway down). Leave messages
-        // pending so the next sweep tick retries; don't abort the rest of
-        // the sweep cycle for other sessions.
-        log.warn('wakeContainer failed — will retry on next sweep', { sessionId: session.id, err });
-      }
+      // wakeContainer never throws — transient spawn failures (OneCLI down,
+      // etc.) return false and leave messages pending for the next tick.
+      await wakeContainer(session);
     }
 
     const alive = isContainerRunning(session.id);
