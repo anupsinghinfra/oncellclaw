@@ -154,11 +154,11 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
     *)
       ph_event setup_root_aborted
       printf '\n  %s\n' "$(bold 'To set up a regular user:')"
-      printf '  %s\n' "$(dim '1. Open another terminal (keep this one for reference)')"
-      printf '  %s\n' "$(dim '2. Log in as root:             ssh root@your-server')"
-      printf '  %s\n' "$(dim '3. Create a new user:          adduser nanoclaw')"
-      printf '  %s\n' "$(dim '4. Add to sudo group:          usermod -aG sudo nanoclaw')"
-      printf '  %s\n' "$(dim '5. Log out of this SSH session: exit')"
+      printf '  %s\n' "$(dim '1. Log in as root:              ssh root@your-server')"
+      printf '  %s\n' "$(dim '2. Create a new user:           adduser nanoclaw')"
+      printf '  %s\n' "$(dim '3. Add to sudo group:           usermod -aG sudo nanoclaw')"
+      printf '  %s\n' "$(dim '4. Copy SSH keys to new user:   cp -r ~/.ssh /home/nanoclaw/.ssh && chown -R nanoclaw:nanoclaw /home/nanoclaw/.ssh')"
+      printf '  %s\n' "$(dim '5. Log out:                     exit')"
       printf '  %s\n' "$(dim '6. Log back in as the new user: ssh nanoclaw@your-server')"
       printf '  %s\n' "$(dim '7. Clone the repo:              git clone https://github.com/qwibitai/nanoclaw.git && cd nanoclaw')"
       printf '  %s\n\n' "$(dim '8. Re-run setup:               bash nanoclaw.sh')"
