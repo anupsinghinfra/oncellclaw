@@ -155,11 +155,12 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
       ph_event setup_root_aborted
       printf '\n  %s\n' "$(bold 'To set up a regular user:')"
       printf '  %s\n' "$(dim '1. Open another terminal (keep this one for reference)')"
-      printf '  %s\n' "$(dim '2. Create a new user:          adduser nanoclaw')"
-      printf '  %s\n' "$(dim '3. Add to sudo group:          usermod -aG sudo nanoclaw')"
-      printf '  %s\n' "$(dim '4. Log out of this SSH session: exit')"
-      printf '  %s\n' "$(dim '5. Log back in as the new user: ssh your-user@your-server')"
-      printf '  %s\n\n' "$(dim '6. Re-run setup:               bash nanoclaw.sh')"
+      printf '  %s\n' "$(dim '2. Log in as root:             ssh root@your-server')"
+      printf '  %s\n' "$(dim '3. Create a new user:          adduser nanoclaw')"
+      printf '  %s\n' "$(dim '4. Add to sudo group:          usermod -aG sudo nanoclaw')"
+      printf '  %s\n' "$(dim '5. Log out of this SSH session: exit')"
+      printf '  %s\n' "$(dim '6. Log back in as the new user: ssh nanoclaw@your-server')"
+      printf '  %s\n\n' "$(dim '7. Re-run setup:               bash nanoclaw.sh')"
       exit 1
       ;;
   esac
