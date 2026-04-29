@@ -160,7 +160,8 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
       printf '  %s\n' "$(dim '4. Add to sudo group:          usermod -aG sudo nanoclaw')"
       printf '  %s\n' "$(dim '5. Log out of this SSH session: exit')"
       printf '  %s\n' "$(dim '6. Log back in as the new user: ssh nanoclaw@your-server')"
-      printf '  %s\n\n' "$(dim '7. Re-run setup:               bash nanoclaw.sh')"
+      printf '  %s\n' "$(dim '7. Clone the repo:              git clone https://github.com/qwibitai/nanoclaw.git && cd nanoclaw')"
+      printf '  %s\n\n' "$(dim '8. Re-run setup:               bash nanoclaw.sh')"
       exit 1
       ;;
   esac
