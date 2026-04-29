@@ -17,11 +17,24 @@ export interface AgentProvider {
 
   /**
    * True if the given text/error indicates the underlying SDK or CLI has no
-   * usable Anthropic auth (e.g. Claude Code's "Not logged in · Please run
+   * usable credentials (e.g. Claude Code's "Not logged in · Please run
    * /login"). The poll-loop swaps the raw output for a host-aware message
-   * since the user can't run /login from chat.
+   * since the user can't authenticate from chat.
+   *
+   * Paired with `authRequiredMessage()` — providers that implement one
+   * should implement both. The matcher is provider-specific because each
+   * SDK/CLI has its own auth-failure banner format.
    */
   isAuthRequired?(text: string): boolean;
+
+  /**
+   * User-facing remediation message returned when `isAuthRequired` matches.
+   * Provider-specific because the actionable instruction differs across
+   * providers (e.g. Claude vs Codex vs OpenCode each direct the operator
+   * to a different auth flow). Falls back to a generic message in the
+   * poll-loop if a provider implements `isAuthRequired` but not this.
+   */
+  authRequiredMessage?(): string;
 }
 
 /**

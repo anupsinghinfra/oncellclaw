@@ -35,3 +35,13 @@ describe('ClaudeProvider.isAuthRequired', () => {
     expect(provider.isAuthRequired('Tool execution failed: timeout')).toBe(false);
   });
 });
+
+describe('ClaudeProvider.authRequiredMessage', () => {
+  const provider = new ClaudeProvider();
+
+  it('returns the Anthropic-specific remediation', () => {
+    const msg = provider.authRequiredMessage();
+    expect(msg).toContain('Anthropic credentials');
+    expect(msg).toContain('claude');
+  });
+});

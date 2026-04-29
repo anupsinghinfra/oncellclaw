@@ -275,6 +275,10 @@ export class ClaudeProvider implements AgentProvider {
     return AUTH_REQUIRED_RE.test(text);
   }
 
+  authRequiredMessage(): string {
+    return "I can't reach my Anthropic credentials right now. The operator running NanoClaw needs to re-run setup, or run `claude` in the project directory on the machine I'm running on.";
+  }
+
   query(input: QueryInput): AgentQuery {
     const stream = new MessageStream();
     stream.push(input.prompt);

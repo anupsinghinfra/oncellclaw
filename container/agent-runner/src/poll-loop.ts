@@ -21,10 +21,15 @@ function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const AUTH_REQUIRED_USER_TEXT =
-  "I can't reach my Anthropic credentials right now. The operator running NanoClaw needs to re-run setup, or run `claude` in the project directory on the machine I'm running on.";
+// Generic fallback for providers that classify auth failures via
+// `isAuthRequired` but don't supply their own remediation text. Concrete
+// providers (Claude, Codex, …) override this with a provider-specific
+// message via `authRequiredMessage()`.
+const GENERIC_AUTH_REQUIRED_MESSAGE =
+  "I can't reach my credentials right now. The operator running NanoClaw needs to re-authenticate on the host machine.";
 
-function writeAuthRequiredMessage(routing: RoutingContext): void {
+function writeAuthRequiredMessage(provider: AgentProvider, routing: RoutingContext): void {
+  const text = provider.authRequiredMessage?.() ?? GENERIC_AUTH_REQUIRED_MESSAGE;
   log('Auth-required detected — substituting host-aware message for the user');
   writeMessageOut({
     id: generateId(),
@@ -32,7 +37,7 @@ function writeAuthRequiredMessage(routing: RoutingContext): void {
     platform_id: routing.platformId,
     channel_type: routing.channelType,
     thread_id: routing.threadId,
-    content: JSON.stringify({ text: AUTH_REQUIRED_USER_TEXT }),
+    content: JSON.stringify({ text }),
   });
 }
 
@@ -205,7 +210,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       }
 
       if (config.provider.isAuthRequired?.(errMsg)) {
-        writeAuthRequiredMessage(routing);
+        writeAuthRequiredMessage(config.provider, routing);
       } else {
         writeMessageOut({
           id: generateId(),
@@ -330,7 +335,7 @@ async function processQuery(
         markCompleted(initialBatchIds);
         if (event.text) {
           if (provider.isAuthRequired?.(event.text)) {
-            writeAuthRequiredMessage(routing);
+            writeAuthRequiredMessage(provider, routing);
           } else {
             dispatchResultText(event.text, routing);
           }
