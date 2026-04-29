@@ -250,6 +250,7 @@ async function collectRemoteCreds(): Promise<RemoteCreds> {
   const keyAnswer = ensureAnswer(
     await p.password({
       message: 'Photon API key',
+      clearOnError: true,
       validate: (v) => ((v ?? '').trim() ? undefined : 'API key is required'),
     }),
   );

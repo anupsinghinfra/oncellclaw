@@ -277,6 +277,7 @@ async function stepClientSecret(args: {
     const answer = ensureAnswer(
       await p.password({
         message: 'Paste the client secret Value',
+        clearOnError: true,
         validate: validateWithHelpEscape((v) => {
           const t = (v ?? '').trim();
           if (!t) return 'Required';
