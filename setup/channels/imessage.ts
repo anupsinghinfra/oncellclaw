@@ -36,7 +36,7 @@ import * as setupLog from '../logs.js';
 import { brightSelect } from '../lib/bright-select.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
-import { wrapForGutter } from '../lib/theme.js';
+import { note, wrapForGutter } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 
@@ -189,7 +189,7 @@ async function walkThroughFullDiskAccess(): Promise<void> {
   }
   const nodeDir = path.dirname(nodePath);
 
-  p.note(
+  note(
     wrapForGutter(
       [
         `iMessage needs Full Disk Access granted to the Node binary:`,
@@ -235,7 +235,7 @@ async function collectRemoteCreds(): Promise<RemoteCreds> {
     }
   }
 
-  p.note(
+  note(
     [
       "Photon is a separate service that owns an iMessage account and",
       "exposes it over HTTP. NanoClaw will talk to it via its API.",
@@ -263,6 +263,7 @@ async function collectRemoteCreds(): Promise<RemoteCreds> {
   const keyAnswer = ensureAnswer(
     await p.password({
       message: 'Photon API key',
+      clearOnError: true,
       validate: (v) => ((v ?? '').trim() ? undefined : 'API key is required'),
     }),
   );
@@ -277,7 +278,7 @@ async function collectRemoteCreds(): Promise<RemoteCreds> {
 }
 
 async function askOperatorHandle(): Promise<string> {
-  p.note(
+  note(
     [
       "What phone number or email do you iMessage with?",
       "That's where your assistant will send its welcome message.",

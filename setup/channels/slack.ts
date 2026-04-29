@@ -28,7 +28,7 @@ import * as setupLog from '../logs.js';
 import { confirmThenOpen } from '../lib/browser.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
-import { wrapForGutter } from '../lib/theme.js';
+import { note, wrapForGutter } from '../lib/theme.js';
 
 const SLACK_API = 'https://slack.com/api';
 const SLACK_APPS_URL = 'https://api.slack.com/apps';
@@ -121,7 +121,7 @@ export async function runSlackChannel(displayName: string): Promise<void> {
 }
 
 async function walkThroughAppCreation(): Promise<void> {
-  p.note(
+  note(
     [
       "You'll create a Slack app that the assistant talks through.",
       "Free and stays inside the workspaces you pick.",
@@ -166,6 +166,7 @@ async function collectBotToken(): Promise<string> {
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your Slack bot token',
+      clearOnError: true,
       validate: (v) => {
         const t = (v ?? '').trim();
         if (!t) return 'Token is required';
@@ -199,6 +200,7 @@ async function collectSigningSecret(): Promise<string> {
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your Slack signing secret',
+      clearOnError: true,
       validate: (v) => {
         const t = (v ?? '').trim();
         if (!t) return 'Signing secret is required';
@@ -286,7 +288,7 @@ async function validateSlackToken(token: string): Promise<WorkspaceInfo> {
 }
 
 async function collectSlackUserId(): Promise<string> {
-  p.note(
+  note(
     [
       "To get your Slack member ID:",
       '',
@@ -391,7 +393,7 @@ async function resolveAgentName(): Promise<string> {
 }
 
 function showPostInstallChecklist(info: WorkspaceInfo): void {
-  p.note(
+  note(
     wrapForGutter(
       [
         `Your agent is wired to Slack and a welcome DM is on its way.`,

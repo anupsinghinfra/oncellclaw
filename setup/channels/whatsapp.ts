@@ -46,7 +46,7 @@ import {
   writeStepEntry,
 } from '../lib/runner.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
-import { brandBold } from '../lib/theme.js';
+import { brandBold, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 const AUTH_CREDS_PATH = path.join(process.cwd(), 'store', 'auth', 'creds.json');
@@ -171,7 +171,7 @@ async function askAuthMethod(): Promise<AuthMethod> {
 }
 
 async function askPhoneNumber(): Promise<string> {
-  p.note(
+  note(
     [
       "Enter your phone number the way WhatsApp expects it:",
       '',
@@ -249,7 +249,7 @@ async function runWhatsAppAuth(
       } else if (block.type === 'WHATSAPP_AUTH_PAIRING_CODE') {
         const code = block.fields.CODE ?? '????';
         stopSpinner('Your pairing code is ready.');
-        p.note(formatPairingCard(code), 'Pairing code');
+        note(formatPairingCard(code), 'Pairing code');
         s.start('Waiting for you to enter the code…');
         spinnerActive = true;
       } else if (block.type === 'WHATSAPP_AUTH') {
@@ -395,7 +395,7 @@ async function restartService(): Promise<void> {
 }
 
 async function askChatPhone(authedPhone: string): Promise<string> {
-  p.note(
+  note(
     [
       `Authenticated with ${k.cyan('+' + authedPhone)}.`,
       '',

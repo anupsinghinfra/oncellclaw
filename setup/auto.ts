@@ -53,7 +53,7 @@ import { claudeCliAvailable, resolveTimezoneViaClaude } from './lib/tz-from-clau
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
 import { emit as phEmit } from './lib/diagnostics.js';
-import { brandBold, brandChip, dimWrap, fitToWidth, wrapForGutter } from './lib/theme.js';
+import { brandBold, brandChip, dimWrap, fitToWidth, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
     const lines = Object.values(existingEnv.groups).map(
       (g) => `  ${k.green('✓')} ${g.label}`,
     );
-    p.note(lines.join('\n'), 'Found existing configuration');
+    note(lines.join('\n'), 'Found existing configuration');
 
     const reuseChoice = ensureAnswer(
       await brightSelect({
@@ -475,7 +475,7 @@ async function main(): Promise<void> {
         );
       }
       if (notes.length > 0) {
-        p.note(notes.join('\n'), "What's left");
+        note(notes.join('\n'), "What's left");
       }
       // "What's left" is a soft failure — we don't abort like fail(), but the
       // user is still stuck and a fix is exactly what claude-assist is for.
@@ -507,11 +507,11 @@ async function main(): Promise<void> {
   ];
   const labelWidth = Math.max(...rows.map(([l]) => l.length));
   const nextSteps = rows.map(([l, c]) => `${k.cyan(l.padEnd(labelWidth))}  ${c}`).join('\n');
-  p.note(nextSteps, 'Try these');
+  note(nextSteps, 'Try these');
 
   // Always-on warning goes before the "check your DMs" directive so the
   // caveat doesn't land after the user's already looked away at their phone.
-  p.note(
+  note(
     wrapForGutter(
       "NanoClaw runs on this machine. It's only reachable while this computer is on and connected to the internet. For always-on availability, run it on a cloud VM — or keep this machine awake.",
       6,
@@ -528,7 +528,7 @@ async function main(): Promise<void> {
     // that the welcome-message signal was too easy to miss. Use p.note so it
     // renders with a visible box, cyan-bold the directive line, and put it
     // as the last thing before outro.
-    p.note(`${brandBold('→')} ${k.bold(`Check your ${dmTarget} — your assistant is saying hi.`)}`, 'Go say hi');
+    note(`${brandBold('→')} ${k.bold(`Check your ${dmTarget} — your assistant is saying hi.`)}`, 'Go say hi');
     p.outro(k.green("You're set."));
   } else {
     p.outro(k.green("You're ready! Chat with `pnpm run chat hi`."));
@@ -607,7 +607,7 @@ function renderPingFailureNote(result: PingResult): void {
           'No reply from your assistant within 30 seconds. Check `logs/nanoclaw.log` for clues, then try `pnpm run chat hi`.',
           6,
         );
-  p.note(body, 'Skipping the first chat');
+  note(body, 'Skipping the first chat');
 }
 
 /**
@@ -622,7 +622,7 @@ function renderPingFailureNote(result: PingResult): void {
  * clearly optional.
  */
 async function runFirstChat(): Promise<void> {
-  p.note(
+  note(
     wrapForGutter(
       [
         'Your assistant runs in a sandbox on this machine.',
@@ -746,6 +746,7 @@ async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
   const answer = ensureAnswer(
     await p.password({
       message: `Paste your ${label}`,
+      clearOnError: true,
       validate: (v) => {
         if (!v || !v.trim()) return 'Required';
         if (!v.trim().startsWith(prefix)) {
