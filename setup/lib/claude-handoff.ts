@@ -27,6 +27,8 @@ import { execSync, spawn } from 'child_process';
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
+import { note } from './theme.js';
+
 export interface HandoffContext {
   /** Channel this handoff is happening in (e.g., 'teams'). */
   channel: string;
@@ -69,7 +71,7 @@ export async function offerClaudeHandoff(ctx: HandoffContext): Promise<boolean> 
 
   const systemPrompt = buildSystemPrompt(ctx);
 
-  p.note(
+  note(
     [
       "I'm handing you off to Claude in interactive mode.",
       "It has the context of where you are in setup.",
