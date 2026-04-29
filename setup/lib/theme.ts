@@ -11,6 +11,7 @@
  *   - COLORTERM truecolor/24bit  → 24-bit ANSI (exact brand cyan)
  *   - Otherwise                  → kleur's 16-color cyan (closest fallback)
  */
+import * as p from '@clack/prompts';
 import k from 'kleur';
 
 const USE_ANSI = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
@@ -66,6 +67,19 @@ export function wrapForGutter(text: string, gutter: number): string {
  */
 export function dimWrap(text: string, gutter: number): string {
   return wrapForGutter(text, gutter);
+}
+
+/**
+ * Wrap clack's `p.note` with the dim formatter disabled. By default
+ * clack renders note bodies through `styleText("dim", …)`, which the
+ * project's prose-readability stance (see `dimWrap` above) explicitly
+ * rejects. Pass-through formatter keeps body text at the terminal's
+ * regular weight; pre-styled segments (chips, bold, brand color) come
+ * through unfaded.
+ */
+const passthroughFormat = (s: string): string => s;
+export function note(message: string, title?: string): void {
+  p.note(message, title, { format: passthroughFormat });
 }
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;

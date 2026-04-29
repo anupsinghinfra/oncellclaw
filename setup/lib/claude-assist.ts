@@ -24,7 +24,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import { ensureAnswer } from './runner.js';
-import { fitToWidth } from './theme.js';
+import { fitToWidth, note } from './theme.js';
 
 export interface AssistContext {
   stepName: string;
@@ -111,7 +111,7 @@ export async function offerClaudeAssist(
     return false;
   }
 
-  p.note(
+  note(
     `${parsed.reason}\n\n${k.cyan('$')} ${parsed.command}`,
     "Claude's suggestion",
   );
