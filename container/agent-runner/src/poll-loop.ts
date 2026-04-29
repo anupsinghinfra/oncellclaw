@@ -21,26 +21,6 @@ function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// Generic fallback for providers that classify auth failures via
-// `isAuthRequired` but don't supply their own remediation text. Concrete
-// providers (Claude, Codex, …) override this with a provider-specific
-// message via `authRequiredMessage()`.
-const GENERIC_AUTH_REQUIRED_MESSAGE =
-  "I can't reach my credentials right now. The operator running NanoClaw needs to re-authenticate on the host machine.";
-
-function writeAuthRequiredMessage(provider: AgentProvider, routing: RoutingContext): void {
-  const text = provider.authRequiredMessage?.() ?? GENERIC_AUTH_REQUIRED_MESSAGE;
-  log('Auth-required detected — substituting host-aware message for the user');
-  writeMessageOut({
-    id: generateId(),
-    kind: 'chat',
-    platform_id: routing.platformId,
-    channel_type: routing.channelType,
-    thread_id: routing.threadId,
-    content: JSON.stringify({ text }),
-  });
-}
-
 export interface PollLoopConfig {
   provider: AgentProvider;
   /**
@@ -191,7 +171,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
     try {
-      const result = await processQuery(query, routing, processingIds, config.provider, config.providerName);
+      const result = await processQuery(query, routing, processingIds, config.providerName);
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setContinuation(config.providerName, continuation);
@@ -209,18 +189,15 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         clearContinuation(config.providerName);
       }
 
-      if (config.provider.isAuthRequired?.(errMsg)) {
-        writeAuthRequiredMessage(config.provider, routing);
-      } else {
-        writeMessageOut({
-          id: generateId(),
-          kind: 'chat',
-          platform_id: routing.platformId,
-          channel_type: routing.channelType,
-          thread_id: routing.threadId,
-          content: JSON.stringify({ text: `Error: ${errMsg}` }),
-        });
-      }
+      // Write error response so the user knows something went wrong
+      writeMessageOut({
+        id: generateId(),
+        kind: 'chat',
+        platform_id: routing.platformId,
+        channel_type: routing.channelType,
+        thread_id: routing.threadId,
+        content: JSON.stringify({ text: `Error: ${errMsg}` }),
+      });
     }
 
     // Ensure completed even if processQuery ended without a result event
@@ -272,7 +249,6 @@ async function processQuery(
   query: AgentQuery,
   routing: RoutingContext,
   initialBatchIds: string[],
-  provider: AgentProvider,
   providerName: string,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
@@ -334,11 +310,7 @@ async function processQuery(
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
         if (event.text) {
-          if (provider.isAuthRequired?.(event.text)) {
-            writeAuthRequiredMessage(provider, routing);
-          } else {
-            dispatchResultText(event.text, routing);
-          }
+          dispatchResultText(event.text, routing);
         }
       }
     }
