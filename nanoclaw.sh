@@ -142,14 +142,12 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
     "$(dim "Running NanoClaw as root is not recommended. It can cause permission")"
   printf '  %s\n\n' \
     "$(dim "issues with containers, services, and file ownership.")"
-  printf '  %s\n' \
-    "$(dim "We recommend creating a regular user and running setup from there.")"
-  printf '  %s\n\n' \
-    "$(dim "If you continue as root, some things may not work as expected.")"
-  read -r -p "  $(bold 'Continue as root anyway?') [y/N] " ROOT_ANS </dev/tty
+  printf '  %s\n' "$(bold '1)') $(dim 'Show me instructions for creating a new Linux user')"
+  printf '  %s\n\n' "$(bold '2)') $(dim 'Continue setting up NanoClaw as root user (not recommended)')"
+  read -r -p "  $(bold 'Choose [1/2]: ')" ROOT_ANS </dev/tty
 
-  case "${ROOT_ANS:-N}" in
-    [Yy]*)
+  case "${ROOT_ANS:-1}" in
+    2)
       ph_event setup_root_continued
       printf '\n'
       ;;
