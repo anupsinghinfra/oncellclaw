@@ -27,7 +27,7 @@ import {
   getMessagingGroupWithAgentCount,
 } from './db/messaging-groups.js';
 import { findSessionForAgent } from './db/sessions.js';
-import { startTypingRefresh } from './modules/typing/index.js';
+import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
@@ -450,7 +450,15 @@ async function deliverToAgent(
     startTypingRefresh(session.id, session.agent_group_id, event.channelType, event.platformId, event.threadId);
     const freshSession = getSession(session.id);
     if (freshSession) {
-      await wakeContainer(freshSession);
+      try {
+        await wakeContainer(freshSession);
+      } catch (err) {
+        // Transient spawn failure (e.g. OneCLI gateway down). The inbound
+        // row is already persisted — host-sweep will retry the wake on its
+        // next tick. Don't bubble out of the channel adapter.
+        log.warn('wakeContainer failed — host-sweep will retry', { sessionId: freshSession.id, err });
+        stopTypingRefresh(freshSession.id);
+      }
     }
   }
 }

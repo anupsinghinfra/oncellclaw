@@ -14,6 +14,14 @@ export interface AgentProvider {
    * (missing transcript, unknown session, etc.) and should be cleared.
    */
   isSessionInvalid(err: unknown): boolean;
+
+  /**
+   * True if the given text/error indicates the underlying SDK or CLI has no
+   * usable Anthropic auth (e.g. Claude Code's "Not logged in · Please run
+   * /login"). The poll-loop swaps the raw output for a host-aware message
+   * since the user can't run /login from chat.
+   */
+  isAuthRequired?(text: string): boolean;
 }
 
 /**

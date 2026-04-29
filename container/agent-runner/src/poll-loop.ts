@@ -21,6 +21,20 @@ function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const AUTH_REQUIRED_USER_TEXT =
+  "I can't reach my Anthropic credentials right now. The operator running NanoClaw needs to re-run setup, or run `claude` in the project directory on the machine I'm running on.";
+
+function writeAuthRequiredMessage(routing: RoutingContext): void {
+  writeMessageOut({
+    id: generateId(),
+    kind: 'chat',
+    platform_id: routing.platformId,
+    channel_type: routing.channelType,
+    thread_id: routing.threadId,
+    content: JSON.stringify({ text: AUTH_REQUIRED_USER_TEXT }),
+  });
+}
+
 export interface PollLoopConfig {
   provider: AgentProvider;
   /**
@@ -171,7 +185,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
     try {
-      const result = await processQuery(query, routing, processingIds, config.providerName);
+      const result = await processQuery(query, routing, processingIds, config.provider, config.providerName);
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setContinuation(config.providerName, continuation);
@@ -189,15 +203,18 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         clearContinuation(config.providerName);
       }
 
-      // Write error response so the user knows something went wrong
-      writeMessageOut({
-        id: generateId(),
-        kind: 'chat',
-        platform_id: routing.platformId,
-        channel_type: routing.channelType,
-        thread_id: routing.threadId,
-        content: JSON.stringify({ text: `Error: ${errMsg}` }),
-      });
+      if (config.provider.isAuthRequired?.(errMsg)) {
+        writeAuthRequiredMessage(routing);
+      } else {
+        writeMessageOut({
+          id: generateId(),
+          kind: 'chat',
+          platform_id: routing.platformId,
+          channel_type: routing.channelType,
+          thread_id: routing.threadId,
+          content: JSON.stringify({ text: `Error: ${errMsg}` }),
+        });
+      }
     }
 
     // Ensure completed even if processQuery ended without a result event
@@ -249,6 +266,7 @@ async function processQuery(
   query: AgentQuery,
   routing: RoutingContext,
   initialBatchIds: string[],
+  provider: AgentProvider,
   providerName: string,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
@@ -310,7 +328,11 @@ async function processQuery(
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
         if (event.text) {
-          dispatchResultText(event.text, routing);
+          if (provider.isAuthRequired?.(event.text)) {
+            writeAuthRequiredMessage(routing);
+          } else {
+            dispatchResultText(event.text, routing);
+          }
         }
       }
     }

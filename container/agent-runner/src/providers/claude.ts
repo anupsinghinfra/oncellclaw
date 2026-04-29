@@ -236,6 +236,14 @@ const CLAUDE_CODE_AUTO_COMPACT_WINDOW = '165000';
  */
 const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
 
+/**
+ * Auth-required detection. Matches Claude Code's output when no usable
+ * credential is available — "Not logged in · Please run /login" or
+ * "Invalid API key · Please run /login". The user can't run /login from
+ * chat, so the poll-loop substitutes a host-aware message.
+ */
+const AUTH_REQUIRED_RE = /(Not logged in|Invalid API key)[\s\S]*?Please run \/login/i;
+
 export class ClaudeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = true;
 
@@ -257,6 +265,10 @@ export class ClaudeProvider implements AgentProvider {
   isSessionInvalid(err: unknown): boolean {
     const msg = err instanceof Error ? err.message : String(err);
     return STALE_SESSION_RE.test(msg);
+  }
+
+  isAuthRequired(text: string): boolean {
+    return AUTH_REQUIRED_RE.test(text);
   }
 
   query(input: QueryInput): AgentQuery {
