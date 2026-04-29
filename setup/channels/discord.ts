@@ -31,7 +31,7 @@ import { brightSelect } from '../lib/bright-select.js';
 import { confirmThenOpen } from '../lib/browser.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
-import { note } from '../lib/theme.js';
+import { brandBody, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 const DISCORD_API = 'https://discord.com/api/v10';
@@ -399,7 +399,7 @@ async function resolveOwnerUserId(
     }
   } else {
     p.log.info(
-      "Your bot is owned by a Developer Team, so we need your Discord user ID directly.",
+      brandBody("Your bot is owned by a Developer Team, so we need your Discord user ID directly."),
     );
   }
   return await promptForUserIdWithDevMode();

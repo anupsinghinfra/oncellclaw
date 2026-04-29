@@ -28,7 +28,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import { ensureAnswer } from './runner.js';
-import { fitToWidth, note } from './theme.js';
+import { brandBody, fitToWidth, note } from './theme.js';
 
 export interface AssistContext {
   stepName: string;
@@ -110,7 +110,7 @@ export async function offerClaudeAssist(
 
   const parsed = parseResponse(response);
   if (!parsed) {
-    p.log.warn("Claude responded but I couldn't parse a command out of it.");
+    p.log.warn(brandBody("Claude responded but I couldn't parse a command out of it."));
     p.log.message(k.dim(response.trim().slice(0, 500)));
     return false;
   }
@@ -358,7 +358,7 @@ async function queryClaudeUnderSpinner(
       const elapsed = Math.round((Date.now() - start) / 1000);
       const suffix = ` (${elapsed}s)`;
       if (kind === 'ok') {
-        p.log.success(`${fitToWidth('Claude replied.', suffix)}${k.dim(suffix)}`);
+        p.log.success(`${brandBody(fitToWidth('Claude replied.', suffix))}${k.dim(suffix)}`);
         resolve(payload);
       } else {
         p.log.error(
