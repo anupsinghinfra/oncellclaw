@@ -150,6 +150,7 @@ async function collectTelegramToken(): Promise<string> {
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your bot token',
+      clearOnError: true,
       validate: (v) => {
         if (!v || !v.trim()) return "Token is required";
         if (!/^[0-9]+:[A-Za-z0-9_-]{35,}$/.test(v.trim())) {

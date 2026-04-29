@@ -242,6 +242,7 @@ async function collectDiscordToken(): Promise<string> {
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your bot token',
+      clearOnError: true,
       validate: (v) => {
         const t = (v ?? '').trim();
         if (!t) return 'Token is required';

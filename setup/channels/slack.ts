@@ -154,6 +154,7 @@ async function collectBotToken(): Promise<string> {
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your Slack bot token',
+      clearOnError: true,
       validate: (v) => {
         const t = (v ?? '').trim();
         if (!t) return 'Token is required';
@@ -175,6 +176,7 @@ async function collectSigningSecret(): Promise<string> {
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your Slack signing secret',
+      clearOnError: true,
       validate: (v) => {
         const t = (v ?? '').trim();
         if (!t) return 'Signing secret is required';

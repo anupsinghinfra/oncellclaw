@@ -706,6 +706,7 @@ async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
   const answer = ensureAnswer(
     await p.password({
       message: `Paste your ${label}`,
+      clearOnError: true,
       validate: (v) => {
         if (!v || !v.trim()) return 'Required';
         if (!v.trim().startsWith(prefix)) {
