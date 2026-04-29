@@ -55,8 +55,6 @@ import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js
 import { emit as phEmit } from './lib/diagnostics.js';
 import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
-import { normalizeName } from '../src/modules/agent-to-agent/db/agent-destinations.js';
-
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
 
@@ -374,7 +372,7 @@ async function main(): Promise<void> {
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
         phEmit('first_chat_ready');
-        const scratchFolder = `cli-with-${normalizeName(displayName!)}`;
+        const scratchFolder = res.terminal?.fields.FOLDER ?? '';
         spawnSync('pnpm', ['exec', 'tsx', 'scripts/delete-cli-agent.ts', '--folder', scratchFolder], {
           stdio: 'ignore',
         });

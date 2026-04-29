@@ -60,8 +60,9 @@ export async function run(args: string[]): Promise<void> {
 
   log.info('Invoking init-cli-agent', { displayName, agentName });
 
+  let stdout = '';
   try {
-    execFileSync('pnpm', scriptArgs, {
+    stdout = execFileSync('pnpm', scriptArgs, {
       cwd: projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf-8',
@@ -82,9 +83,11 @@ export async function run(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  const folderMatch = stdout.match(/@ groups\/(\S+)/);
   emitStatus('CLI_AGENT', {
     DISPLAY_NAME: displayName,
     AGENT_NAME: agentName || displayName,
+    FOLDER: folderMatch?.[1] ?? '',
     CHANNEL: 'cli/local',
     STATUS: 'success',
     LOG: 'logs/setup.log',

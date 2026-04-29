@@ -44,23 +44,18 @@ if (!ag) {
   process.exit(0);
 }
 
-// Delete all rows referencing this agent group, in dependency order.
-const fkTables = [
-  'messaging_group_agents',
-  'agent_destinations',
-  'agent_group_members',
-  'pending_sender_approvals',
-  'channel_registrations',
-  'user_roles',
-  'sessions',
-];
-for (const table of fkTables) {
-  const exists = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
-    .get(table);
-  if (exists) {
-    db.prepare(`DELETE FROM ${table} WHERE agent_group_id = ?`).run(ag.id);
-  }
+// Dynamically find every table with an agent_group_id column and delete
+// matching rows. This is self-maintaining — new FK tables are picked up
+// automatically without updating a hardcoded list.
+const tables = db
+  .prepare(
+    `SELECT DISTINCT m.name FROM sqlite_master m
+     JOIN pragma_table_info(m.name) p ON p.name = 'agent_group_id'
+     WHERE m.type = 'table' AND m.name != 'agent_groups'`,
+  )
+  .all() as { name: string }[];
+for (const { name } of tables) {
+  db.prepare(`DELETE FROM ${name} WHERE agent_group_id = ?`).run(ag.id);
 }
 
 deleteAgentGroup(ag.id);
