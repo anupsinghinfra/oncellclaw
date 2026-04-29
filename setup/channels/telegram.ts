@@ -132,6 +132,18 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
 }
 
 async function collectTelegramToken(): Promise<string> {
+  const existing = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  if (existing && /^[0-9]+:[A-Za-z0-9_-]{35,}$/.test(existing)) {
+    const reuse = ensureAnswer(await p.confirm({
+      message: `Found an existing Telegram bot token (${existing.slice(0, 8)}…). Use it?`,
+      initialValue: true,
+    }));
+    if (reuse) {
+      setupLog.userInput('telegram_token', 'reused-existing');
+      return existing;
+    }
+  }
+
   note(
     [
       "Your assistant talks to you through a Telegram bot you create.",
@@ -150,6 +162,7 @@ async function collectTelegramToken(): Promise<string> {
   const answer = ensureAnswer(
     await p.password({
       message: 'Paste your bot token',
+      clearOnError: true,
       validate: (v) => {
         if (!v || !v.trim()) return "Token is required";
         if (!/^[0-9]+:[A-Za-z0-9_-]{35,}$/.test(v.trim())) {
