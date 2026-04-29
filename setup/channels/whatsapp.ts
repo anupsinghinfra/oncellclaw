@@ -46,7 +46,7 @@ import {
   writeStepEntry,
 } from '../lib/runner.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
-import { brandBold, note } from '../lib/theme.js';
+import { brandBody, brandBold, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 const AUTH_CREDS_PATH = path.join(process.cwd(), 'store', 'auth', 'creds.json');
@@ -267,7 +267,7 @@ async function runWhatsAppAuth(
           if (spinnerActive) {
             stopSpinner('WhatsApp linked.');
           } else {
-            p.log.success('WhatsApp linked.');
+            p.log.success(brandBody('WhatsApp linked.'));
           }
         } else if (status === 'failed') {
           if (qrLinesPrinted > 0) {
