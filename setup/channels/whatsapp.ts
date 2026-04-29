@@ -46,7 +46,7 @@ import {
   writeStepEntry,
 } from '../lib/runner.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
-import { brandBody, brandBold, note } from '../lib/theme.js';
+import { accentGreen, brandBody, brandBold, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 const AUTH_CREDS_PATH = path.join(process.cwd(), 'store', 'auth', 'creds.json');
@@ -462,7 +462,7 @@ async function resolveAgentName(): Promise<string> {
   }
   const answer = ensureAnswer(
     await p.text({
-      message: 'What should your assistant be called?',
+      message: `What should your ${accentGreen('assistant')} be called?`,
       placeholder: DEFAULT_AGENT_NAME,
       defaultValue: DEFAULT_AGENT_NAME,
     }),
