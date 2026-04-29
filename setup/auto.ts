@@ -351,7 +351,7 @@ async function main(): Promise<void> {
         running: 'Preparing connection test…',
         done: 'Ready to test.',
       },
-      ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME],
+      ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME, '--folder', '_ping-test'],
     );
     if (!res.ok) {
       await fail(
@@ -372,8 +372,7 @@ async function main(): Promise<void> {
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
         phEmit('first_chat_ready');
-        const scratchFolder = res.terminal?.fields.FOLDER ?? '';
-        spawnSync('pnpm', ['exec', 'tsx', 'scripts/delete-cli-agent.ts', '--folder', scratchFolder], {
+        spawnSync('pnpm', ['exec', 'tsx', 'scripts/delete-cli-agent.ts', '--folder', '_ping-test'], {
           stdio: 'ignore',
         });
         const next = ensureAnswer(

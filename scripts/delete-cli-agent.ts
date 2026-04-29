@@ -1,9 +1,10 @@
 /**
  * Delete the scratch CLI agent created during setup's ping-pong test.
  *
- * Removes the agent group, its messaging_group_agents wiring, any
- * agent_destinations rows, and the groups/<folder>/ directory. Leaves the
- * CLI messaging group intact so it can be reused for a new agent.
+ * Dynamically finds and removes all rows referencing the agent group
+ * (any table with an agent_group_id column), deletes the agent group
+ * itself, and removes the groups/<folder>/ directory. Leaves the CLI
+ * messaging group intact so it can be reused for a new agent.
  *
  * Usage:
  *   pnpm exec tsx scripts/delete-cli-agent.ts --folder <folder-name>
