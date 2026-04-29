@@ -33,7 +33,7 @@ import {
   spawnStep,
   writeStepEntry,
 } from '../lib/runner.js';
-import { brandBold, note } from '../lib/theme.js';
+import { accentGreen, brandBold, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 
@@ -304,7 +304,7 @@ async function resolveAgentName(): Promise<string> {
   }
   const answer = ensureAnswer(
     await p.text({
-      message: 'What should your assistant be called?',
+      message: `What should your ${accentGreen('assistant')} be called?`,
       placeholder: DEFAULT_AGENT_NAME,
       defaultValue: DEFAULT_AGENT_NAME,
     }),

@@ -31,7 +31,7 @@ import { brightSelect } from '../lib/bright-select.js';
 import { confirmThenOpen } from '../lib/browser.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
-import { brandBody, note } from '../lib/theme.js';
+import { accentGreen, brandBody, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 const DISCORD_API = 'https://discord.com/api/v10';
@@ -520,7 +520,7 @@ async function resolveAgentName(): Promise<string> {
   }
   const answer = ensureAnswer(
     await p.text({
-      message: 'What should your assistant be called?',
+      message: `What should your ${accentGreen('assistant')} be called?`,
       placeholder: DEFAULT_AGENT_NAME,
       defaultValue: DEFAULT_AGENT_NAME,
     }),
