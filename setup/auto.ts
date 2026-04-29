@@ -53,7 +53,7 @@ import { claudeCliAvailable, resolveTimezoneViaClaude } from './lib/tz-from-clau
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
 import { emit as phEmit } from './lib/diagnostics.js';
-import { brandBody, brandBold, brandChip, dimWrap, fitToWidth, note, wrapForGutter } from './lib/theme.js';
+import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
@@ -1017,7 +1017,7 @@ async function runTimezoneStep(): Promise<void> {
 async function askDisplayName(fallback: string): Promise<string> {
   const answer = ensureAnswer(
     await p.text({
-      message: 'What should your assistant call you?',
+      message: `What should your assistant call ${accentGreen('you')}?`,
       placeholder: fallback,
       defaultValue: fallback,
     }),
