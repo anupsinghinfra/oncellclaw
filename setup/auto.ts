@@ -55,6 +55,7 @@ import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js
 import { emit as phEmit } from './lib/diagnostics.js';
 import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
+import { normalizeName } from '../src/modules/agent-to-agent/db/agent-destinations.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
@@ -349,8 +350,8 @@ async function main(): Promise<void> {
     const res = await runQuietStep(
       'cli-agent',
       {
-        running: 'Bringing your assistant online…',
-        done: 'Assistant wired up.',
+        running: 'Preparing connection test…',
+        done: 'Ready to test.',
       },
       ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME],
     );
@@ -365,7 +366,7 @@ async function main(): Promise<void> {
       p.log.message(
         brandBody(
           dimWrap(
-            "Your assistant runs in an isolated sandbox. I'm going to send it a quick test message (ping) and wait for a reply (pong) to confirm it's responding. First startup typically takes 30–60 seconds while the sandbox warms up.",
+            'Checking your assistant can respond — first startup takes 30–60 seconds.',
             4,
           ),
         ),
@@ -373,6 +374,10 @@ async function main(): Promise<void> {
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
         phEmit('first_chat_ready');
+        const scratchFolder = `cli-with-${normalizeName(displayName!)}`;
+        spawnSync('pnpm', ['exec', 'tsx', 'scripts/delete-cli-agent.ts', '--folder', scratchFolder], {
+          stdio: 'ignore',
+        });
         const next = ensureAnswer(
           await brightSelect<'continue' | 'chat'>({
             message: 'What next?',
@@ -390,7 +395,23 @@ async function main(): Promise<void> {
           }),
         ) as 'continue' | 'chat';
         setupLog.userInput('first_chat_choice', next);
-        if (next === 'chat') await runFirstChat();
+        if (next === 'chat') {
+          const terminalAgentName = `${displayName!}'s Terminal`;
+          const createRes = await runQuietChild(
+            'create-terminal-agent',
+            'pnpm',
+            ['exec', 'tsx', 'scripts/init-cli-agent.ts', '--display-name', displayName!, '--agent-name', terminalAgentName],
+            { running: `Creating ${terminalAgentName}…`, done: `${terminalAgentName} is ready.` },
+          );
+          if (!createRes.ok) {
+            await fail(
+              'create-terminal-agent',
+              `Couldn't create ${terminalAgentName}.`,
+              'You can retry later with `pnpm exec tsx scripts/init-cli-agent.ts`.',
+            );
+          }
+          await runFirstChat();
+        }
       } else {
         phEmit('first_chat_failed', { reason: ping });
         renderPingFailureNote(ping);
@@ -592,7 +613,7 @@ async function confirmAssistantResponds(): Promise<PingResult> {
   const elapsed = Math.round((Date.now() - start) / 1000);
   const suffix = ` (${elapsed}s)`;
   if (result === 'ok') {
-    s.stop(`${k.bold(fitToWidth('Your assistant is ready.', suffix))}${k.dim(suffix)}`);
+    s.stop(`${k.bold(fitToWidth('Connection verified.', suffix))}${k.dim(suffix)}`);
   } else {
     const msg =
       result === 'socket_error' ? "Couldn't reach the NanoClaw service." : "Your assistant didn't reply in time.";
