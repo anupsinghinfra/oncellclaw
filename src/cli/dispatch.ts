@@ -9,10 +9,7 @@
 import type { CallerContext, ErrorCode, RequestFrame, ResponseFrame } from './frame.js';
 import { lookup } from './registry.js';
 
-export async function dispatch(
-  req: RequestFrame,
-  ctx: CallerContext,
-): Promise<ResponseFrame> {
+export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<ResponseFrame> {
   const cmd = lookup(req.command);
   if (!cmd) {
     return err(req.id, 'unknown-command', `no command "${req.command}"`);

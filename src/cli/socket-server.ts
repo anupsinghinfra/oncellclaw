@@ -107,10 +107,5 @@ function write(conn: net.Socket, frame: ResponseFrame): void {
 function isRequestFrame(x: unknown): x is RequestFrame {
   if (!x || typeof x !== 'object') return false;
   const o = x as Record<string, unknown>;
-  return (
-    typeof o.id === 'string' &&
-    typeof o.command === 'string' &&
-    typeof o.args === 'object' &&
-    o.args !== null
-  );
+  return typeof o.id === 'string' && typeof o.command === 'string' && typeof o.args === 'object' && o.args !== null;
 }

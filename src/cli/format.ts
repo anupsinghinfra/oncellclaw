@@ -41,11 +41,8 @@ function isFlatRecord(x: unknown): x is Record<string, unknown> {
 function renderTable(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return '(no rows)';
   const cols = Object.keys(rows[0]);
-  const widths = cols.map((c) =>
-    Math.max(c.length, ...rows.map((r) => String(r[c] ?? '').length)),
-  );
-  const fmtRow = (vals: string[]): string =>
-    vals.map((v, i) => v.padEnd(widths[i])).join('  ');
+  const widths = cols.map((c) => Math.max(c.length, ...rows.map((r) => String(r[c] ?? '').length)));
+  const fmtRow = (vals: string[]): string => vals.map((v, i) => v.padEnd(widths[i])).join('  ');
   const lines = [
     fmtRow(cols),
     fmtRow(widths.map((w) => '─'.repeat(w))),

@@ -88,8 +88,7 @@ function parseArgv(argv: string[]): {
   // Allow `nc list groups` as well as `nc list-groups`. Server rejects
   // unknowns, so the naive join is safe — at worst the user gets an
   // unknown-command error.
-  const command =
-    positional.length >= 2 ? `${positional[0]}-${positional[1]}` : positional[0];
+  const command = positional.length >= 2 ? `${positional[0]}-${positional[1]}` : positional[0];
 
   return { command, args, json };
 }
@@ -124,8 +123,6 @@ function formatTransportError(e: unknown): string {
 }
 
 main().catch((err) => {
-  process.stderr.write(
-    `nc: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`,
-  );
+  process.stderr.write(`nc: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(2);
 });

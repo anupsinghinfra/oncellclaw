@@ -23,10 +23,7 @@ export class SocketTransport implements Transport {
       let buffer = '';
       let settled = false;
 
-      const settle = (
-        action: 'resolve' | 'reject',
-        valueOrErr: ResponseFrame | Error,
-      ): void => {
+      const settle = (action: 'resolve' | 'reject', valueOrErr: ResponseFrame | Error): void => {
         if (settled) return;
         settled = true;
         try {
@@ -51,12 +48,7 @@ export class SocketTransport implements Transport {
           const frame = JSON.parse(line) as ResponseFrame;
           settle('resolve', frame);
         } catch (e) {
-          settle(
-            'reject',
-            new Error(
-              `malformed response from host: ${e instanceof Error ? e.message : String(e)}`,
-            ),
-          );
+          settle('reject', new Error(`malformed response from host: ${e instanceof Error ? e.message : String(e)}`));
         }
       });
 
