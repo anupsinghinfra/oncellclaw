@@ -40,6 +40,18 @@ export function brandChip(s: string): string {
 }
 
 /**
+ * Accent green (#3fba50) for emphasizing a single word inside prompt
+ * messages — currently the "you" in "What should your assistant call
+ * you?" so the operator parses at a glance who the question is about.
+ * Same TTY/NO_COLOR/truecolor gating as the rest of the palette.
+ */
+export function accentGreen(s: string): string {
+  if (!USE_ANSI) return s;
+  if (TRUECOLOR) return `\x1b[38;2;63;186;80m${s}\x1b[39m`;
+  return k.green(s);
+}
+
+/**
  * Brand body color for setup-flow prose. Used for card bodies (via the
  * `note()` formatter) and `p.log.*` body arguments — anywhere the
  * previous "dim" treatment was making prose hard to read or washing
