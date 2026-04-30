@@ -31,6 +31,7 @@ import { brightSelect } from '../lib/bright-select.js';
 import { confirmThenOpen, formatNoteLink } from '../lib/browser.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
+import { readEnvKey } from '../environment.js';
 import { accentGreen, brandBody, fmtDuration, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
@@ -238,7 +239,7 @@ async function walkThroughServerCreation(): Promise<void> {
 }
 
 async function collectDiscordToken(): Promise<string> {
-  const existing = process.env.DISCORD_BOT_TOKEN?.trim();
+  const existing = readEnvKey('DISCORD_BOT_TOKEN');
   if (existing && /^[A-Za-z0-9._-]{50,}$/.test(existing)) {
     const reuse = ensureAnswer(await p.confirm({
       message: `Found an existing Discord bot token (${existing.slice(0, 10)}…). Use it?`,
