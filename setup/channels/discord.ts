@@ -164,9 +164,8 @@ async function walkThroughBotCreation(): Promise<void> {
       '  2. In the "Bot" tab, click "Reset Token" and copy the token',
       '  3. On the same tab, enable "Message Content Intent"',
       '     (under Privileged Gateway Intents)',
-      '',
       formatNoteLink(url),
-    ].join('\n'),
+    ].filter((line): line is string => line !== null).join('\n'),
     'Create a Discord bot',
   );
   await confirmThenOpen(url, 'Press Enter to open the Developer Portal');
@@ -224,9 +223,8 @@ async function walkThroughServerCreation(): Promise<void> {
       '  1. In Discord, click the "+" at the bottom of the server list',
       '  2. Choose "Create My Own" → "For me and my friends"',
       '  3. Give it any name (e.g. "NanoClaw")',
-      '',
       formatNoteLink(url),
-    ].join('\n'),
+    ].filter((line): line is string => line !== null).join('\n'),
     'Create a Discord server',
   );
   await confirmThenOpen(url, 'Press Enter to open Discord');
@@ -446,9 +444,8 @@ async function promptInviteBot(
       '',
       '  1. Pick any server you\'re in (a personal one is fine)',
       '  2. Click "Authorize"',
-      '',
       formatNoteLink(url),
-    ].join('\n'),
+    ].filter((line): line is string => line !== null).join('\n'),
     'Add bot to a server',
   );
   await confirmThenOpen(url, 'Press Enter to open the invite page');

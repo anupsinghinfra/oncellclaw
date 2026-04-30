@@ -50,9 +50,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   note(
     [
       `Opening @${botUsername} in Telegram so it's ready when the pairing code shows up.`,
-      '',
       formatNoteLink(botUrl),
-    ].join('\n'),
+    ].filter((line): line is string => line !== null).join('\n'),
     'Open Telegram',
   );
   await confirmThenOpen(botUrl, 'Press Enter to open Telegram');
