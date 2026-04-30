@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { deriveAttachmentName } from './attachment-naming.js';
 import { isSafeAttachmentName } from './attachment-safety.js';
 import type { OutboundFile } from './channels/adapter.js';
 import { DATA_DIR } from './config.js';
@@ -259,7 +260,7 @@ function extractAttachmentFiles(
       // this guard, `path.join(inboxDir, '../../...')` writes anywhere the
       // host process has fs permission — see Signal Desktop's Nov 2025
       // attachment-fileName advisory for the same archetype.
-      const rawName = (att.name as string | undefined) ?? `attachment-${Date.now()}`;
+      const rawName = deriveAttachmentName(att);
       const filename = isSafeAttachmentName(rawName) ? rawName : `attachment-${Date.now()}`;
       if (filename !== rawName) {
         log.warn('Refused unsafe attachment filename — would escape inbox', {
