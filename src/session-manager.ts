@@ -238,6 +238,20 @@ export function writeSessionMessage(
 /**
  * If message content has attachments with base64 `data`, save them to
  * the session's inbox directory and replace with `localPath`.
+ *
+ * Both `messageId` and `att.name` originate in untrusted input. WhatsApp
+ * passes `msg.key.id` through raw (and that field is client generated, so a
+ * peer can craft it), and other adapters may follow. The session dir is
+ * mounted writable into the container, so a compromised agent can also
+ * pre-place a symlink at `inbox/<future msgId>/` and wait for a chat message
+ * with a matching id to redirect the host's write.
+ *
+ * Defenses, mirrored from the outbound side:
+ *   1. basename check on `messageId` and `filename`.
+ *   2. lstat of the inbox dir to refuse pre-placed symlinks.
+ *   3. realpath-based containment under the session inbox root.
+ *   4. `wx` flag on writeFileSync to refuse following a pre-existing symlink
+ *      at the target file path or overwriting any existing file.
  */
 function extractAttachmentFiles(
   agentGroupId: string,
@@ -255,34 +269,75 @@ function extractAttachmentFiles(
   const attachments = parsed.attachments as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(attachments)) return contentStr;
 
+  if (!isSafeAttachmentName(messageId)) {
+    log.warn('Rejecting unsafe inbound message id', { messageId });
+    return contentStr;
+  }
+
   let changed = false;
   for (const att of attachments) {
-    if (typeof att.data === 'string') {
-      // The name field is attacker-controlled: chat platforms with E2E
-      // attachment encryption (WhatsApp, Matrix) cannot sanitize filename
-      // server-side, and other adapters pass att.name through raw. Without
-      // this guard, `path.join(inboxDir, '../../...')` writes anywhere the
-      // host process has fs permission — see Signal Desktop's Nov 2025
-      // attachment-fileName advisory for the same archetype.
-      const rawName = deriveAttachmentName(att);
-      const filename = isSafeAttachmentName(rawName) ? rawName : `attachment-${Date.now()}`;
-      if (filename !== rawName) {
-        log.warn('Refused unsafe attachment filename — would escape inbox', {
-          messageId,
-          rawName,
-          replacement: filename,
-        });
-      }
-      const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', messageId);
-      fs.mkdirSync(inboxDir, { recursive: true });
-      const filePath = path.join(inboxDir, filename);
-      fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'));
-      att.name = filename;
-      att.localPath = `inbox/${messageId}/${filename}`;
-      delete att.data;
-      changed = true;
-      log.debug('Saved attachment to inbox', { messageId, filename, size: att.size });
+    if (typeof att.data !== 'string') continue;
+
+    const rawName = deriveAttachmentName(att);
+    const filename = isSafeAttachmentName(rawName) ? rawName : `attachment-${Date.now()}`;
+    if (filename !== rawName) {
+      log.warn('Refused unsafe attachment filename, would escape inbox', {
+        messageId,
+        rawName,
+        replacement: filename,
+      });
     }
+
+    const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', messageId);
+
+    // Refuse to mkdir through a symlink that the container may have pre placed
+    // at inboxDir. With recursive:true, mkdirSync would silently no op on a
+    // pre existing symlink and the subsequent writeFileSync would follow it.
+    if (fs.existsSync(inboxDir)) {
+      const stat = fs.lstatSync(inboxDir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        log.warn('Rejecting unsafe inbox directory', { messageId, inboxDir });
+        continue;
+      }
+    }
+    fs.mkdirSync(inboxDir, { recursive: true });
+
+    let realInboxDir: string;
+    try {
+      realInboxDir = fs.realpathSync(inboxDir);
+    } catch (err) {
+      log.warn('Failed to resolve inbox directory', { messageId, err });
+      continue;
+    }
+    const inboxRoot = path.join(sessionDir(agentGroupId, sessionId), 'inbox');
+    if (!isPathInside(fs.realpathSync(inboxRoot), realInboxDir)) {
+      log.warn('Inbox directory escaped session inbox root', { messageId, inboxDir });
+      continue;
+    }
+
+    const filePath = path.join(inboxDir, filename);
+    try {
+      // wx = exclusive create. Refuses to follow a pre existing symlink or
+      // overwrite any existing file. The host expects to be the sole writer
+      // of these attachments.
+      fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'), { flag: 'wx' });
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code === 'EEXIST') {
+        log.warn('Inbox attachment target already exists, refusing to overwrite', {
+          messageId,
+          filename,
+        });
+        continue;
+      }
+      throw err;
+    }
+
+    att.name = filename;
+    att.localPath = `inbox/${messageId}/${filename}`;
+    delete att.data;
+    changed = true;
+    log.debug('Saved attachment to inbox', { messageId, filename, size: att.size });
   }
 
   return changed ? JSON.stringify(parsed) : contentStr;
