@@ -21,7 +21,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
-import { confirmThenOpen } from '../lib/browser.js';
+import { confirmThenOpen, formatNoteLink } from '../lib/browser.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import {
   type Block,
@@ -33,8 +33,8 @@ import {
   spawnStep,
   writeStepEntry,
 } from '../lib/runner.js';
-import { accentGreen, brandBold, fitToWidth, note } from '../lib/theme.js';
 import { readEnvKey } from '../environment.js';
+import { accentGreen, brandBold, fitToWidth, fmtDuration, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 
@@ -51,9 +51,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   note(
     [
       `Opening @${botUsername} in Telegram so it's ready when the pairing code shows up.`,
-      '',
-      k.dim(botUrl),
-    ].join('\n'),
+      formatNoteLink(botUrl),
+    ].filter((line): line is string => line !== null).join('\n'),
     'Open Telegram',
   );
   await confirmThenOpen(botUrl, 'Press Enter to open Telegram');
@@ -192,10 +191,9 @@ async function validateTelegramToken(token: string): Promise<string> {
       result?: { username?: string; id?: number };
       description?: string;
     };
-    const elapsedS = Math.round((Date.now() - start) / 1000);
     if (data.ok && data.result?.username) {
       const username = data.result.username;
-      s.stop(`Found your bot: @${username}. ${k.dim(`(${elapsedS}s)`)}`);
+      s.stop(`Found your bot: @${username}. ${k.dim(`(${fmtDuration(Date.now() - start)})`)}`);
       setupLog.step('telegram-validate', 'success', Date.now() - start, {
         BOT_USERNAME: username,
         BOT_ID: data.result.id ?? '',
@@ -213,8 +211,7 @@ async function validateTelegramToken(token: string): Promise<string> {
       'Copy the token again from @BotFather and try setup once more.',
     );
   } catch (err) {
-    const elapsedS = Math.round((Date.now() - start) / 1000);
-    s.stop(`Couldn't reach Telegram. ${k.dim(`(${elapsedS}s)`)}`, 1);
+    s.stop(`Couldn't reach Telegram. ${k.dim(`(${fmtDuration(Date.now() - start)})`)}`, 1);
     const message = err instanceof Error ? err.message : String(err);
     setupLog.step('telegram-validate', 'failed', Date.now() - start, {
       ERROR: message,
