@@ -51,10 +51,11 @@ import { pollHealth } from './onecli.js';
 import { getLaunchdLabel, getSystemdUnit } from '../src/install-slug.js';
 import { claudeCliAvailable, resolveTimezoneViaClaude } from './lib/tz-from-claude.js';
 import * as setupLog from './logs.js';
-import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
+import { ensureAnswer, fail, runQuietChild, runQuietStep, spawnQuiet } from './lib/runner.js';
 import { emit as phEmit } from './lib/diagnostics.js';
 import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, fmtDuration, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
+
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
 
@@ -320,8 +321,8 @@ async function main(): Promise<void> {
     const res = await runQuietStep(
       'cli-agent',
       {
-        running: 'Preparing connection test…',
-        done: 'Ready to test.',
+        running: 'Bringing your assistant online…',
+        done: 'Assistant wired up.',
       },
       ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME, '--folder', '_ping-test'],
     );
@@ -336,7 +337,7 @@ async function main(): Promise<void> {
       p.log.message(
         brandBody(
           dimWrap(
-            'Checking your assistant can respond — first startup takes 30–60 seconds.',
+            "Your assistant runs in an isolated sandbox. I'm going to send it a quick test message (ping) and wait for a reply (pong) to confirm it's responding. First startup typically takes 30–60 seconds while the sandbox warms up.",
             4,
           ),
         ),
@@ -344,9 +345,27 @@ async function main(): Promise<void> {
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
         phEmit('first_chat_ready');
-        spawnSync('pnpm', ['exec', 'tsx', 'scripts/delete-cli-agent.ts', '--folder', '_ping-test'], {
-          stdio: 'ignore',
-        });
+        const cleanupRawLog = setupLog.stepRawLog('cleanup-cli-agent');
+        const cleanupStart = Date.now();
+        const cleanup = await spawnQuiet(
+          'pnpm',
+          ['exec', 'tsx', 'scripts/delete-cli-agent.ts', '--folder', '_ping-test'],
+          cleanupRawLog,
+        );
+        setupLog.step(
+          'cleanup-cli-agent',
+          cleanup.ok ? 'success' : 'failed',
+          Date.now() - cleanupStart,
+          { exit_code: cleanup.exitCode },
+          cleanupRawLog,
+        );
+        if (!cleanup.ok) {
+          p.log.warn(
+            brandBody(
+              `Couldn't clean up the test agent — it may still appear in your agent list. See ${cleanupRawLog} for details.`,
+            ),
+          );
+        }
         const next = ensureAnswer(
           await brightSelect<'continue' | 'chat'>({
             message: 'What next?',
@@ -580,7 +599,7 @@ async function confirmAssistantResponds(): Promise<PingResult> {
   clearInterval(tick);
   const suffix = ` (${fmtDuration(Date.now() - start)})`;
   if (result === 'ok') {
-    s.stop(`${k.bold(fitToWidth('Connection verified.', suffix))}${k.dim(suffix)}`);
+    s.stop(`${k.bold(fitToWidth('Your assistant is ready.', suffix))}${k.dim(suffix)}`);
   } else {
     const msg =
       result === 'socket_error' ? "Couldn't reach the NanoClaw service." : "Your assistant didn't reply in time.";
