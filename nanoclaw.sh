@@ -162,14 +162,8 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
       printf '  %s\n' "$(dim '6. Log back in as the new user: ssh nanoclaw@your-server')"
       printf '  %s\n' "$(dim '7. Clone the repo:              git clone https://github.com/qwibitai/nanoclaw.git && cd nanoclaw')"
       printf '  %s\n\n' "$(dim '8. Re-run setup:               bash nanoclaw.sh')"
-      printf '  %s\n\n' "$(bold 'If you are using a web terminal (hosting provider console):')"
-      printf '  %s\n' "$(dim '1. Create a new user:           adduser nanoclaw')"
-      printf '  %s\n' "$(dim '2. Add to sudo group:           usermod -aG sudo nanoclaw')"
-      printf '  %s\n' "$(dim '3. Enable passwordless sudo:    echo "nanoclaw ALL=(ALL) NOPASSWD:ALL" | tee /etc/sudoers.d/nanoclaw')"
-      printf '  %s\n' "$(dim '4. Log out:                     logout')"
-      printf '  %s\n' "$(dim '5. Log in as the new user at the login prompt')"
-      printf '  %s\n' "$(dim '6. Clone the repo:              git clone https://github.com/qwibitai/nanoclaw.git && cd nanoclaw')"
-      printf '  %s\n\n' "$(dim '7. Re-run setup:               bash nanoclaw.sh')"
+      printf '  %s\n' "$(dim 'Not using SSH? Refer to your hosting provider docs or ask your coding agent to help you set up SSH access.')"
+      printf '\n'
       exit 1
       ;;
   esac
