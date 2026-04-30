@@ -33,7 +33,7 @@ import {
   spawnStep,
   writeStepEntry,
 } from '../lib/runner.js';
-import { accentGreen, brandBold, note } from '../lib/theme.js';
+import { accentGreen, brandBold, fitToWidth, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 
@@ -254,11 +254,11 @@ async function runPairTelegram(): Promise<
           stopSpinner("Old code expired. Here's a fresh one.");
         }
         note(formatCodeCard(block.fields.CODE ?? '????'), 'Secret code');
-        s.start('Waiting for you to send the code from Telegram…');
+        s.start(fitToWidth('Waiting for you to send the code from Telegram…', ''));
         spinnerActive = true;
       } else if (block.type === 'PAIR_TELEGRAM_ATTEMPT') {
         stopSpinner(`Got "${block.fields.CANDIDATE ?? '?'}", not a match.`);
-        s.start('Waiting for the correct code…');
+        s.start(fitToWidth('Waiting for the correct code…', ''));
         spinnerActive = true;
       } else if (block.type === 'PAIR_TELEGRAM') {
         if (block.fields.STATUS === 'success') {
