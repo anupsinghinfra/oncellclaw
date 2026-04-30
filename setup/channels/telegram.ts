@@ -33,6 +33,7 @@ import {
   spawnStep,
   writeStepEntry,
 } from '../lib/runner.js';
+import { readEnvKey } from '../environment.js';
 import { accentGreen, brandBold, fitToWidth, fmtDuration, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
@@ -131,7 +132,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
 }
 
 async function collectTelegramToken(): Promise<string> {
-  const existing = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const existing = readEnvKey('TELEGRAM_BOT_TOKEN');
   if (existing && /^[0-9]+:[A-Za-z0-9_-]{35,}$/.test(existing)) {
     const reuse = ensureAnswer(await p.confirm({
       message: `Found an existing Telegram bot token (${existing.slice(0, 8)}…). Use it?`,
