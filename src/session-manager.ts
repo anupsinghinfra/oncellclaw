@@ -373,6 +373,11 @@ export function readOutboxFiles(
   if (!fs.existsSync(outboxDir)) return undefined;
   const files: OutboundFile[] = [];
   for (const filename of filenames) {
+    // Reject any name that isn't a bare basename before touching the filesystem.
+    if (!isSafeAttachmentName(filename)) {
+      log.warn('Refused unsafe outbox filename — would escape outbox', { messageId, filename });
+      continue;
+    }
     const filePath = path.join(outboxDir, filename);
     if (fs.existsSync(filePath)) {
       files.push({ filename, data: fs.readFileSync(filePath) });
