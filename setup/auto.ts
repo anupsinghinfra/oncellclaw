@@ -85,17 +85,21 @@ async function main(): Promise<void> {
 
   // Welcome menu — default path or open advanced overrides before any setup
   // work begins. Default lands on standard so Enter is the happy path.
-  const startChoice = ensureAnswer(
-    await brightSelect<'default' | 'advanced'>({
-      message: 'How would you like to begin?',
-      options: [
-        { value: 'default', label: 'Standard setup' },
-        { value: 'advanced', label: 'Advanced', hint: 'override defaults' },
-      ],
-      initialValue: 'default',
-    }),
-  ) as 'default' | 'advanced';
-  setupLog.userInput('start_choice', startChoice);
+  // On sg re-exec, the user already chose — skip straight to standard.
+  let startChoice: 'default' | 'advanced' = 'default';
+  if (process.env.NANOCLAW_REEXEC_SG !== '1') {
+    startChoice = ensureAnswer(
+      await brightSelect<'default' | 'advanced'>({
+        message: 'How would you like to begin?',
+        options: [
+          { value: 'default', label: 'Standard setup' },
+          { value: 'advanced', label: 'Advanced', hint: 'override defaults' },
+        ],
+        initialValue: 'default',
+      }),
+    ) as 'default' | 'advanced';
+    setupLog.userInput('start_choice', startChoice);
+  }
   if (startChoice === 'advanced') {
     configValues = await runAdvancedScreen(configValues);
     applyToEnv(configValues);
@@ -1147,9 +1151,11 @@ function maybeReexecUnderSg(): void {
   if (spawnSync('which', ['sg'], { stdio: 'ignore' }).status !== 0) return;
 
   p.log.warn(brandBody('Docker socket not accessible in current group. Re-executing under `sg docker`.'));
+  const existingSkip = (process.env.NANOCLAW_SKIP ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const skipList = [...new Set([...existingSkip, ...setupLog.completedStepNames()])].join(',');
   const res = spawnSync('sg', ['docker', '-c', 'pnpm run setup:auto'], {
     stdio: 'inherit',
-    env: { ...process.env, NANOCLAW_REEXEC_SG: '1' },
+    env: { ...process.env, NANOCLAW_REEXEC_SG: '1', ...(skipList ? { NANOCLAW_SKIP: skipList } : {}) },
   });
   process.exit(res.status ?? 1);
 }
