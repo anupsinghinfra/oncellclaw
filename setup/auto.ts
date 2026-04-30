@@ -53,7 +53,7 @@ import { claudeCliAvailable, resolveTimezoneViaClaude } from './lib/tz-from-clau
 import * as setupLog from './logs.js';
 import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
 import { emit as phEmit } from './lib/diagnostics.js';
-import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, note, wrapForGutter } from './lib/theme.js';
+import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, fmtDuration, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
@@ -597,18 +597,16 @@ async function confirmAssistantResponds(): Promise<PingResult> {
   const s = p.spinner();
   const start = Date.now();
   const label = 'Waking your assistant…';
-  s.start(fitToWidth(label, ' (999s)'));
+  s.start(fitToWidth(label, ' (99m 59s)'));
   const tick = setInterval(() => {
-    const elapsed = Math.round((Date.now() - start) / 1000);
-    const suffix = ` (${elapsed}s)`;
+    const suffix = ` (${fmtDuration(Date.now() - start)})`;
     s.message(`${fitToWidth(label, suffix)}${k.dim(suffix)}`);
   }, 1000);
 
   const result = await pingCliAgent();
 
   clearInterval(tick);
-  const elapsed = Math.round((Date.now() - start) / 1000);
-  const suffix = ` (${elapsed}s)`;
+  const suffix = ` (${fmtDuration(Date.now() - start)})`;
   if (result === 'ok') {
     s.stop(`${k.bold(fitToWidth('Connection verified.', suffix))}${k.dim(suffix)}`);
   } else {
