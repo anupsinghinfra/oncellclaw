@@ -45,26 +45,31 @@ if (!ag) {
   process.exit(0);
 }
 
-// Dynamically find every table with an agent_group_id column and delete
-// matching rows. This is self-maintaining — new FK tables are picked up
-// automatically without updating a hardcoded list.
-const tables = db
-  .prepare(
-    `SELECT DISTINCT m.name FROM sqlite_master m
-     JOIN pragma_table_info(m.name) p ON p.name = 'agent_group_id'
-     WHERE m.type = 'table' AND m.name != 'agent_groups'`,
-  )
-  .all() as { name: string }[];
-for (const { name } of tables) {
-  db.prepare(`DELETE FROM ${name} WHERE agent_group_id = ?`).run(ag.id);
-}
-
-deleteAgentGroup(ag.id);
+const cleanup = db.transaction(() => {
+  const tables = db
+    .prepare(
+      `SELECT DISTINCT m.name FROM sqlite_master m
+       JOIN pragma_table_info(m.name) p ON p.name = 'agent_group_id'
+       WHERE m.type = 'table' AND m.name != 'agent_groups'`,
+    )
+    .all() as { name: string }[];
+  for (const { name } of tables) {
+    db.prepare(`DELETE FROM ${name} WHERE agent_group_id = ?`).run(ag.id);
+  }
+  deleteAgentGroup(ag.id);
+});
+cleanup();
 
 // Remove the groups/<folder>/ directory.
 const groupDir = path.join(process.cwd(), 'groups', args.folder);
 if (fs.existsSync(groupDir)) {
   fs.rmSync(groupDir, { recursive: true });
+}
+
+// Remove session data on disk.
+const sessionsDir = path.join(DATA_DIR, 'v2-sessions', ag.id);
+if (fs.existsSync(sessionsDir)) {
+  fs.rmSync(sessionsDir, { recursive: true });
 }
 
 console.log(`Deleted agent group ${ag.id} (${args.folder}).`);
