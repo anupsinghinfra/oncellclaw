@@ -135,9 +135,8 @@ async function walkThroughAppCreation(): Promise<void> {
       '     slash commands and messages from the messages tab"',
       '  4. Basic Information → copy the "Signing Secret"',
       '  5. Install to Workspace → copy the "Bot User OAuth Token" (xoxb-…)',
-      '',
       formatNoteLink(SLACK_APPS_URL),
-    ].join('\n'),
+    ].filter((line): line is string => line !== null).join('\n'),
     'Create a Slack app',
   );
   await confirmThenOpen(SLACK_APPS_URL, 'Press Enter to open Slack app settings');
