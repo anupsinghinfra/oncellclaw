@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { deriveAttachmentName } from './attachment-naming.js';
 import { isSafeAttachmentName } from './attachment-safety.js';
 import type { OutboundFile } from './channels/adapter.js';
 import { DATA_DIR } from './config.js';
@@ -228,60 +229,6 @@ export function writeSessionMessage(
   }
 
   updateSession(sessionId, { last_active: new Date().toISOString() });
-}
-
-// Map common MIME types to canonical file extensions. Used to derive a
-// usable suffix when the channel bridge passes an attachment without an
-// explicit `name`. Without an extension, agents (and humans) can't tell
-// what kind of file landed in the inbox.
-const MIME_TO_EXT: Record<string, string> = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'image/heic': 'heic',
-  'audio/ogg': 'ogg',
-  'audio/mpeg': 'mp3',
-  'audio/wav': 'wav',
-  'audio/mp4': 'm4a',
-  'video/mp4': 'mp4',
-  'video/webm': 'webm',
-  'video/quicktime': 'mov',
-  'application/pdf': 'pdf',
-  'text/plain': 'txt',
-  'application/json': 'json',
-  'application/zip': 'zip',
-};
-
-// Fallback when `mimeType` is missing — Telegram photos and stickers arrive
-// without an explicit MIME on the attachment object. The channel bridge sets
-// `att.type` to a coarse media-class (`photo` / `sticker` / `voice` / etc.)
-// which is reliable enough to derive a canonical extension. Telegram's GIFs
-// are actually MP4, hence `animation: 'mp4'`.
-const TYPE_TO_EXT: Record<string, string> = {
-  image: 'jpg',
-  photo: 'jpg',
-  sticker: 'webp',
-  voice: 'ogg',
-  audio: 'mp3',
-  video: 'mp4',
-  animation: 'mp4',
-};
-
-function extForMime(mime: string | undefined): string {
-  if (!mime) return '';
-  const clean = mime.split(';')[0].trim().toLowerCase();
-  return MIME_TO_EXT[clean] ?? '';
-}
-
-function deriveAttachmentName(att: Record<string, unknown>): string {
-  const explicit = att.name as string | undefined;
-  if (explicit) return explicit;
-  let ext = extForMime(att.mimeType as string | undefined);
-  if (!ext && typeof att.type === 'string') {
-    ext = TYPE_TO_EXT[att.type.toLowerCase()] ?? '';
-  }
-  return ext ? `attachment-${Date.now()}.${ext}` : `attachment-${Date.now()}`;
 }
 
 /**
