@@ -51,7 +51,7 @@ import { pollHealth } from './onecli.js';
 import { getLaunchdLabel, getSystemdUnit } from '../src/install-slug.js';
 import { claudeCliAvailable, resolveTimezoneViaClaude } from './lib/tz-from-claude.js';
 import * as setupLog from './logs.js';
-import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
+import { ensureAnswer, fail, runQuietChild, runQuietStep, spawnQuiet } from './lib/runner.js';
 import { emit as phEmit } from './lib/diagnostics.js';
 import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, fmtDuration, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
@@ -328,7 +328,7 @@ async function main(): Promise<void> {
         running: 'Bringing your assistant online…',
         done: 'Assistant wired up.',
       },
-      ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME],
+      ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME, '--folder', '_ping-test'],
     );
     if (!res.ok) {
       await fail(
@@ -349,6 +349,27 @@ async function main(): Promise<void> {
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
         phEmit('first_chat_ready');
+        const cleanupRawLog = setupLog.stepRawLog('cleanup-cli-agent');
+        const cleanupStart = Date.now();
+        const cleanup = await spawnQuiet(
+          'pnpm',
+          ['exec', 'tsx', 'scripts/delete-cli-agent.ts', '--folder', '_ping-test'],
+          cleanupRawLog,
+        );
+        setupLog.step(
+          'cleanup-cli-agent',
+          cleanup.ok ? 'success' : 'failed',
+          Date.now() - cleanupStart,
+          { exit_code: cleanup.exitCode },
+          cleanupRawLog,
+        );
+        if (!cleanup.ok) {
+          p.log.warn(
+            brandBody(
+              `Couldn't clean up the test agent — it may still appear in your agent list. See ${cleanupRawLog} for details.`,
+            ),
+          );
+        }
         const next = ensureAnswer(
           await brightSelect<'continue' | 'chat'>({
             message: 'What next?',
@@ -366,7 +387,23 @@ async function main(): Promise<void> {
           }),
         ) as 'continue' | 'chat';
         setupLog.userInput('first_chat_choice', next);
-        if (next === 'chat') await runFirstChat();
+        if (next === 'chat') {
+          const terminalAgentName = `${displayName!}'s Terminal`;
+          const createRes = await runQuietChild(
+            'create-terminal-agent',
+            'pnpm',
+            ['exec', 'tsx', 'scripts/init-cli-agent.ts', '--display-name', displayName!, '--agent-name', terminalAgentName],
+            { running: `Creating ${terminalAgentName}…`, done: `${terminalAgentName} is ready.` },
+          );
+          if (!createRes.ok) {
+            await fail(
+              'create-terminal-agent',
+              `Couldn't create ${terminalAgentName}.`,
+              'You can retry later with `pnpm exec tsx scripts/init-cli-agent.ts`.',
+            );
+          }
+          await runFirstChat();
+        }
       } else {
         phEmit('first_chat_failed', { reason: ping });
         renderPingFailureNote(ping);
