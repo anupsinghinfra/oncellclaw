@@ -85,17 +85,21 @@ async function main(): Promise<void> {
 
   // Welcome menu — default path or open advanced overrides before any setup
   // work begins. Default lands on standard so Enter is the happy path.
-  const startChoice = ensureAnswer(
-    await brightSelect<'default' | 'advanced'>({
-      message: 'How would you like to begin?',
-      options: [
-        { value: 'default', label: 'Standard setup' },
-        { value: 'advanced', label: 'Advanced', hint: 'override defaults' },
-      ],
-      initialValue: 'default',
-    }),
-  ) as 'default' | 'advanced';
-  setupLog.userInput('start_choice', startChoice);
+  // On sg re-exec, the user already chose — skip straight to standard.
+  let startChoice: 'default' | 'advanced' = 'default';
+  if (process.env.NANOCLAW_REEXEC_SG !== '1') {
+    startChoice = ensureAnswer(
+      await brightSelect<'default' | 'advanced'>({
+        message: 'How would you like to begin?',
+        options: [
+          { value: 'default', label: 'Standard setup' },
+          { value: 'advanced', label: 'Advanced', hint: 'override defaults' },
+        ],
+        initialValue: 'default',
+      }),
+    ) as 'default' | 'advanced';
+    setupLog.userInput('start_choice', startChoice);
+  }
   if (startChoice === 'advanced') {
     configValues = await runAdvancedScreen(configValues);
     applyToEnv(configValues);
@@ -126,22 +130,28 @@ async function main(): Promise<void> {
   // paste credentials again on a re-run.
   const existingEnv = detectExistingEnv();
   if (existingEnv) {
-    const lines = Object.values(existingEnv.groups).map(
-      (g) => `  ${k.green('✓')} ${g.label}`,
-    );
-    note(lines.join('\n'), 'Found existing configuration');
+    // On sg re-exec, auto-reuse — the user already decided in the first run.
+    const isReexec = process.env.NANOCLAW_REEXEC_SG === '1';
+    let reuseChoice: 'reuse' | 'fresh' = 'reuse';
 
-    const reuseChoice = ensureAnswer(
-      await brightSelect({
-        message: 'Use this existing environment?',
-        options: [
-          { value: 'reuse', label: 'Yes, use what I already have', hint: 'recommended' },
-          { value: 'fresh', label: 'No, start fresh' },
-        ],
-        initialValue: 'reuse',
-      }),
-    ) as 'reuse' | 'fresh';
-    setupLog.userInput('existing_env_choice', reuseChoice);
+    if (!isReexec) {
+      const lines = Object.values(existingEnv.groups).map(
+        (g) => `  ${k.green('✓')} ${g.label}`,
+      );
+      note(lines.join('\n'), 'Found existing configuration');
+
+      reuseChoice = ensureAnswer(
+        await brightSelect({
+          message: 'Use this existing environment?',
+          options: [
+            { value: 'reuse', label: 'Yes, use what I already have', hint: 'recommended' },
+            { value: 'fresh', label: 'No, start fresh' },
+          ],
+          initialValue: 'reuse',
+        }),
+      ) as 'reuse' | 'fresh';
+      setupLog.userInput('existing_env_choice', reuseChoice);
+    }
 
     if (reuseChoice === 'reuse') {
       for (const [key, value] of Object.entries(existingEnv.raw)) {
@@ -1178,9 +1188,11 @@ function maybeReexecUnderSg(): void {
   if (spawnSync('which', ['sg'], { stdio: 'ignore' }).status !== 0) return;
 
   p.log.warn('Docker socket not accessible in current group. Re-executing under `sg docker`.');
+  const existingSkip = (process.env.NANOCLAW_SKIP ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const skipList = [...new Set([...existingSkip, ...setupLog.completedStepNames()])].join(',');
   const res = spawnSync('sg', ['docker', '-c', 'pnpm run setup:auto'], {
     stdio: 'inherit',
-    env: { ...process.env, NANOCLAW_REEXEC_SG: '1' },
+    env: { ...process.env, NANOCLAW_REEXEC_SG: '1', ...(skipList ? { NANOCLAW_SKIP: skipList } : {}) },
   });
   process.exit(res.status ?? 1);
 }
