@@ -29,6 +29,7 @@ import { confirmThenOpen } from '../lib/browser.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
 import { accentGreen, note, wrapForGutter } from '../lib/theme.js';
+import { readEnvKey } from '../environment.js';
 
 const SLACK_API = 'https://slack.com/api';
 const SLACK_APPS_URL = 'https://api.slack.com/apps';
@@ -151,7 +152,7 @@ async function walkThroughAppCreation(): Promise<void> {
 }
 
 async function collectBotToken(): Promise<string> {
-  const existing = process.env.SLACK_BOT_TOKEN?.trim();
+  const existing = readEnvKey('SLACK_BOT_TOKEN');
   if (existing && existing.startsWith('xoxb-') && existing.length >= 24) {
     const reuse = ensureAnswer(await p.confirm({
       message: `Found an existing Slack bot token (${existing.slice(0, 10)}…). Use it?`,
@@ -185,7 +186,7 @@ async function collectBotToken(): Promise<string> {
 }
 
 async function collectSigningSecret(): Promise<string> {
-  const existing = process.env.SLACK_SIGNING_SECRET?.trim();
+  const existing = readEnvKey('SLACK_SIGNING_SECRET');
   if (existing && /^[a-f0-9]{16,}$/i.test(existing)) {
     const reuse = ensureAnswer(await p.confirm({
       message: 'Found an existing Slack signing secret. Use it?',
