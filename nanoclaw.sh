@@ -137,6 +137,39 @@ write_header
 # NANOCLAW_BOOTSTRAPPED=1 and skips re-printing the wordmark.
 cat "$PROJECT_ROOT/assets/setup-splash.txt"
 
+# ─── pre-flight: root user warning (Linux) ────────────────────────────
+if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
+  printf '  %s\n' \
+    "$(red 'Warning: you are running as root.')"
+  printf '  %s\n' \
+    "$(dim "Running NanoClaw as root is not recommended. It can cause permission")"
+  printf '  %s\n\n' \
+    "$(dim "issues with containers, services, and file ownership.")"
+  printf '  %s\n' "$(bold '1)') $(dim 'Show me instructions for creating a new Linux user')"
+  printf '  %s\n\n' "$(bold '2)') $(dim 'Continue setting up NanoClaw as root user (not recommended)')"
+  read -r -p "  $(bold 'Choose [1/2]: ')" ROOT_ANS </dev/tty
+
+  case "${ROOT_ANS:-1}" in
+    2)
+      ph_event setup_root_continued
+      printf '\n'
+      ;;
+    *)
+      ph_event setup_root_aborted
+      printf '\n  %s\n' "$(bold 'To set up a regular user (via SSH):')"
+      printf '  %s\n\n' "$(dim 'Not using SSH? Refer to your hosting provider docs or ask your coding agent to help you set up SSH access.')"
+      printf '  %s\n' "$(dim '1. Create a new user:           adduser nanoclaw')"
+      printf '  %s\n' "$(dim '2. Add to sudo group:           usermod -aG sudo nanoclaw')"
+      printf '  %s\n' "$(dim '3. Enable passwordless sudo:    echo "nanoclaw ALL=(ALL) NOPASSWD:ALL" | tee /etc/sudoers.d/nanoclaw')"
+      printf '  %s\n' "$(dim '4. Log out:                     exit')"
+      printf '  %s\n' "$(dim '5. Log back in as the new user: ssh nanoclaw@your-server')"
+      printf '  %s\n' "$(dim '6. Clone the repo:              git clone https://github.com/qwibitai/nanoclaw.git && cd nanoclaw')"
+      printf '  %s\n\n' "$(dim '7. Re-run setup:               bash nanoclaw.sh')"
+      exit 1
+      ;;
+  esac
+fi
+
 # ─── pre-flight: Homebrew on macOS ─────────────────────────────────────
 # setup/install-node.sh and setup/install-docker.sh both require `brew` on
 # macOS. On a factory Mac there's no brew, and those helpers would fail
