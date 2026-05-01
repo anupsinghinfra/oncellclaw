@@ -372,7 +372,27 @@ echo
 echo "$(bold 'Phase 3: Infrastructure')"
 echo
 
-# 3a. OneCLI — detect or install via setup step
+# 3a. Docker — install if missing (OneCLI needs it)
+if command -v docker >/dev/null 2>&1; then
+  DOCKER_V=$(docker --version 2>/dev/null | head -1)
+  step_ok "Docker available $(dim "($DOCKER_V)")"
+  log "Docker: $DOCKER_V"
+else
+  step_info "Installing Docker…"
+  DOCKER_LOG="$STEPS_DIR/3a-docker.log"
+  if bash setup/install-docker.sh > "$DOCKER_LOG" 2>&1; then
+    hash -r 2>/dev/null || true
+    step_ok "Docker installed"
+    STEP_RESULTS["3a-docker"]="success"
+    log "Docker: installed"
+  else
+    step_fail "Docker install failed $(dim "(see $DOCKER_LOG)")"
+    STEP_RESULTS["3a-docker"]="failed"
+    log "Docker: FAILED"
+  fi
+fi
+
+# 3b. OneCLI — detect or install via setup step (requires Docker)
 ONECLI_OK=false
 ONECLI_URL_FROM_ENV=$(grep '^ONECLI_URL=' .env 2>/dev/null | head -1 | sed 's/^ONECLI_URL=//')
 ONECLI_URL_CHECK="${ONECLI_URL_FROM_ENV:-http://127.0.0.1:10254}"
@@ -381,63 +401,46 @@ if curl -sf "${ONECLI_URL_CHECK}/health" >/dev/null 2>&1; then
   step_ok "OneCLI running at $(dim "$ONECLI_URL_CHECK")"
   ONECLI_OK=true
   log "OneCLI: running at $ONECLI_URL_CHECK"
-else
-  # Run the setup onecli step — it handles install, reuse, and health checks
+elif command -v docker >/dev/null 2>&1; then
   step_info "Setting up OneCLI…"
-  ONECLI_LOG="$STEPS_DIR/3a-onecli.log"
-  ONECLI_ERR="$STEPS_DIR/3a-onecli.err"
+  ONECLI_LOG="$STEPS_DIR/3b-onecli.log"
+  ONECLI_ERR="$STEPS_DIR/3b-onecli.err"
   if pnpm exec tsx setup/index.ts --step onecli > "$ONECLI_LOG" 2>"$ONECLI_ERR"; then
     step_ok "OneCLI ready"
     ONECLI_OK=true
-    STEP_RESULTS["3a-onecli"]="success"
+    STEP_RESULTS["3b-onecli"]="success"
     log "OneCLI: installed/configured"
   else
     step_fail "OneCLI setup failed $(dim "(see $ONECLI_LOG)")"
-    STEP_RESULTS["3a-onecli"]="failed"
+    STEP_RESULTS["3b-onecli"]="failed"
     log "OneCLI: FAILED"
   fi
+else
+  step_fail "OneCLI needs Docker $(dim "(install Docker first)")"
+  STEP_RESULTS["3b-onecli"]="failed"
+  log "OneCLI: skipped (no Docker)"
 fi
 
-# 3b. Anthropic credential — run the auth setup step if no credential found
+# 3c. Anthropic credential — run the auth setup step if no credential found
 if grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=' .env 2>/dev/null; then
   step_ok "Anthropic credential found in .env"
   log "Anthropic credential: found in .env"
 elif [ "$ONECLI_OK" = "true" ]; then
   step_info "Registering Anthropic credential…"
-  AUTH_LOG="$STEPS_DIR/3b-auth.log"
-  AUTH_ERR="$STEPS_DIR/3b-auth.err"
+  AUTH_LOG="$STEPS_DIR/3c-auth.log"
+  AUTH_ERR="$STEPS_DIR/3c-auth.err"
   if pnpm exec tsx setup/index.ts --step auth > "$AUTH_LOG" 2>"$AUTH_ERR"; then
     step_ok "Anthropic credential registered"
-    STEP_RESULTS["3b-auth"]="success"
+    STEP_RESULTS["3c-auth"]="success"
     log "Anthropic credential: registered via auth step"
   else
     step_fail "Auth setup failed $(dim "(see $AUTH_LOG)")"
-    STEP_RESULTS["3b-auth"]="failed"
+    STEP_RESULTS["3c-auth"]="failed"
     log "Anthropic credential: FAILED"
   fi
 else
   step_info "No Anthropic credential $(dim "(OneCLI not available — add manually to .env)")"
   log "Anthropic credential: skipped (no OneCLI)"
-fi
-
-# 3c. Docker — install if missing
-if command -v docker >/dev/null 2>&1; then
-  DOCKER_V=$(docker --version 2>/dev/null | head -1)
-  step_ok "Docker available $(dim "($DOCKER_V)")"
-  log "Docker: $DOCKER_V"
-else
-  step_info "Installing Docker…"
-  DOCKER_LOG="$STEPS_DIR/3c-docker.log"
-  if bash setup/install-docker.sh > "$DOCKER_LOG" 2>&1; then
-    hash -r 2>/dev/null || true
-    step_ok "Docker installed"
-    STEP_RESULTS["3c-docker"]="success"
-    log "Docker: installed"
-  else
-    step_fail "Docker install failed $(dim "(see $DOCKER_LOG)")"
-    STEP_RESULTS["3c-docker"]="failed"
-    log "Docker: FAILED"
-  fi
 fi
 
 # 3d. Copy container skills from v1 that v2 doesn't have
