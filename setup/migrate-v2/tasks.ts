@@ -22,7 +22,7 @@ import { getMessagingGroupByPlatform } from '../../src/db/messaging-groups.js';
 import { runMigrations } from '../../src/db/migrations/index.js';
 import { insertTask } from '../../src/modules/scheduling/db.js';
 import { openInboundDb, resolveSession } from '../../src/session-manager.js';
-import { parseJid, v2PlatformId } from '../migrate-v1/shared.js';
+import { parseJid, v2PlatformId } from './shared.js';
 
 interface V1Task {
   id: string;

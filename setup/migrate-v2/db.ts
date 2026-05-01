@@ -29,8 +29,7 @@ import {
   generateId,
   parseJid,
   triggerToEngage,
-  JID_PREFIX_TO_CHANNEL,
-} from '../migrate-v1/shared.js';
+} from './shared.js';
 
 interface V1Group {
   jid: string;

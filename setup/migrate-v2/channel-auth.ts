@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { CHANNEL_AUTH_REGISTRY } from '../migrate-v1/shared.js';
+import { CHANNEL_AUTH_REGISTRY } from './shared.js';
 
 function parseEnv(filePath: string): Map<string, string> {
   const out = new Map<string, string>();

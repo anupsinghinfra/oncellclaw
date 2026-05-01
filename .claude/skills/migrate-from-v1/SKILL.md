@@ -93,7 +93,7 @@ FROM messages
 WHERE chat_jid = '<v1_jid>' AND is_from_me = 0 AND sender IS NOT NULL
 ```
 
-The `sender` value is a platform handle (e.g. `6037840640` for Telegram). Build the v2 user ID by inferring the channel type from the chat JID prefix (use `parseJid` from `setup/migrate-v1/shared.ts`) and combining: `<channel_type>:<sender>`.
+The `sender` value is a platform handle (e.g. `6037840640` for Telegram). Build the v2 user ID by inferring the channel type from the chat JID prefix (use `parseJid` from `setup/migrate-v2/shared.ts`) and combining: `<channel_type>:<sender>`.
 
 For each sender:
 1. Upsert into `users(id, kind, display_name)` if not already present.
@@ -171,7 +171,7 @@ If there are commits:
 
 1. Show the commit list to the user.
 2. `AskUserQuestion`: "How do you want to handle your v1 customizations?"
-   - **Copy portable items** (recommended) — copy `container/skills/*`, `.claude/skills/*`, `docs/*`. Scan each with `scanForV1Patterns` from `setup/migrate-v1/shared.ts`.
+   - **Copy portable items** (recommended) — copy `container/skills/*`, `.claude/skills/*`, `docs/*`. Scan each with `scanForV1Patterns` from `setup/migrate-v2/shared.ts`.
    - **Full walkthrough** — go commit by commit, decide together.
    - **Reference only** — stash to `docs/v1-fork-reference/` for later.
 3. Source code (`src/*`, `container/agent-runner/src/*`) is NOT portable — v2's architecture is fundamentally different. Stash to `docs/v1-fork-reference/` with a README explaining what each file did. Don't translate.

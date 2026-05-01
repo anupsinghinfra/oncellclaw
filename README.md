@@ -33,7 +33,7 @@ bash nanoclaw.sh
 
 `nanoclaw.sh` walks you from a fresh machine to a named agent you can message. It installs Node, pnpm, and Docker if missing, registers your Anthropic credential with OneCLI, builds the agent container, and pairs your first channel (Telegram, Discord, WhatsApp, or a local CLI). If a step fails, Claude Code is invoked automatically to diagnose and resume from where it broke.
 
-**Coming from v1?** `nanoclaw.sh` detects your old install (scans siblings of the v2 checkout + common `$HOME` locations) and migrates automatically; `/migrate-from-v1` in Claude finishes owner setup and helps port custom fork work. If v1 is at a non-standard path, run with `NANOCLAW_V1_PATH=/path/to/nanoclaw bash nanoclaw.sh`. See [docs/v1-to-v2-changes.md](docs/v1-to-v2-changes.md). _Experimental — back up `data/v2.db` and `groups/` first; not recommended yet for high-stakes production installs._
+**Coming from v1?** Run `bash migrate-v2.sh` instead of `nanoclaw.sh`. It finds your v1 install (sibling directory or `NANOCLAW_V1_PATH`), migrates state, installs channels, and hands off to Claude for owner setup and custom code porting. See [docs/v1-to-v2-changes.md](docs/v1-to-v2-changes.md) and [docs/migration-dev.md](docs/migration-dev.md).
 
 ## Philosophy
 
