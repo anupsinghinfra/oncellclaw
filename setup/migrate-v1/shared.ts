@@ -431,11 +431,13 @@ export function triggerToEngage(input: {
   if (pattern === '.' || pattern === '.*') {
     return { engage_mode: 'pattern', engage_pattern: '.' };
   }
-  if (pattern) {
-    return { engage_mode: 'pattern', engage_pattern: pattern };
-  }
+  // requires_trigger=0 means "respond to everything" regardless of pattern.
+  // The pattern was used for mention highlighting, not message gating.
   if (!requiresTrigger) {
     return { engage_mode: 'pattern', engage_pattern: '.' };
+  }
+  if (pattern) {
+    return { engage_mode: 'pattern', engage_pattern: pattern };
   }
   return { engage_mode: 'mention', engage_pattern: null };
 }
