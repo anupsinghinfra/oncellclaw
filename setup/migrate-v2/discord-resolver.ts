@@ -1,11 +1,18 @@
 /**
- * Discord channel → guild resolver for the v1 → v2 migration.
+ * Discord channel → platform_id resolver for the v1 → v2 migration.
  *
- * v1 stored Discord groups as `dc:<channelId>` — only the channel id, not
- * the guild id. v2's `@chat-adapter/discord` encodes `platform_id` as
- * `discord:<guildId>:<channelId>`, so we can't reconstruct it from v1 data
- * alone. Instead, we use the v1 bot token (carried forward by 1a-env) to
- * query the Discord API and build a channelId → guildId map.
+ * v1 stored Discord groups as `dc:<channelId>` — only the channel id, with
+ * no signal for guild vs. DM. v2's `@chat-adapter/discord` encodes
+ * `platform_id` as either `discord:<guildId>:<channelId>` (guild channel)
+ * or `discord:@me:<channelId>` (DM / group DM) — see `guild_id || "@me"`
+ * in the runtime adapter. We can't reconstruct that from v1 data alone, so
+ * we use the v1 bot token (carried forward by 1a-env) to query Discord:
+ *   1. Enumerate every guild the bot is in and every channel in those
+ *      guilds → channelId → guildId map.
+ *   2. For any v1 channel id NOT in that map, classify via `GET
+ *      /channels/<id>` — DM (type=1) and GROUP_DM (type=3) get
+ *      `discord:@me:<id>`. Anything else returns null and the caller
+ *      skips with a warning.
  *
  * Network calls are best-effort: on auth failure or network error, the
  * resolver returns null for every channel and the caller falls back to
@@ -13,6 +20,11 @@
  */
 
 const DISCORD_API = 'https://discord.com/api/v10';
+
+// Discord channel types we care about. See:
+// https://discord.com/developers/docs/resources/channel#channel-object-channel-types
+const CHANNEL_TYPE_DM = 1;
+const CHANNEL_TYPE_GROUP_DM = 3;
 
 interface Guild {
   id: string;
@@ -24,18 +36,27 @@ interface Channel {
   name?: string;
 }
 
+interface ChannelInfo {
+  id: string;
+  type: number;
+}
+
 export interface DiscordResolver {
-  /** Returns `discord:<guildId>:<channelId>` or null if the channel isn't visible to the bot. */
+  /**
+   * Returns the v2 `platform_id` for a v1 channel id, or null if the bot
+   * can't see it. Format is `discord:<guildId>:<channelId>` for guild
+   * channels and `discord:@me:<channelId>` for DMs / group DMs.
+   */
   resolve(channelId: string): string | null;
-  /** Diagnostic info — guild count and total channel count discovered. */
-  stats(): { guilds: number; channels: number; reason?: string };
+  /** Diagnostic info — guild count, channel count, DM count, optional disable reason. */
+  stats(): { guilds: number; channels: number; dms: number; reason?: string };
 }
 
 /** A no-op resolver that returns null for every lookup with a stored reason. */
 function emptyResolver(reason: string): DiscordResolver {
   return {
     resolve: () => null,
-    stats: () => ({ guilds: 0, channels: 0, reason }),
+    stats: () => ({ guilds: 0, channels: 0, dms: 0, reason }),
   };
 }
 
@@ -57,14 +78,20 @@ async function getJson<T>(url: string, token: string, fetchImpl: FetchFn): Promi
 
 /**
  * Build a Discord resolver by enumerating every guild the bot is in and
- * every channel in those guilds. Returns an empty resolver on any error.
+ * every channel in those guilds, then classifying any `unresolvedChannelIds`
+ * that didn't show up in a guild via `GET /channels/<id>` (so DMs and
+ * group DMs can be encoded as `discord:@me:<id>`).
  *
- * Costs: 1 + N HTTP calls (N = guild count). Discord's global rate limit
- * is 50 req/s; even installs with hundreds of guilds finish in under a
- * second of network time.
+ * Returns an empty resolver on any error during guild enumeration.
+ *
+ * Costs: 1 + N + K HTTP calls — N = guild count (enumerated channels per
+ * guild), K = unresolved-channel classification calls. Discord's global
+ * rate limit is 50 req/s; even installs with hundreds of guilds finish in
+ * under a second of network time.
  */
 export async function buildDiscordResolver(
   token: string,
+  unresolvedChannelIds: string[] = [],
   fetchImpl: FetchFn = fetch,
 ): Promise<DiscordResolver> {
   if (!token) return emptyResolver('no DISCORD_BOT_TOKEN in .env');
@@ -109,12 +136,41 @@ export async function buildDiscordResolver(
     }
   }
 
+  // Classify any v1 channel ids that didn't surface in a guild — they're
+  // most likely DMs (type=1) or group DMs (type=3). Anything else (404,
+  // 403, type=0 in a guild the bot left) stays unresolved so the caller's
+  // existing skip-with-warning path fires.
+  const dmChannels = new Set<string>();
+  const seen = new Set<string>();
+  for (const channelId of unresolvedChannelIds) {
+    if (channelToGuild.has(channelId)) continue;
+    if (seen.has(channelId)) continue;
+    seen.add(channelId);
+    try {
+      const ch = await getJson<ChannelInfo>(
+        `${DISCORD_API}/channels/${channelId}`,
+        token,
+        fetchImpl,
+      );
+      if (ch.type === CHANNEL_TYPE_DM || ch.type === CHANNEL_TYPE_GROUP_DM) {
+        dmChannels.add(channelId);
+      }
+    } catch {
+      // Channel not visible to the bot — leave it unresolved.
+    }
+  }
+
   return {
     resolve(channelId: string): string | null {
       const guildId = channelToGuild.get(channelId);
-      if (!guildId) return null;
-      return `discord:${guildId}:${channelId}`;
+      if (guildId) return `discord:${guildId}:${channelId}`;
+      if (dmChannels.has(channelId)) return `discord:@me:${channelId}`;
+      return null;
     },
-    stats: () => ({ guilds: guilds.length, channels: channelToGuild.size }),
+    stats: () => ({
+      guilds: guilds.length,
+      channels: channelToGuild.size,
+      dms: dmChannels.size,
+    }),
   };
 }

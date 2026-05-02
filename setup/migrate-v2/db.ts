@@ -82,21 +82,27 @@ async function main(): Promise<void> {
   let skipped = 0;
   const errors: string[] = [];
 
-  // v1 stored Discord groups as `dc:<channelId>` (no guildId). v2 needs
-  // `discord:<guildId>:<channelId>`. If there are any Discord groups, use
-  // the bot token (carried forward by 1a-env) to look up each channel's
-  // guild via the Discord API. On any failure the resolver returns null
-  // for every channel and the affected groups skip with a clear warning.
+  // v1 stored Discord groups as `dc:<channelId>` with no guild/DM signal.
+  // v2 needs either `discord:<guildId>:<channelId>` (guild) or
+  // `discord:@me:<channelId>` (DM / group DM). Use the v1 bot token to
+  // enumerate guilds + channels and to classify any leftover ids as DMs.
+  // On any failure the resolver returns null for every channel and the
+  // affected groups skip with a clear warning.
   let discordResolver: DiscordResolver | null = null;
-  const hasDiscord = v1Groups.some((g) => parseJid(g.jid)?.channel_type === 'discord');
-  if (hasDiscord) {
+  const discordChannelIds = v1Groups
+    .map((g) => parseJid(g.jid))
+    .filter((p): p is NonNullable<typeof p> => p?.channel_type === 'discord')
+    .map((p) => p.id);
+  if (discordChannelIds.length > 0) {
     const env = readEnvFile(['DISCORD_BOT_TOKEN']);
-    discordResolver = await buildDiscordResolver(env.DISCORD_BOT_TOKEN ?? '');
+    discordResolver = await buildDiscordResolver(env.DISCORD_BOT_TOKEN ?? '', discordChannelIds);
     const stats = discordResolver.stats();
     if (stats.reason) {
       console.log(`WARN:discord resolver disabled: ${stats.reason}`);
     } else {
-      console.log(`INFO:discord resolver: ${stats.guilds} guild(s), ${stats.channels} channel(s)`);
+      console.log(
+        `INFO:discord resolver: ${stats.guilds} guild(s), ${stats.channels} guild channel(s), ${stats.dms} DM(s)`,
+      );
     }
   }
 
