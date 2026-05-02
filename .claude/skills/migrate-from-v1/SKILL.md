@@ -20,6 +20,22 @@ Your job is the parts that need human judgment: triage any failed steps, seed th
 
 Read `logs/setup-migration/handoff.json` first — it has `overall_status`, per-step results in `steps`, and a `followups` list.
 
+## Preflight: was the script run?
+
+Before anything else, check that `logs/setup-migration/handoff.json` exists. If it doesn't, the user is invoking this skill before `migrate-v2.sh` ran. Stop and tell them, verbatim:
+
+> This skill finishes a migration that `migrate-v2.sh` started. Run that first, in your terminal — not from inside Claude:
+>
+> ```bash
+> bash migrate-v2.sh
+> ```
+>
+> It needs interactive prompts (channel selection, service switchover) and runs Node/pnpm bootstrap, Docker, OneCLI setup, and a container build that don't fit inside a Claude session. When it finishes, it'll hand control back to Claude automatically — at which point this skill picks up.
+
+Do not attempt to run the script yourself, simulate its effects, or pick up the migration mid-stream. The deterministic side has dependencies on a real interactive shell.
+
+Once `handoff.json` exists, proceed to Phase 0.
+
 ## Phase 0: Triage failed steps
 
 Check `handoff.json` → `overall_status`. If `"success"`, skip to Phase 1.
