@@ -29,14 +29,25 @@ SERVICE_SWITCHED=false
 SELECTED_CHANNELS=()
 ABORTED_AT=""
 
+# Per-step status tracking. Parallel indexed arrays so this works on
+# bash 3.2 (macOS default) which has no associative arrays.
+STEP_NAMES=()
+STEP_STATUSES=()
+
+record_step() {
+  STEP_NAMES+=("$1")
+  STEP_STATUSES+=("$2")
+}
+
 # Write handoff.json on any exit so the skill can always read it
 write_handoff() {
   local handoff_dir="$LOGS_DIR/setup-migration"
   mkdir -p "$handoff_dir"
 
   local has_failures=false
-  for step_name in "${!STEP_RESULTS[@]}"; do
-    [ "${STEP_RESULTS[$step_name]}" = "failed" ] && has_failures=true
+  local i
+  for ((i=0; i<${#STEP_NAMES[@]}; i++)); do
+    [ "${STEP_STATUSES[$i]}" = "failed" ] && has_failures=true
   done
 
   local overall="success"
@@ -44,8 +55,10 @@ write_handoff() {
   [ -n "$ABORTED_AT" ] && overall="failed"
 
   local steps_json="{"
-  for step_name in "${!STEP_RESULTS[@]}"; do
-    steps_json="${steps_json}\"${step_name}\": {\"status\": \"${STEP_RESULTS[$step_name]}\", \"log\": \"logs/migrate-steps/${step_name}.log\"},"
+  for ((i=0; i<${#STEP_NAMES[@]}; i++)); do
+    local n="${STEP_NAMES[$i]}"
+    local s="${STEP_STATUSES[$i]}"
+    steps_json="${steps_json}\"${n}\": {\"status\": \"${s}\", \"log\": \"logs/migrate-steps/${n}.log\"},"
   done
   steps_json="${steps_json%,}}"
 
@@ -245,8 +258,8 @@ export NANOCLAW_V2_PATH="$PROJECT_ROOT"
 # ─── run_step helper ─────────────────────────────────────────────────────
 # Runs a TypeScript migration step, captures output, reports success/failure.
 
-# Track step outcomes for handoff.json
-declare -A STEP_RESULTS
+# Step outcomes are tracked via record_step() into STEP_NAMES/STEP_STATUSES
+# (defined above, near write_handoff).
 
 run_step() {
   local name=$1 label=$2 script=$3
@@ -258,7 +271,7 @@ run_step() {
     result=$(grep '^OK:' "$raw" | head -1 || true)
     step_ok "$label $(dim "$result")"
     log "$name: $result"
-    STEP_RESULTS[$name]="success"
+    record_step "$name" "success"
     # Surface partial errors (rows skipped due to parse/lookup failures)
     # even when the step exited successfully — they're easy to miss in the
     # raw log and have caused silent migrations before.
@@ -276,7 +289,7 @@ run_step() {
     reason=$(grep '^SKIPPED:' "$raw" | head -1 | sed 's/^SKIPPED://')
     step_skip "$label $(dim "($reason)")"
     log "$name: skipped ($reason)"
-    STEP_RESULTS[$name]="skipped"
+    record_step "$name" "skipped"
   else
     step_fail "$label"
     echo
@@ -285,7 +298,7 @@ run_step() {
     done
     echo
     log "$name: FAILED (see $raw)"
-    STEP_RESULTS[$name]="failed"
+    record_step "$name" "failed"
   fi
 }
 
@@ -359,10 +372,10 @@ else
         STATUS_LINE=$(grep '^STATUS:' "$STEP_LOG" | head -1 | sed 's/^STATUS: *//')
         if [ "$STATUS_LINE" = "already-installed" ]; then
           step_skip "Install $ch $(dim "(already installed)")"
-          STEP_RESULTS[$STEP_NAME]="skipped"
+          record_step "$STEP_NAME" "skipped"
         else
           step_ok "Install $ch"
-          STEP_RESULTS[$STEP_NAME]="success"
+          record_step "$STEP_NAME" "success"
         fi
         log "install-$ch: $STATUS_LINE"
       else
@@ -371,12 +384,12 @@ else
           echo "  $(dim "$line")"
         done
         log "install-$ch: FAILED (see $STEP_LOG)"
-        STEP_RESULTS[$STEP_NAME]="failed"
+        record_step "$STEP_NAME" "failed"
       fi
     else
       step_skip "Install $ch $(dim "(no install script)")"
       log "install-$ch: no install script"
-      STEP_RESULTS[$STEP_NAME]="failed"
+      record_step "$STEP_NAME" "failed"
     fi
   done
 fi
@@ -401,11 +414,11 @@ else
   if bash setup/install-docker.sh > "$DOCKER_LOG" 2>&1; then
     hash -r 2>/dev/null || true
     step_ok "Docker installed"
-    STEP_RESULTS["3a-docker"]="success"
+    record_step "3a-docker" "success"
     log "Docker: installed"
   else
     step_fail "Docker install failed $(dim "(see $DOCKER_LOG)")"
-    STEP_RESULTS["3a-docker"]="failed"
+    record_step "3a-docker" "failed"
     log "Docker: FAILED"
   fi
 fi
@@ -426,16 +439,16 @@ elif command -v docker >/dev/null 2>&1; then
   if pnpm exec tsx setup/index.ts --step onecli > "$ONECLI_LOG" 2>"$ONECLI_ERR"; then
     step_ok "OneCLI ready"
     ONECLI_OK=true
-    STEP_RESULTS["3b-onecli"]="success"
+    record_step "3b-onecli" "success"
     log "OneCLI: installed/configured"
   else
     step_fail "OneCLI setup failed $(dim "(see $ONECLI_LOG)")"
-    STEP_RESULTS["3b-onecli"]="failed"
+    record_step "3b-onecli" "failed"
     log "OneCLI: FAILED"
   fi
 else
   step_fail "OneCLI needs Docker $(dim "(install Docker first)")"
-  STEP_RESULTS["3b-onecli"]="failed"
+  record_step "3b-onecli" "failed"
   log "OneCLI: skipped (no Docker)"
 fi
 
@@ -449,11 +462,11 @@ elif [ "$ONECLI_OK" = "true" ]; then
   AUTH_ERR="$STEPS_DIR/3c-auth.err"
   if pnpm exec tsx setup/index.ts --step auth > "$AUTH_LOG" 2>"$AUTH_ERR"; then
     step_ok "Anthropic credential registered"
-    STEP_RESULTS["3c-auth"]="success"
+    record_step "3c-auth" "success"
     log "Anthropic credential: registered via auth step"
   else
     step_fail "Auth setup failed $(dim "(see $AUTH_LOG)")"
-    STEP_RESULTS["3c-auth"]="failed"
+    record_step "3c-auth" "failed"
     log "Anthropic credential: FAILED"
   fi
 else
@@ -494,11 +507,11 @@ if command -v docker >/dev/null 2>&1; then
   BUILD_LOG="$STEPS_DIR/3e-container-build.log"
   if bash container/build.sh > "$BUILD_LOG" 2>&1; then
     step_ok "Container image built"
-    STEP_RESULTS["3e-build"]="success"
+    record_step "3e-build" "success"
     log "Container build: success"
   else
     step_fail "Container build failed"
-    STEP_RESULTS["3e-build"]="failed"
+    record_step "3e-build" "failed"
     tail -10 "$BUILD_LOG" 2>/dev/null | while IFS= read -r line; do
       echo "  $(dim "$line")"
     done
@@ -506,7 +519,7 @@ if command -v docker >/dev/null 2>&1; then
   fi
 else
   step_fail "Docker not available — cannot build container"
-  STEP_RESULTS["3e-build"]="failed"
+  record_step "3e-build" "failed"
   log "Container build: skipped (no Docker)"
 fi
 
