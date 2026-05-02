@@ -22,6 +22,8 @@ import { getMessagingGroupByPlatform } from '../../src/db/messaging-groups.js';
 import { runMigrations } from '../../src/db/migrations/index.js';
 import { insertTask } from '../../src/modules/scheduling/db.js';
 import { openInboundDb, resolveSession } from '../../src/session-manager.js';
+import { readEnvFile } from '../../src/env.js';
+import { buildDiscordResolver, type DiscordResolver } from './discord-resolver.js';
 import { parseJid, v2PlatformId } from './shared.js';
 
 interface V1Task {
@@ -67,7 +69,7 @@ function toCron(t: V1Task): { processAfter: string; recurrence: string | null } 
   return null;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const v1Path = process.argv[2];
   if (!v1Path) {
     console.error('Usage: tsx setup/migrate-v2/tasks.ts <v1-path>');
@@ -104,6 +106,14 @@ function main(): void {
   let skipped = 0;
   let failed = 0;
 
+  // Mirrors db.ts: Discord platform_id needs API lookup to recover guildId.
+  let discordResolver: DiscordResolver | null = null;
+  const hasDiscord = activeTasks.some((t) => parseJid(t.chat_jid)?.channel_type === 'discord');
+  if (hasDiscord) {
+    const env = readEnvFile(['DISCORD_BOT_TOKEN']);
+    discordResolver = await buildDiscordResolver(env.DISCORD_BOT_TOKEN ?? '');
+  }
+
   for (const t of activeTasks) {
     try {
       const ag = getAgentGroupByFolder(t.group_folder);
@@ -112,7 +122,14 @@ function main(): void {
       const parsed = parseJid(t.chat_jid);
       if (!parsed) { skipped++; continue; }
 
-      const platformId = v2PlatformId(parsed.channel_type, t.chat_jid);
+      let platformId: string;
+      if (parsed.channel_type === 'discord') {
+        const resolved = discordResolver?.resolve(parsed.id) ?? null;
+        if (!resolved) { skipped++; continue; }
+        platformId = resolved;
+      } else {
+        platformId = v2PlatformId(parsed.channel_type, t.chat_jid);
+      }
       const mg = getMessagingGroupByPlatform(parsed.channel_type, platformId);
       if (!mg) { skipped++; continue; }
 
@@ -155,4 +172,7 @@ function main(): void {
   console.log(`OK:active=${activeTasks.length},migrated=${migrated},skipped=${skipped},failed=${failed}`);
 }
 
-main();
+main().catch((err) => {
+  console.error(`FAIL:${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});

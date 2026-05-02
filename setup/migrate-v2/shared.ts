@@ -32,7 +32,19 @@ export interface ParsedJid {
   channel_type: string;
 }
 
+/** WhatsApp (Baileys) JID hosts. v1 stored these raw, with no `wa:` prefix. */
+const WA_JID_HOSTS = new Set(['s.whatsapp.net', 'g.us', 'lid', 'broadcast', 'newsletter']);
+
+function isWhatsappJid(raw: string): boolean {
+  const at = raw.lastIndexOf('@');
+  if (at === -1) return false;
+  return WA_JID_HOSTS.has(raw.slice(at + 1).toLowerCase());
+}
+
 export function parseJid(raw: string): ParsedJid | null {
+  if (isWhatsappJid(raw)) {
+    return { raw, prefix: 'whatsapp', id: raw, channel_type: 'whatsapp' };
+  }
   const colon = raw.indexOf(':');
   if (colon === -1) return null;
   const prefix = raw.slice(0, colon).toLowerCase();
@@ -47,10 +59,16 @@ export function parseJid(raw: string): ParsedJid | null {
 }
 
 /**
- * Build a v2 platform_id from a v1 JID. v2's messaging_groups.platform_id
- * is always `<channel_type>:<id>`.
+ * Build a v2 platform_id from a v1 JID, in the format the runtime adapter
+ * for that channel emits. WhatsApp uses the raw Baileys JID (`<id>@<host>`,
+ * no prefix). Other channels use `<channel_type>:<id>`.
  */
 export function v2PlatformId(channelType: string, jid: string): string {
+  if (channelType === 'whatsapp') {
+    // Strip any v1 `wa:`/`whatsapp:` prefix; otherwise pass through raw.
+    const parsed = parseJid(jid);
+    return parsed?.channel_type === 'whatsapp' ? parsed.id : jid;
+  }
   const parsed = parseJid(jid);
   const id = parsed?.id ?? jid;
   return id.startsWith(`${channelType}:`) ? id : `${channelType}:${id}`;

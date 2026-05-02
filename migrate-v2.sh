@@ -259,6 +259,18 @@ run_step() {
     step_ok "$label $(dim "$result")"
     log "$name: $result"
     STEP_RESULTS[$name]="success"
+    # Surface partial errors (rows skipped due to parse/lookup failures)
+    # even when the step exited successfully — they're easy to miss in the
+    # raw log and have caused silent migrations before.
+    if grep -q '^ERROR:' "$raw" 2>/dev/null; then
+      local err_count
+      err_count=$(grep -c '^ERROR:' "$raw")
+      echo "  $(dim "${err_count} error(s) reported — see $raw")"
+      grep '^ERROR:' "$raw" | head -3 | while IFS= read -r line; do
+        echo "  $(dim "$line")"
+      done
+      log "$name: ${err_count} non-fatal errors"
+    fi
   elif grep -q '^SKIPPED:' "$raw" 2>/dev/null; then
     local reason
     reason=$(grep '^SKIPPED:' "$raw" | head -1 | sed 's/^SKIPPED://')
@@ -340,14 +352,17 @@ else
   # 2c. Install channel code
   for ch in "${SELECTED_CHANNELS[@]}"; do
     INSTALL_SCRIPT="setup/install-${ch}.sh"
+    STEP_NAME="2c-install-${ch}"
     if [ -f "$INSTALL_SCRIPT" ]; then
-      STEP_LOG="$STEPS_DIR/2c-install-${ch}.log"
+      STEP_LOG="$STEPS_DIR/${STEP_NAME}.log"
       if bash "$INSTALL_SCRIPT" > "$STEP_LOG" 2>&1; then
         STATUS_LINE=$(grep '^STATUS:' "$STEP_LOG" | head -1 | sed 's/^STATUS: *//')
         if [ "$STATUS_LINE" = "already-installed" ]; then
           step_skip "Install $ch $(dim "(already installed)")"
+          STEP_RESULTS[$STEP_NAME]="skipped"
         else
           step_ok "Install $ch"
+          STEP_RESULTS[$STEP_NAME]="success"
         fi
         log "install-$ch: $STATUS_LINE"
       else
@@ -356,9 +371,12 @@ else
           echo "  $(dim "$line")"
         done
         log "install-$ch: FAILED (see $STEP_LOG)"
+        STEP_RESULTS[$STEP_NAME]="failed"
       fi
     else
       step_skip "Install $ch $(dim "(no install script)")"
+      log "install-$ch: no install script"
+      STEP_RESULTS[$STEP_NAME]="failed"
     fi
   done
 fi

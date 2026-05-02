@@ -50,6 +50,8 @@ function copyTree(src: string, dst: string): number {
       written += copyTree(s, d);
       continue;
     }
+    // Skip dangling symlinks (e.g. v1's .claude/debug/latest pointer).
+    if (entry.isSymbolicLink() && !fs.existsSync(s)) continue;
     if (fs.existsSync(d)) continue;
     fs.copyFileSync(s, d);
     written += 1;

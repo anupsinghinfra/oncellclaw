@@ -25,10 +25,13 @@ import {
   getMessagingGroupByPlatform,
 } from '../../src/db/messaging-groups.js';
 import { runMigrations } from '../../src/db/migrations/index.js';
+import { readEnvFile } from '../../src/env.js';
+import { buildDiscordResolver, type DiscordResolver } from './discord-resolver.js';
 import {
   generateId,
   parseJid,
   triggerToEngage,
+  v2PlatformId,
 } from './shared.js';
 
 interface V1Group {
@@ -40,7 +43,7 @@ interface V1Group {
   is_main: number | null;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const v1Path = process.argv[2];
   if (!v1Path) {
     console.error('Usage: tsx setup/migrate-v2/db.ts <v1-path>');
@@ -78,6 +81,24 @@ function main(): void {
   let skipped = 0;
   const errors: string[] = [];
 
+  // v1 stored Discord groups as `dc:<channelId>` (no guildId). v2 needs
+  // `discord:<guildId>:<channelId>`. If there are any Discord groups, use
+  // the bot token (carried forward by 1a-env) to look up each channel's
+  // guild via the Discord API. On any failure the resolver returns null
+  // for every channel and the affected groups skip with a clear warning.
+  let discordResolver: DiscordResolver | null = null;
+  const hasDiscord = v1Groups.some((g) => parseJid(g.jid)?.channel_type === 'discord');
+  if (hasDiscord) {
+    const env = readEnvFile(['DISCORD_BOT_TOKEN']);
+    discordResolver = await buildDiscordResolver(env.DISCORD_BOT_TOKEN ?? '');
+    const stats = discordResolver.stats();
+    if (stats.reason) {
+      console.log(`WARN:discord resolver disabled: ${stats.reason}`);
+    } else {
+      console.log(`INFO:discord resolver: ${stats.guilds} guild(s), ${stats.channels} channel(s)`);
+    }
+  }
+
   for (const g of v1Groups) {
     const parsed = parseJid(g.jid);
     if (!parsed) {
@@ -87,9 +108,22 @@ function main(): void {
     }
 
     const channelType = parsed.channel_type;
-    const platformId = parsed.raw.startsWith(`${channelType}:`)
-      ? parsed.raw
-      : `${channelType}:${parsed.id}`;
+    let platformId: string;
+    if (channelType === 'discord') {
+      const resolved = discordResolver?.resolve(parsed.id) ?? null;
+      if (!resolved) {
+        const stats = discordResolver?.stats();
+        const why = stats?.reason
+          ? `discord resolver unavailable (${stats.reason})`
+          : 'not found in any guild the bot can see — re-add the bot to that server and re-run, or rewire after migration';
+        skipped++;
+        errors.push(`Discord channel ${parsed.id} (${g.folder}): ${why}`);
+        continue;
+      }
+      platformId = resolved;
+    } else {
+      platformId = v2PlatformId(channelType, parsed.raw);
+    }
     const createdAt = new Date().toISOString();
 
     try {
@@ -152,10 +186,23 @@ function main(): void {
 
   v2Db.close();
 
+  // If every group was skipped, the migration didn't actually do anything.
+  // Treat that as failure so the wrapper script surfaces it instead of
+  // hiding it under an `OK:` line.
+  const totalDone = created + reused;
+  if (v1Groups.length > 0 && totalDone === 0) {
+    console.error(`FAIL:groups=${v1Groups.length},created=0,reused=0,skipped=${skipped}`);
+    for (const e of errors) console.error(`ERROR:${e}`);
+    process.exit(1);
+  }
+
   console.log(`OK:groups=${v1Groups.length},created=${created},reused=${reused},skipped=${skipped}`);
   if (errors.length > 0) {
     for (const e of errors) console.log(`ERROR:${e}`);
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(`FAIL:${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});
