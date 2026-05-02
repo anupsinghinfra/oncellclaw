@@ -392,6 +392,21 @@ else
       record_step "$STEP_NAME" "failed"
     fi
   done
+
+  # 2d. WhatsApp LID resolution. After whatsapp is installed (so Baileys
+  # is on disk) and auth files have been copied (so we can connect with
+  # the migrated identity), boot Baileys briefly to learn LID↔phone
+  # mappings during initial sync, then write paired LID-keyed
+  # messaging_groups. Best-effort: any failure degrades to runtime
+  # approval flow, which the WA adapter's isMention=true on DMs handles.
+  for ch in "${SELECTED_CHANNELS[@]}"; do
+    if [ "$ch" = "whatsapp" ]; then
+      run_step "2d-whatsapp-lids" \
+        "Resolve WhatsApp LIDs for migrated DMs" \
+        "setup/migrate-v2/whatsapp-resolve-lids.ts"
+      break
+    fi
+  done
 fi
 
 echo
