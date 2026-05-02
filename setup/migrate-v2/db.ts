@@ -22,7 +22,9 @@ import {
   createMessagingGroup,
   createMessagingGroupAgent,
   getMessagingGroupAgentByPair,
+  getMessagingGroupAgents,
   getMessagingGroupByPlatform,
+  updateMessagingGroup,
 } from '../../src/db/messaging-groups.js';
 import { runMigrations } from '../../src/db/migrations/index.js';
 import { readEnvFile } from '../../src/env.js';
@@ -147,7 +149,15 @@ async function main(): Promise<void> {
         ag = getAgentGroupByFolder(g.folder)!;
       }
 
-      // messaging_group — one per (channel_type, platform_id)
+      // messaging_group — one per (channel_type, platform_id).
+      //
+      // If the row already exists *and* has zero wired agent_groups, it
+      // was almost certainly auto-created by the runtime router on an
+      // inbound message (which uses 'request_approval' or similar — not
+      // the migration's 'public'). Reset its policy to match what the
+      // migration would have set if it had created the row first. Once
+      // any wiring exists, the user has had a chance to tighten the
+      // policy via the skill — leave it alone.
       let mg = getMessagingGroupByPlatform(channelType, platformId);
       if (!mg) {
         createMessagingGroup({
@@ -159,6 +169,12 @@ async function main(): Promise<void> {
           unknown_sender_policy: 'public',
           created_at: createdAt,
         });
+        mg = getMessagingGroupByPlatform(channelType, platformId)!;
+      } else if (
+        mg.unknown_sender_policy !== 'public' &&
+        getMessagingGroupAgents(mg.id).length === 0
+      ) {
+        updateMessagingGroup(mg.id, { unknown_sender_policy: 'public' });
         mg = getMessagingGroupByPlatform(channelType, platformId)!;
       }
 
