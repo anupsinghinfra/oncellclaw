@@ -43,11 +43,7 @@ Before any deeper migration work, prove v2 actually answers messages on the user
 
 ### 0a — Fix blockers only
 
-A step is **blocking** if its failure stops the bot from routing one message. Re-run or hand-fix only these; defer everything else to its later phase:
-
-| Blocking | Deferred |
-|---|---|
-| `1b-db`, `1d-sessions`, `2b-channel-auth`, `2c-install-<channel>`, `2d-whatsapp-lids`, `3a-docker`, `3b-onecli`, `3c-auth`, `3e-build` | `1a-env`, `1c-groups`, `1e-tasks` |
+Walk `handoff.steps`. Fix only the failures that would stop the bot from routing one message; defer the rest to its later phase.
 
 ### 0b — Smoke test, then continue
 
