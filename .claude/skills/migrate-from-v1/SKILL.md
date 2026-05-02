@@ -10,9 +10,10 @@ description: Finish migrating a NanoClaw v1 install into v2. Run after `bash mig
 - .env keys merged
 - v2 DB seeded (agent_groups, messaging_groups, wiring)
 - Group folders copied (v1 CLAUDE.md → v2 CLAUDE.local.md)
-- Session data copied with conversation continuity
+- Session data copied with conversation continuity (incl. Claude Code memory + JSONL transcripts)
 - Scheduled tasks ported
-- Channel code installed
+- Channel code installed and auth state copied (incl. WhatsApp Baileys keystore)
+- WhatsApp LIDs resolved from `store/auth` and aliased into `messaging_groups`
 - Container skills copied
 - Container image built
 
@@ -36,25 +37,99 @@ Do not attempt to run the script yourself, simulate its effects, or pick up the 
 
 Once `handoff.json` exists, proceed to Phase 0.
 
-## Phase 0: Triage failed steps
+## Phase 0: Get v2 routing real messages
 
-Check `handoff.json` → `overall_status`. If `"success"`, skip to Phase 1.
+Goal: get from "the script finished" to "the user sent a message and v2 answered" as fast as possible — *before* spending tokens on CLAUDE.local.md cleanup, fork customisations, or anything that requires deeper engagement. v1 is paused, not touched; flipping back is a one-line restart.
 
-If `"partial"`, walk `handoff.steps` — each has `status` and `log` (path to the raw log file). For each failed step:
+### 0a — Fix blockers (only the blockers)
 
-1. Read its log file at `handoff.step_logs_dir/<step>.log`.
-2. Explain what failed in one sentence.
-3. Fix it if mechanical (re-run the step script, hand-write a DB insert, copy a missed file). The step scripts are at `setup/migrate-v2/<step>.ts` and accept `<v1_path>` as the first argument.
-4. Use `AskUserQuestion` when a judgment call is needed.
+Walk `handoff.steps`. A step is **blocking** only if its failure prevents v2 from routing a single message. Treat these as blockers:
 
-Common failures:
-- **1b-db failed**: JID couldn't be parsed. Ask the user for the channel type, insert `agent_groups` + `messaging_groups` manually.
-- **1d-sessions failed**: v2 DB wasn't seeded yet. Re-run after fixing 1b.
-- **1e-tasks failed**: session doesn't exist yet. Re-run after fixing 1d.
-- **2c-install-\<channel\> failed**: `git fetch origin channels` may have failed (network). Try again, or ask the user to run manually.
-- **3e-container-build failed**: Docker issue. Read the build log, suggest fixes.
+| Step | Why blocking |
+|------|--------------|
+| `1b-db` | No `messaging_groups` → router has nothing to match |
+| `1d-sessions` | No session → no inbound DB to write into |
+| `2c-install-<channel>` | No adapter for the channel the user wants to test |
+| `2d-whatsapp-lids` | WhatsApp DMs may arrive as `<lid>@lid` and miss migrated phone-keyed rows |
+| `3a-docker` / `3e-build` | No container image → agent can't run |
+| `3b-onecli` | Anthropic credentials not injected → first agent call 401s |
 
-After resolving all failures, proceed to Phase 1.
+**Defer** these — they don't block a smoke test, and most surface naturally in later phases:
+
+- `1a-env`, `1c-groups`, `1e-tasks`, `2b-channel-auth`, `3c-auth`
+
+For each blocker: read `handoff.step_logs_dir/<step>.log`, identify the cause, re-run the underlying script directly (`pnpm exec tsx setup/migrate-v2/<step>.ts <v1_path>`) or hand-fix mechanically. Use `AskUserQuestion` for judgment calls. Don't simulate the script's work.
+
+Common blockers:
+- **`1b-db` failed**: JID couldn't be parsed. Insert `agent_groups` + `messaging_groups` for the user's confirmed channel.
+- **`2c-install-<channel>` failed**: `git fetch origin channels` issue. The user can run `bash setup/install-<channel>.sh` directly.
+- **`3e-build` failed**: usually stale builder cache. `docker buildx prune -f && ./container/build.sh`.
+
+### 0b — Smoke test before any further migration work
+
+Tell the user, verbatim:
+
+> Before we touch CLAUDE.local.md or fork customisations, let's confirm v2 actually answers your real messages. **This is non-destructive — v1 is just paused, not touched.** v1 and v2 share your WhatsApp identity (we copied `store/auth/` over), so only one can be online at a time, but flipping back is instant.
+
+Find the v2 service unit (per-checkout hash):
+
+```bash
+# macOS
+launchctl list | grep nanoclaw
+# Linux
+systemctl --user list-units 'nanoclaw*'
+```
+
+Switch v1 → v2:
+
+```bash
+# macOS
+launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load   ~/Library/LaunchAgents/com.nanoclaw-v2-<hash>.plist
+
+# Linux
+systemctl --user stop nanoclaw
+systemctl --user start nanoclaw-v2-<hash>
+```
+
+Tail the log and confirm clean boot:
+
+```bash
+tail -f logs/nanoclaw.log
+```
+
+Watch for `NanoClaw running` plus `Channel adapter started` for each installed channel (and `Connected to <channel>` for native adapters like WhatsApp).
+
+Ask the user to send a real test message — a DM to the bot, or a post in a known group from a non-bot account. A working route logs an inbound event → session resolution → container spawn → outbound delivery.
+
+`AskUserQuestion`: *"Did v2 respond? — Yes / No, here's what happened."*
+
+**If yes**: continue to Phase 1.
+
+**If no**: do not proceed. Read `logs/nanoclaw.log` + `logs/nanoclaw.error.log` and diagnose. Common patterns:
+- WhatsApp DM with no routing chain in the log → check `SELECT platform_id FROM messaging_groups WHERE platform_id LIKE '%@lid'`. If empty, re-run `setup/migrate-v2/whatsapp-resolve-lids.ts`.
+- Agent inside container fails on Anthropic 401 → OneCLI agents start in `selective` secret mode. `onecli agents set-secret-mode --id <agent-id> --mode all`.
+- Channel disconnected silently → restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw-v2-<hash>`.
+
+Re-test before continuing.
+
+### Reverting (anytime — not just now)
+
+```bash
+# macOS — back to v1
+launchctl unload ~/Library/LaunchAgents/com.nanoclaw-v2-<hash>.plist
+launchctl load   ~/Library/LaunchAgents/com.nanoclaw.plist
+
+# Linux
+systemctl --user stop nanoclaw-v2-<hash>
+systemctl --user start nanoclaw
+```
+
+v1's process, data, credentials, and groups are untouched the whole time. Reverting is just a service restart.
+
+### Deferred non-blocker failures
+
+If you skipped non-blocker failures in 0a (`1a-env`, `1c-groups`, `1e-tasks`, `2b-channel-auth`, `3c-auth`), they still need fixing — most surface naturally in later phases (`1c-groups` ↔ Phase 2 CLAUDE.local.md cleanup, `1e-tasks` ↔ task verification). Re-run any that don't get covered before declaring the migration done.
 
 ## Phase 1: Owner and access
 
