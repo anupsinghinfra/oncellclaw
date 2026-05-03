@@ -563,47 +563,22 @@ echo
 echo "$(bold 'Service switchover')"
 echo
 
-# Retire the legacy v1 service file and alias it to the v2 unit.
-# Called after the user confirms "keep v2", or when v1 wasn't running.
+# Disable the v1 service so it doesn't auto-start, but leave the unit file
+# on disk so the user can rollback with: systemctl --user start nanoclaw
 # Idempotent — safe to call multiple times.
-retire_v1_service() {
-  if [ -z "$V2_SERVICE" ]; then
-    return
-  fi
-
+disable_v1_service() {
   if [ "$PLATFORM_SERVICE" = "systemd" ]; then
-    local unit_dir="$HOME/.config/systemd/user"
-    local v1_file="$unit_dir/${V1_SERVICE}.service"
-    local v2_file="${V2_SERVICE}.service"
-
-    # Already a correct symlink — nothing to do
-    if [ -L "$v1_file" ] && [ "$(readlink "$v1_file")" = "$v2_file" ]; then
-      return
-    fi
-
-    # Only retire if the file exists (as a regular file or stale symlink)
+    local v1_file="$HOME/.config/systemd/user/${V1_SERVICE}.service"
     if [ -f "$v1_file" ] || [ -L "$v1_file" ]; then
       systemctl --user stop "$V1_SERVICE" 2>/dev/null || true
       systemctl --user disable "$V1_SERVICE" 2>/dev/null || true
-      rm -f "$v1_file"
-      ln -s "$v2_file" "$v1_file"
-      systemctl --user daemon-reload 2>/dev/null || true
-      step_ok "Aliased $V1_SERVICE → $V2_SERVICE"
+      step_ok "Disabled $V1_SERVICE (unit file kept for rollback)"
     fi
-
   elif [ "$PLATFORM_SERVICE" = "launchd" ]; then
     local v1_plist="$HOME/Library/LaunchAgents/${V1_SERVICE}.plist"
-    local v2_plist="${V2_SERVICE}.plist"
-
-    if [ -L "$v1_plist" ] && [ "$(readlink "$v1_plist")" = "$v2_plist" ]; then
-      return
-    fi
-
     if [ -f "$v1_plist" ] || [ -L "$v1_plist" ]; then
       launchctl unload "$v1_plist" 2>/dev/null || true
-      rm -f "$v1_plist"
-      ln -s "$v2_plist" "$v1_plist"
-      step_ok "Aliased $V1_SERVICE → $V2_SERVICE"
+      step_ok "Unloaded $V1_SERVICE (plist kept for rollback)"
     fi
   fi
 }
@@ -696,14 +671,14 @@ if [ "$V1_RUNNING" = "true" ]; then
       SERVICE_SWITCHED=false
     else
       step_ok "Keeping v2 service"
-      retire_v1_service
+      disable_v1_service
     fi
   else
     step_skip "Service switchover skipped"
   fi
 else
   step_skip "v1 service not running — nothing to switch"
-  retire_v1_service
+  disable_v1_service
 fi
 
 echo
@@ -735,6 +710,16 @@ echo "    $(green '✓')  Channels installed: ${SELECTED_CHANNELS[*]}"
 fi
 echo "    $(green '✓')  Container skills copied"
 echo "    $(green '✓')  Container image built"
+if [ "$SERVICE_SWITCHED" = "true" ] && [ -n "$V2_SERVICE" ]; then
+echo "    $(green '✓')  Service switched to v2 $(dim "($V2_SERVICE)")"
+echo
+echo "  $(bold 'Rollback to v1:')"
+if [ "$PLATFORM_SERVICE" = "systemd" ]; then
+echo "    $(dim '$') systemctl --user stop $V2_SERVICE && systemctl --user start $V1_SERVICE"
+elif [ "$PLATFORM_SERVICE" = "launchd" ]; then
+echo "    $(dim '$') launchctl unload ~/Library/LaunchAgents/${V2_SERVICE}.plist && launchctl load ~/Library/LaunchAgents/${V1_SERVICE}.plist"
+fi
+fi
 echo
 echo "  $(bold 'What still needs a human:')"
 if [ "$ONECLI_OK" = "false" ]; then
