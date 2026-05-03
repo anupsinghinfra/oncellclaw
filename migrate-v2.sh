@@ -563,6 +563,51 @@ echo
 echo "$(bold 'Service switchover')"
 echo
 
+# Retire the legacy v1 service file and alias it to the v2 unit.
+# Called after the user confirms "keep v2", or when v1 wasn't running.
+# Idempotent — safe to call multiple times.
+retire_v1_service() {
+  if [ -z "$V2_SERVICE" ]; then
+    return
+  fi
+
+  if [ "$PLATFORM_SERVICE" = "systemd" ]; then
+    local unit_dir="$HOME/.config/systemd/user"
+    local v1_file="$unit_dir/${V1_SERVICE}.service"
+    local v2_file="${V2_SERVICE}.service"
+
+    # Already a correct symlink — nothing to do
+    if [ -L "$v1_file" ] && [ "$(readlink "$v1_file")" = "$v2_file" ]; then
+      return
+    fi
+
+    # Only retire if the file exists (as a regular file or stale symlink)
+    if [ -f "$v1_file" ] || [ -L "$v1_file" ]; then
+      systemctl --user stop "$V1_SERVICE" 2>/dev/null || true
+      systemctl --user disable "$V1_SERVICE" 2>/dev/null || true
+      rm -f "$v1_file"
+      ln -s "$v2_file" "$v1_file"
+      systemctl --user daemon-reload 2>/dev/null || true
+      step_ok "Aliased $V1_SERVICE → $V2_SERVICE"
+    fi
+
+  elif [ "$PLATFORM_SERVICE" = "launchd" ]; then
+    local v1_plist="$HOME/Library/LaunchAgents/${V1_SERVICE}.plist"
+    local v2_plist="${V2_SERVICE}.plist"
+
+    if [ -L "$v1_plist" ] && [ "$(readlink "$v1_plist")" = "$v2_plist" ]; then
+      return
+    fi
+
+    if [ -f "$v1_plist" ] || [ -L "$v1_plist" ]; then
+      launchctl unload "$v1_plist" 2>/dev/null || true
+      rm -f "$v1_plist"
+      ln -s "$v2_plist" "$v1_plist"
+      step_ok "Aliased $V1_SERVICE → $V2_SERVICE"
+    fi
+  fi
+}
+
 # Detect platform and service names
 V1_SERVICE=""
 V2_SERVICE=""
@@ -651,16 +696,14 @@ if [ "$V1_RUNNING" = "true" ]; then
       SERVICE_SWITCHED=false
     else
       step_ok "Keeping v2 service"
-      # Disable v1 from auto-starting
-      if [ "$PLATFORM_SERVICE" = "systemd" ]; then
-        systemctl --user disable "$V1_SERVICE" 2>/dev/null || true
-      fi
+      retire_v1_service
     fi
   else
     step_skip "Service switchover skipped"
   fi
 else
   step_skip "v1 service not running — nothing to switch"
+  retire_v1_service
 fi
 
 echo
