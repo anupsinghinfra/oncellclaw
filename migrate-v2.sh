@@ -5,8 +5,7 @@
 # Run from the v2 directory:
 #   bash migrate-v2.sh
 #
-# From Claude Code, use the ! prefix so it runs in your terminal:
-#   ! bash migrate-v2.sh
+# If you're in Claude Code, exit first or open a separate terminal.
 #
 # Finds v1 automatically (sibling directory, or $NANOCLAW_V1_PATH).
 # Installs prerequisites (Node, pnpm, deps) via the existing setup.sh
@@ -26,10 +25,10 @@ cd "$PROJECT_ROOT"
 if ! [ -t 0 ] || ! [ -t 1 ]; then
   echo "This script requires an interactive terminal."
   echo ""
-  echo "If you're in Claude Code, run it directly with the ! prefix:"
-  echo "  ! bash migrate-v2.sh"
+  echo "If you're in Claude Code, exit first or open a separate terminal,"
+  echo "then run:"
+  echo "  bash migrate-v2.sh"
   echo ""
-  echo "Or run it in a separate terminal session."
   exit 1
 fi
 
