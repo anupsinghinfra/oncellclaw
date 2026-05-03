@@ -5,6 +5,9 @@
 # Run from the v2 directory:
 #   bash migrate-v2.sh
 #
+# From Claude Code, use the ! prefix so it runs in your terminal:
+#   ! bash migrate-v2.sh
+#
 # Finds v1 automatically (sibling directory, or $NANOCLAW_V1_PATH).
 # Installs prerequisites (Node, pnpm, deps) via the existing setup.sh
 # bootstrap, then runs the migration steps.
@@ -16,6 +19,19 @@ set -uo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_ROOT"
+
+# This script has interactive prompts (channel selection, service switchover)
+# and streams progress output — it must run in a real terminal, not inside
+# a tool subprocess (e.g. Claude Code's Bash tool, which collapses output).
+if ! [ -t 0 ] || ! [ -t 1 ]; then
+  echo "This script requires an interactive terminal."
+  echo ""
+  echo "If you're in Claude Code, run it directly with the ! prefix:"
+  echo "  ! bash migrate-v2.sh"
+  echo ""
+  echo "Or run it in a separate terminal session."
+  exit 1
+fi
 
 LOGS_DIR="$PROJECT_ROOT/logs"
 STEPS_DIR="$LOGS_DIR/migrate-steps"
