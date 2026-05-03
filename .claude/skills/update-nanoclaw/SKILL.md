@@ -180,7 +180,8 @@ Check if the merge changed any lockfiles or package manifests:
 - `git diff <backup-tag-from-step-1>..HEAD --name-only | grep -E '^(pnpm-lock\.yaml|package\.json)$'`
   - If matched: `pnpm install`
 - `git diff <backup-tag-from-step-1>..HEAD --name-only | grep -E '^container/agent-runner/(bun\.lock|package\.json)$'`
-  - If matched: `cd container/agent-runner && bun install`
+  - If matched AND `command -v bun` succeeds: `cd container/agent-runner && bun install`
+  - If bun is not installed on the host, skip — container deps will be installed during `./container/build.sh`
 
 Skip this step if neither lockfile changed.
 
@@ -192,8 +193,9 @@ Check which areas changed to determine what to validate:
 - `pnpm run build`
 - `pnpm test` (do not fail the flow if tests are not configured)
 
-**Container typecheck** (only if `container/agent-runner/src/` files are in CHANGED_FILES):
-- `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit`
+**Container typecheck** (only if `container/agent-runner/src/` files are in CHANGED_FILES AND bun types are available):
+- Check: `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit`
+- If this fails because bun types are missing (`Cannot find type definition file for 'bun'`), skip with a note — type errors will surface at container runtime instead
 
 **Container image rebuild** (only if any `container/` files are in CHANGED_FILES):
 - `./container/build.sh`
@@ -270,8 +272,8 @@ Tell the user:
 - Backup branch also exists: `backup/pre-update-<HASH>-<TIMESTAMP>`
 - Restart the service to apply changes. Detect platform with `uname -s`:
   - **macOS (Darwin)**: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
-  - **Linux**: `systemctl --user restart nanoclaw`
-  - **Manual**: restart `pnpm run dev`
+  - **Linux**: detect the service name with `systemctl --user list-units --type=service | grep nanoclaw | awk '{print $1}'`, then `systemctl --user restart <detected-name>`
+  - **Manual** (no service found): restart `pnpm run dev`
 
 
 ## Diagnostics
