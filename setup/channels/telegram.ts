@@ -21,7 +21,8 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
-import { confirmThenOpen, formatNoteLink } from '../lib/browser.js';
+import { openUrl } from '../lib/browser.js';
+import { isHeadless } from '../platform.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import {
   type Block,
@@ -48,14 +49,37 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   // installed, or the bot's web profile if not. tg://resolve?domain= is
   // more direct but silently fails when the scheme isn't registered.
   const botUrl = `https://t.me/${botUsername}`;
-  note(
-    [
+  // Two card variants — auto-open fires only on GUI, so headless users
+  // need full self-serve instructions inside the card itself, while GUI
+  // users get a leaner status line plus the auto-open + a single
+  // combined dim fallback line (URL + mobile alternative) on the
+  // confirm prompt below.
+  if (isHeadless()) {
+    note(
+      [
+        `Open @${botUsername} in Telegram now — the pairing code is coming next, and that's where you'll send it.`,
+        '',
+        `Get started: ${botUrl}`,
+        '',
+        `Don't have Telegram installed here? Open it on any device and search for @${botUsername}`,
+      ].join('\n'),
+      'Open Telegram',
+    );
+  } else {
+    note(
       `Opening @${botUsername} in Telegram so it's ready when the pairing code shows up.`,
-      formatNoteLink(botUrl),
-    ].filter((line): line is string => line !== null).join('\n'),
-    'Open Telegram',
-  );
-  await confirmThenOpen(botUrl, 'Press Enter to open Telegram');
+      'Open Telegram',
+    );
+    ensureAnswer(
+      await p.confirm({
+        message: `Press Enter to open Telegram (must be installed here)\n${k.dim(
+          `If browser does not appear, please visit: ${botUrl} — or search for @${botUsername} in Telegram`,
+        )}`,
+        initialValue: true,
+      }),
+    );
+    openUrl(botUrl);
+  }
 
   const install = await runQuietChild(
     'telegram-install',
