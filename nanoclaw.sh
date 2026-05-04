@@ -200,6 +200,33 @@ if [ "$LOW_MEM" = true ] || [ "$LOW_DISK" = true ]; then
   esac
 fi
 
+# ─── pre-flight: Google Cloud VM warning (Linux) ──────────────────────
+# NanoClaw is known to not run reliably on Google Compute Engine instances.
+# Warn early — before the root check or bootstrap spinner — so users can
+# switch providers before sinking time into setup. Detection uses DMI
+# (no network round-trip), which on GCE reports "Google" / "Google
+# Compute Engine".
+if [ "$(uname -s)" = "Linux" ] \
+  && { grep -qi 'Google' /sys/class/dmi/id/product_name 2>/dev/null \
+    || grep -qi 'Google' /sys/class/dmi/id/sys_vendor   2>/dev/null; }; then
+  printf '  %s\n' "$(red 'Warning: Google Cloud VM detected.')"
+  printf '  %s\n' "$(dim 'Google blocks sudo commands, so NanoClaw is unlikely to run successfully on this VM.')"
+  printf '  %s\n\n' "$(dim 'If you want to run NanoClaw successfully, switch to a different provider (Hetzner, Hostinger, exe.dev and others..).')"
+  read -r -p "  $(bold 'Try anyway?') [y/N] " GCE_ANS </dev/tty
+
+  case "${GCE_ANS:-N}" in
+    [Yy]*)
+      ph_event setup_gce_continued
+      printf '\n'
+      ;;
+    *)
+      ph_event setup_gce_aborted
+      printf '\n  %s\n\n' "$(dim 'Aborted. Re-run on a non-GCE host to continue.')"
+      exit 1
+      ;;
+  esac
+fi
+
 # ─── pre-flight: root user warning (Linux) ────────────────────────────
 if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
   printf '  %s\n' \
