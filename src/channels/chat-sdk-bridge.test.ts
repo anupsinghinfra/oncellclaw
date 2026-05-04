@@ -15,10 +15,7 @@ interface PostCall {
 
 function makePostCapture() {
   const calls: PostCall[] = [];
-  const postMessage = async (
-    threadId: string,
-    message: AdapterPostableMessage,
-  ): Promise<RawMessage<unknown>> => {
+  const postMessage = async (threadId: string, message: AdapterPostableMessage): Promise<RawMessage<unknown>> => {
     calls.push({ threadId, message });
     return { id: 'msg-stub', threadId, raw: {} };
   };

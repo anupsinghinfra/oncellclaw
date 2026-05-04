@@ -407,11 +407,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       if (content.type === 'card' && content.card && typeof content.card === 'object') {
         const cardSpec = content.card as Record<string, unknown>;
         const title = (cardSpec.title as string) || '';
-        const fallbackText =
-          (content.fallbackText as string) ||
-          (cardSpec.description as string) ||
-          title ||
-          '';
+        const fallbackText = (content.fallbackText as string) || (cardSpec.description as string) || title || '';
 
         const cardChildren: CardChild[] = [];
         if (typeof cardSpec.description === 'string' && cardSpec.description) {
@@ -432,15 +428,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         }
         if (Array.isArray(cardSpec.actions)) {
           const linkButtons = (cardSpec.actions as Array<Record<string, unknown>>)
-            .filter(
-              (a) => typeof a.url === 'string' && a.url && typeof a.label === 'string' && a.label,
-            )
+            .filter((a) => typeof a.url === 'string' && a.url && typeof a.label === 'string' && a.label)
             .map((a) => {
               const style = a.style;
               const safeStyle: 'primary' | 'danger' | 'default' | undefined =
-                style === 'primary' || style === 'danger' || style === 'default'
-                  ? style
-                  : undefined;
+                style === 'primary' || style === 'danger' || style === 'default' ? style : undefined;
               return LinkButton({
                 label: a.label as string,
                 url: a.url as string,
