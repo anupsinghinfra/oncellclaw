@@ -104,6 +104,11 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
+# ---- nc CLI wrapper ----------------------------------------------------------
+# Actual script lives in the mounted source at /app/src/cli/nc.ts.
+RUN printf '#!/bin/sh\nexec bun /app/src/cli/nc.ts "$@"\n' > /usr/local/bin/nc && \
+    chmod +x /usr/local/bin/nc
+
 # ---- Entrypoint --------------------------------------------------------------
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
