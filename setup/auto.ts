@@ -454,7 +454,7 @@ async function main(): Promise<void> {
       }
       let result: void | typeof BACK_TO_CHANNEL_SELECTION;
       if (channelChoice === 'telegram') {
-        await runTelegramChannel(displayName!);
+        result = await runTelegramChannel(displayName!);
       } else if (channelChoice === 'discord') {
         result = await runDiscordChannel(displayName!);
       } else if (channelChoice === 'whatsapp') {
