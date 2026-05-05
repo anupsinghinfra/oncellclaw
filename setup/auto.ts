@@ -462,7 +462,7 @@ async function main(): Promise<void> {
       } else if (channelChoice === 'signal') {
         await runSignalChannel(displayName!);
       } else if (channelChoice === 'teams') {
-        await runTeamsChannel(displayName!);
+        result = await runTeamsChannel(displayName!);
       } else if (channelChoice === 'slack') {
         result = await runSlackChannel(displayName!);
       } else if (channelChoice === 'imessage') {
