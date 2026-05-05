@@ -125,6 +125,30 @@ export function getMessageIn(id: string): MessageInRow | undefined {
 }
 
 /**
+ * Find a pending CLI response (by requestId in content).
+ * Reads from inbound.db, checks processing_ack to skip already-handled responses.
+ */
+export function findCliResponse(requestId: string): MessageInRow | undefined {
+  const inbound = openInboundDb();
+  const outbound = getOutboundDb();
+
+  try {
+    const response = inbound
+      .prepare("SELECT * FROM messages_in WHERE status = 'pending' AND content LIKE ?")
+      .get(`%"requestId":"${requestId}"%`) as MessageInRow | undefined;
+
+    if (!response) return undefined;
+
+    const acked = outbound.prepare('SELECT 1 FROM processing_ack WHERE message_id = ?').get(response.id);
+    if (acked) return undefined;
+
+    return response;
+  } finally {
+    inbound.close();
+  }
+}
+
+/**
  * Find a pending response to a question (by questionId in content).
  * Reads from inbound.db, checks processing_ack to skip already-handled responses.
  */

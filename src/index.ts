@@ -56,6 +56,7 @@ import './modules/index.js';
 // CLI command barrel — populates the `nc` registry before the CLI server
 // accepts connections.
 import './cli/commands/index.js';
+import './cli/delivery-action.js';
 import { startCliServer, stopCliServer } from './cli/socket-server.js';
 
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
