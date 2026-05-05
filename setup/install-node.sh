@@ -19,7 +19,7 @@ fi
 
 if command -v uvx >/dev/null 2>&1; then
   echo "STEP: uvx-nodeenv"
-  uvx nodeenv -n 22 ~/node
+  uvx nodeenv -n lts ~/node
   mkdir -p ~/.local/bin
   ln -sf ~/node/bin/node ~/.local/bin/node
   ln -sf ~/node/bin/npm ~/.local/bin/npm
