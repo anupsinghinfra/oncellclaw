@@ -33,6 +33,8 @@ import k from 'kleur';
 
 import * as setupLog from '../logs.js';
 import { getLaunchdLabel, getSystemdUnit } from '../../src/install-slug.js';
+import { BACK_TO_CHANNEL_SELECTION, type ChannelFlowResult } from '../lib/back-nav.js';
+import { brightSelect } from '../lib/bright-select.js';
 import {
   type Block,
   type StepResult,
@@ -48,7 +50,33 @@ import { accentGreen, fmtDuration, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 
-export async function runSignalChannel(displayName: string): Promise<void> {
+export async function runSignalChannel(displayName: string): Promise<ChannelFlowResult> {
+  note(
+    [
+      "NanoClaw links to Signal as a *secondary* device on your existing",
+      "phone — no new number needed. Your assistant will send and receive",
+      "messages as the number on that phone.",
+      '',
+      "Here's what's about to happen:",
+      '',
+      '  1. Check that signal-cli is installed (we\'ll guide you if not)',
+      '  2. Install the Signal adapter',
+      '  3. Show a QR code — scan it from Signal → Settings → Linked Devices',
+      '  4. Wire your assistant and send a welcome message',
+    ].join('\n'),
+    'Set up Signal',
+  );
+
+  const proceed = ensureAnswer(await brightSelect<'continue' | 'back'>({
+    message: 'Ready to set up Signal?',
+    options: [
+      { value: 'continue', label: 'Continue' },
+      { value: 'back', label: '← Back to channel selection' },
+    ],
+    initialValue: 'continue',
+  }));
+  if (proceed === 'back') return BACK_TO_CHANNEL_SELECTION;
+
   await ensureSignalCli();
 
   const install = await runQuietChild(
