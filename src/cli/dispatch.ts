@@ -18,11 +18,7 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
   // Agent + approval-gated → approval flow. Wired alongside the first
   // approval-requiring command; until then, return a clear error.
   if (ctx.caller !== 'host' && cmd.access === 'approval') {
-    return err(
-      req.id,
-      'approval-pending',
-      'This command requires approval. (Approval flow not yet wired.)',
-    );
+    return err(req.id, 'approval-pending', 'This command requires approval. (Approval flow not yet wired.)');
   }
 
   let parsed: unknown;

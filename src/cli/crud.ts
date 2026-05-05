@@ -99,9 +99,7 @@ function genericGet(def: ResourceDef) {
   return async (args: Record<string, unknown>) => {
     const id = args.id as string;
     if (!id) throw new Error(`${def.name} id is required`);
-    const row = getDb()
-      .prepare(`SELECT ${cols} FROM ${def.table} WHERE ${def.idColumn} = ?`)
-      .get(id);
+    const row = getDb().prepare(`SELECT ${cols} FROM ${def.table} WHERE ${def.idColumn} = ?`).get(id);
     if (!row) throw new Error(`${def.name} not found: ${id}`);
     return row;
   };
@@ -160,7 +158,9 @@ function genericUpdate(def: ResourceDef) {
       }
     }
     if (Object.keys(updates).length === 0) {
-      throw new Error(`nothing to update — provide at least one of: ${updatableCols.map((c) => '--' + c.name.replace(/_/g, '-')).join(', ')}`);
+      throw new Error(
+        `nothing to update — provide at least one of: ${updatableCols.map((c) => '--' + c.name.replace(/_/g, '-')).join(', ')}`,
+      );
     }
 
     const setClause = Object.keys(updates)
@@ -172,9 +172,7 @@ function genericUpdate(def: ResourceDef) {
     if (result.changes === 0) throw new Error(`${def.name} not found: ${id}`);
 
     const cols = visibleColumns(def).join(', ');
-    return getDb()
-      .prepare(`SELECT ${cols} FROM ${def.table} WHERE ${def.idColumn} = ?`)
-      .get(id);
+    return getDb().prepare(`SELECT ${cols} FROM ${def.table} WHERE ${def.idColumn} = ?`).get(id);
   };
 }
 
@@ -182,9 +180,7 @@ function genericDelete(def: ResourceDef) {
   return async (args: Record<string, unknown>) => {
     const id = args.id as string;
     if (!id) throw new Error(`${def.name} id is required`);
-    const result = getDb()
-      .prepare(`DELETE FROM ${def.table} WHERE ${def.idColumn} = ?`)
-      .run(id);
+    const result = getDb().prepare(`DELETE FROM ${def.table} WHERE ${def.idColumn} = ?`).run(id);
     if (result.changes === 0) throw new Error(`${def.name} not found: ${id}`);
     return { deleted: id };
   };

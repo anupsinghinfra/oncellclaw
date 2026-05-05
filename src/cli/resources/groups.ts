@@ -26,7 +26,8 @@ registerResource({
     {
       name: 'agent_provider',
       type: 'string',
-      description: 'LLM provider. Null means the default (claude). Skill-installed providers (e.g. opencode) register via /add-<provider>.',
+      description:
+        'LLM provider. Null means the default (claude). Skill-installed providers (e.g. opencode) register via /add-<provider>.',
       updatable: true,
       default: null,
     },

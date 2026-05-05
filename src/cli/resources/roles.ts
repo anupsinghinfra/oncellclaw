@@ -19,7 +19,8 @@ registerResource({
     {
       name: 'agent_group_id',
       type: 'string',
-      description: 'Null = global (all groups). A specific ID limits the role to that group. Owner must always be null.',
+      description:
+        'Null = global (all groups). A specific ID limits the role to that group. Owner must always be null.',
     },
     { name: 'granted_by', type: 'string', description: 'Who granted this role. Informational.' },
     { name: 'granted_at', type: 'string', description: 'Auto-set.' },

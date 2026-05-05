@@ -29,7 +29,7 @@ registerResource({
     {
       name: 'target_id',
       type: 'string',
-      description: 'The target\'s ID — messaging_groups.id for channels, agent_groups.id for agents.',
+      description: "The target's ID — messaging_groups.id for channels, agent_groups.id for agents.",
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.' },
   ],

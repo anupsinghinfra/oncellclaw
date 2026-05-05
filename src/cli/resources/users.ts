@@ -11,7 +11,8 @@ registerResource({
     {
       name: 'id',
       type: 'string',
-      description: 'Namespaced "channel_type:handle" — e.g. "tg:6037840640", "discord:123456789", "email:user@example.com". Must be provided on create.',
+      description:
+        'Namespaced "channel_type:handle" — e.g. "tg:6037840640", "discord:123456789", "email:user@example.com". Must be provided on create.',
       required: true,
     },
     {
@@ -24,7 +25,8 @@ registerResource({
     {
       name: 'display_name',
       type: 'string',
-      description: 'Human-readable name. Shown in approval cards and logs. Often auto-populated from the channel adapter.',
+      description:
+        'Human-readable name. Shown in approval cards and logs. Often auto-populated from the channel adapter.',
       updatable: true,
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
