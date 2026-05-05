@@ -14,8 +14,8 @@
  *                          "Terminal Agent".
  *   NANOCLAW_SKIP          comma-separated step names to skip
  *                          (environment|container|onecli|auth|mounts|
- *                           service|cli-agent|timezone|channel|verify|
- *                           first-chat)
+ *                           service|cli-agent|timezone|channel|
+ *                           verify|first-chat)
  *
  * Timezone is auto-detected after the CLI agent step. UTC resolves are
  * confirmed with the user, and free-text replies fall through to a
@@ -60,7 +60,7 @@ import { isValidTimezone } from '../src/timezone.js';
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
 
-type ChannelChoice = 'telegram' | 'discord' | 'whatsapp' | 'signal' | 'teams' | 'slack' | 'imessage' | 'skip';
+type ChannelChoice = 'telegram' | 'discord' | 'whatsapp' | 'signal' | 'teams' | 'slack' | 'imessage' | 'other' | 'skip';
 
 async function main(): Promise<void> {
   // Make sure ~/.local/bin is on PATH for every child process we spawn.
@@ -434,10 +434,14 @@ async function main(): Promise<void> {
     await runTimezoneStep();
   }
 
+  // v1 → v2 migration is handled by `bash migrate-v2.sh`, not the setup flow.
+  // Users migrating from v1 run that script before (or instead of) setup.
+
   let channelChoice: ChannelChoice = 'skip';
+
   if (!skip.has('channel')) {
     channelChoice = await askChannelChoice();
-    if (channelChoice !== 'skip') {
+    if (channelChoice !== 'skip' && channelChoice !== 'other') {
       await resolveDisplayName();
     }
     if (channelChoice === 'telegram') {
@@ -454,6 +458,8 @@ async function main(): Promise<void> {
       await runSlackChannel(displayName!);
     } else if (channelChoice === 'imessage') {
       await runIMessageChannel(displayName!);
+    } else if (channelChoice === 'other') {
+      await askOtherChannelName();
     } else {
       p.log.info(
         brandBody(
@@ -1072,6 +1078,7 @@ async function askChannelChoice(): Promise<ChannelChoice> {
           hint: 'needs public URL',
         },
         { value: 'teams', label: 'Yes, connect Microsoft Teams', hint: 'complex setup' },
+        { value: 'other', label: 'Other…', hint: 'install via /add-<name> after setup' },
         { value: 'skip', label: 'Skip for now', hint: "I'll just use the terminal" },
       ],
     }),
@@ -1079,6 +1086,26 @@ async function askChannelChoice(): Promise<ChannelChoice> {
   setupLog.userInput('channel_choice', String(choice));
   phEmit('channel_chosen', { channel: String(choice) });
   return choice;
+}
+
+async function askOtherChannelName(): Promise<void> {
+  const answer = ensureAnswer(
+    await p.text({
+      message: 'Which channel would you like to install?',
+      placeholder: 'e.g. matrix, github, linear, webex',
+    }),
+  );
+  const name = (answer as string).trim().toLowerCase().replace(/^\/?(add-)?/, '');
+  setupLog.userInput('other_channel', name);
+  phEmit('channel_other_named', { channel: name });
+  p.log.info(
+    brandBody(
+      wrapForGutter(
+        `No bash installer for ${k.bold(name)} — open Claude Code after setup and run ${k.bold(`/add-${name}`)} to install it.`,
+        4,
+      ),
+    ),
+  );
 }
 
 // ─── interactive / env helpers ─────────────────────────────────────────
