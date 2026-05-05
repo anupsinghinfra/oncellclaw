@@ -27,34 +27,29 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
 let _inbound: Database | null = null;
 let _outbound: Database | null = null;
 let _heartbeatPath: string = DEFAULT_HEARTBEAT_PATH;
-// True when initTestSessionDb() set _inbound to an in-memory DB. Used by
-// openInboundDb() so tests don't try to open the missing /workspace path.
-let _inboundIsTest = false;
-// Saved real close() for the in-memory inbound singleton. We no-op the
-// public .close() during tests so caller try/finally doesn't tear down
-// the shared DB; closeSessionDb() invokes this to do the real teardown.
-let _inboundOriginalClose: (() => void) | null = null;
+let _testMode = false;
 
 /**
- * Avoid all cached db reads; open inbound.db read-only with mmap and page cache disabled. 
- * 
+ * Avoid all cached db reads; open inbound.db read-only with mmap and page cache disabled.
+ *
  * Use this (not getInboundDb) for readers that need to see host-written rows
  * promptly — e.g. messages_in polling. Caller must .close() the returned
  * connection (try/finally).
  *
  * Needed for mounts where host writes don't reliably invalidate
  * SQLite's caches: virtiofs (Colima, Lima, Podman Machine, Apple
- * Container), NFS. 
- * 
+ * Container), NFS.
+ *
  * Cost is microseconds per query, so safe for universal use.
  */
 export function openInboundDb(): Database {
-  // In test mode the inbound DB is an in-memory singleton — there is no
-  // file at DEFAULT_INBOUND_PATH. Return the singleton directly; its
-  // .close() was no-op'd in initTestSessionDb so caller try/finally
-  // cleanup doesn't tear down the shared DB.
-  if (_inboundIsTest && _inbound) return _inbound;
-
+  // In test mode return a thin wrapper over the in-memory singleton.
+  // Callers do try/finally { db.close() } — the wrapper no-ops close()
+  // so the singleton survives for the rest of the test.
+  if (_testMode && _inbound) {
+    const db = _inbound;
+    return { prepare: (sql: string) => db.prepare(sql), exec: (sql: string) => db.exec(sql), close: () => {} } as unknown as Database;
+  }
   const db = new Database(DEFAULT_INBOUND_PATH, { readonly: true });
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA mmap_size = 0');
@@ -183,13 +178,8 @@ export function clearStaleProcessingAcks(): void {
 
 /** For tests — creates in-memory DBs with the session schemas. */
 export function initTestSessionDb(): { inbound: Database; outbound: Database } {
+  _testMode = true;
   _inbound = new Database(':memory:');
-  _inboundIsTest = true;
-  // No-op .close() so callers using openInboundDb()'s try/finally pattern
-  // don't tear down our shared singleton. closeSessionDb() does the real
-  // teardown via the saved original.
-  _inboundOriginalClose = _inbound.close.bind(_inbound);
-  _inbound.close = () => {};
   _inbound.exec('PRAGMA foreign_keys = ON');
   _inbound.exec(`
     CREATE TABLE messages_in (
@@ -263,14 +253,9 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
 }
 
 export function closeSessionDb(): void {
-  if (_inboundOriginalClose) {
-    _inboundOriginalClose();
-    _inboundOriginalClose = null;
-  } else {
-    _inbound?.close();
-  }
+  _inbound?.close();
   _inbound = null;
-  _inboundIsTest = false;
+  _testMode = false;
   _outbound?.close();
   _outbound = null;
 }
