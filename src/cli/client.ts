@@ -5,12 +5,15 @@
  * formats the response, exits non-zero on error.
  *
  * Usage:
- *   nc <command> [--key value ...] [--json]
+ *   nc <resource> <verb> [target] [--key value ...] [--json]
  *
  * Examples:
- *   nc list-groups
- *   nc list groups            # space-separated form is auto-joined
- *   nc list-groups --json
+ *   nc groups list
+ *   nc groups get abc123
+ *   nc groups create --name foo --folder bar
+ *   nc groups update abc123 --name baz
+ *   nc help
+ *   nc groups help
  */
 import { randomUUID } from 'crypto';
 
@@ -44,9 +47,6 @@ async function main(): Promise<void> {
 }
 
 function pickTransport(): Transport {
-  // Container DB transport will land alongside the agent-runner change.
-  // For now: host-only — the only callers are a shell user or Claude in
-  // the project.
   return new SocketTransport();
 }
 
@@ -85,10 +85,20 @@ function parseArgv(argv: string[]): {
     process.exit(2);
   }
 
-  // Allow `nc list groups` as well as `nc list-groups`. Server rejects
-  // unknowns, so the naive join is safe — at worst the user gets an
-  // unknown-command error.
-  const command = positional.length >= 2 ? `${positional[0]}-${positional[1]}` : positional[0];
+  // Single word: `nc help`
+  // Two words: `nc groups list`, `nc groups help`
+  // Three words: `nc groups get abc123`
+  let command: string;
+  if (positional.length === 1) {
+    command = positional[0];
+  } else {
+    command = `${positional[0]}-${positional[1]}`;
+  }
+
+  // Third positional is the target ID
+  if (positional.length >= 3) {
+    args.id = positional[2];
+  }
 
   return { command, args, json };
 }
@@ -96,12 +106,9 @@ function parseArgv(argv: string[]): {
 function printUsage(): void {
   process.stdout.write(
     [
-      'Usage: nc <command> [--key value ...] [--json]',
+      'Usage: nc <resource> <verb> [target] [--key value ...] [--json]',
       '',
-      'Commands:',
-      '  list-groups          List all agent groups.',
-      '',
-      'Run `nc <command> --json` for machine-readable output.',
+      'Run `nc help` to list available resources and commands.',
       '',
     ].join('\n'),
   );

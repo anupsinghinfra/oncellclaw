@@ -1,10 +1,10 @@
 /**
  * Transport-agnostic dispatcher. Both the socket server (host caller) and
- * — once it lands — the per-session DB poller (container caller) call
- * dispatch() with the same frame and a transport-supplied CallerContext.
+ * the per-session DB poller (container caller) call dispatch() with the
+ * same frame and a transport-supplied CallerContext.
  *
  * Approval gating for risky calls from the container is the only branch
- * that differs by caller. Host callers and `safe` commands run inline.
+ * that differs by caller. Host callers and `open` commands run inline.
  */
 import type { CallerContext, ErrorCode, RequestFrame, ResponseFrame } from './frame.js';
 import { lookup } from './registry.js';
@@ -15,13 +15,13 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
     return err(req.id, 'unknown-command', `no command "${req.command}"`);
   }
 
-  // Agent + risky → approval flow. Wired alongside the first risky command;
-  // until then, return a clear pending-shaped error so the contract is visible.
-  if (ctx.caller !== 'host' && cmd.riskClass !== 'safe') {
+  // Agent + approval-gated → approval flow. Wired alongside the first
+  // approval-requiring command; until then, return a clear error.
+  if (ctx.caller !== 'host' && cmd.access === 'approval') {
     return err(
       req.id,
       'approval-pending',
-      'Approval flow not yet wired. (Will be added when the first risky command lands.)',
+      'This command requires approval. (Approval flow not yet wired.)',
     );
   }
 

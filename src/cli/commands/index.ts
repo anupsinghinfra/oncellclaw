@@ -1,4 +1,10 @@
-// Side-effect imports — each command file calls register() at top level.
-// Imported by src/index.ts on host startup so the registry is populated
-// before the CLI server accepts connections.
-import './list-groups.js';
+/**
+ * Command barrel — populates the registry before the CLI server starts.
+ *
+ * Resource definitions register their CRUD commands on import.
+ * Help commands are registered after resources are loaded.
+ */
+import '../resources/index.js';
+import { registerResourceHelpCommands } from './help.js';
+
+registerResourceHelpCommands();

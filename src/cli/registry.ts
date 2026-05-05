@@ -7,12 +7,14 @@
  */
 import type { CallerContext } from './frame.js';
 
-export type RiskClass = 'safe' | 'requires-admin' | 'requires-owner';
+export type Access = 'open' | 'approval' | 'hidden';
 
 export type CommandDef<TArgs = unknown, TData = unknown> = {
   name: string;
   description: string;
-  riskClass: RiskClass;
+  access: Access;
+  /** Resource this command belongs to (for help grouping). */
+  resource?: string;
   /** Validates `frame.args` and produces the typed handler input. Throws on invalid. */
   parseArgs: (raw: Record<string, unknown>) => TArgs;
   handler: (args: TArgs, ctx: CallerContext) => Promise<TData>;

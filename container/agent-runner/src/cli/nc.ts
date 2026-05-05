@@ -168,6 +168,12 @@ function parseArgv(argv: string[]): {
   }
 
   const command = positional.length >= 2 ? `${positional[0]}-${positional[1]}` : positional[0];
+
+  // Third positional is the target ID
+  if (positional.length >= 3) {
+    args.id = positional[2];
+  }
+
   return { command, args, json };
 }
 
