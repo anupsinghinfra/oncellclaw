@@ -40,7 +40,8 @@ registerResource({
     {
       name: 'sender_scope',
       type: 'string',
-      description: '"all" — any sender (subject to unknown_sender_policy). "known" — only users with a role or membership in this agent group.',
+      description:
+        '"all" — any sender (subject to unknown_sender_policy). "known" — only users with a role or membership in this agent group.',
       enum: ['all', 'known'],
       default: 'all',
       updatable: true,
@@ -58,7 +59,7 @@ registerResource({
       name: 'session_mode',
       type: 'string',
       description:
-        '"shared" — one session per (agent, messaging group). "per-thread" — separate session per thread/topic. "agent-shared" — one session across all messaging groups wired to this agent.',
+        '"shared" — one session per (agent, messaging group). "per-thread" — separate session per thread/topic. "agent-shared" — one session across all messaging groups wired to this agent. Note: threaded adapters in group chats force per-thread regardless of this setting.',
       enum: ['shared', 'per-thread', 'agent-shared'],
       default: 'shared',
       updatable: true,

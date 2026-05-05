@@ -12,7 +12,8 @@ registerResource({
     {
       name: 'channel_type',
       type: 'string',
-      description: 'Channel adapter type — matches the adapter registered by /add-<channel> (e.g. telegram, discord, slack, whatsapp).',
+      description:
+        'Channel adapter type — matches the adapter registered by /add-<channel> (e.g. telegram, discord, slack, whatsapp).',
       required: true,
     },
     {
@@ -42,6 +43,13 @@ registerResource({
         'What happens when an unrecognized sender posts. "strict" drops silently. "request_approval" sends an approval card to an admin. "public" allows anyone.',
       enum: ['strict', 'request_approval', 'public'],
       default: 'strict',
+      updatable: true,
+    },
+    {
+      name: 'denied_at',
+      type: 'string',
+      description:
+        'Set when the owner explicitly denies registering this channel. While set, the router drops all messages silently without re-escalating. Cleared by any explicit wiring mutation.',
       updatable: true,
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },

@@ -34,7 +34,8 @@ registerResource({
     {
       name: 'container_status',
       type: 'string',
-      description: '"running" — container alive. "idle" — exited, restarts on next message. "stopped" — needs explicit wake.',
+      description:
+        '"running" — container alive and polling. "stopped" — container exited; the sweep will restart it automatically when due messages arrive. "idle" — reserved, currently unused.',
       enum: ['running', 'idle', 'stopped'],
     },
     { name: 'last_active', type: 'string', description: 'Last message or heartbeat. Used for stale detection.' },
