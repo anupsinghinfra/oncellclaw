@@ -249,6 +249,51 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
+  it('internal tags between message blocks are stripped from scratchpad', async () => {
+    insertMessage('m1', { sender: 'Alice', text: 'hi' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new MockProvider(
+      {},
+      () => '<internal>thinking about this...</internal><message to="discord-test">answer</message><internal>done thinking</internal>',
+    );
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('answer');
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('handles mixed task + chat batch with correct origin metadata', async () => {
+    // Seed destination for routing lookup
+    insertMessage('m-chat', { sender: 'Alice', text: 'check this' }, { platformId: 'chan-1', channelType: 'discord' });
+    // Task with same routing — simulates a scheduled task in a channel session
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, content)
+         VALUES ('t-task', 'task', datetime('now'), 'pending', 'chan-1', 'discord', ?)`,
+      )
+      .run(JSON.stringify({ prompt: 'daily check' }));
+
+    const provider = new MockProvider({}, () => '<message to="discord-test">done</message>');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(out[0].platform_id).toBe('chan-1');
+
+    await loopPromise.catch(() => {});
+  });
+
   it('should inject destination reminder after a compacted event', async () => {
     // Two destinations — required for the reminder to fire (single-destination
     // groups have a fallback path that works without <message to="…"> wrapping).
