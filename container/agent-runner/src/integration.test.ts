@@ -112,6 +112,125 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
+  it('bare text produces no outbound messages (scratchpad only)', async () => {
+    insertMessage('m1', { sender: 'Alice', text: 'hello' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    // Agent responds with bare text — no <message to="..."> wrapping
+    const provider = new MockProvider({}, () => 'I am thinking about this...');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    // Wait long enough for the poll loop to process
+    await sleep(1000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(0);
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('unknown destination is dropped, valid destination is sent', async () => {
+    insertMessage('m1', { sender: 'Alice', text: 'hi' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new MockProvider(
+      {},
+      () => '<message to="nonexistent">dropped</message><message to="discord-test">delivered</message>',
+    );
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    // Only the valid destination should produce output
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('delivered');
+    expect(out[0].platform_id).toBe('chan-1');
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('multiple <message> blocks each produce an outbound message', async () => {
+    getInboundDb()
+      .prepare(
+        `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+         VALUES ('slack-test', 'Slack Test', 'channel', 'slack', 'chan-2', NULL)`,
+      )
+      .run();
+
+    insertMessage('m1', { sender: 'Alice', text: 'broadcast' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new MockProvider(
+      {},
+      () => '<message to="discord-test">for discord</message><message to="slack-test">for slack</message>',
+    );
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length >= 2, 2000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(2);
+    const discord = out.find((m) => m.platform_id === 'chan-1');
+    const slack = out.find((m) => m.platform_id === 'chan-2');
+    expect(discord).toBeDefined();
+    expect(JSON.parse(discord!.content).text).toBe('for discord');
+    expect(slack).toBeDefined();
+    expect(JSON.parse(slack!.content).text).toBe('for slack');
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('sends null thread_id when no prior inbound from destination', async () => {
+    // Seed a second destination that has NO inbound messages
+    getInboundDb()
+      .prepare(
+        `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+         VALUES ('slack-new', 'Slack New', 'channel', 'slack', 'chan-new', NULL)`,
+      )
+      .run();
+
+    // Only insert a message from discord — slack-new has never sent anything
+    insertMessage('m1', { sender: 'Alice', text: 'tell slack' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'discord-thread' });
+
+    const provider = new MockProvider({}, () => '<message to="slack-new">hello slack</message>');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(out[0].platform_id).toBe('chan-new');
+    expect(out[0].thread_id).toBeNull();
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('resolves most recent thread_id when destination has multiple inbound messages', async () => {
+    // Two messages from same destination, different threads
+    insertMessage('m-old', { sender: 'Alice', text: 'old' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-old' });
+    insertMessage('m-new', { sender: 'Alice', text: 'new' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-new' });
+
+    const provider = new MockProvider({}, () => '<message to="discord-test">reply</message>');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(out[0].thread_id).toBe('thread-new');
+    expect(out[0].in_reply_to).toBe('m-new');
+
+    await loopPromise.catch(() => {});
+  });
+
   it('should process messages arriving after loop starts', async () => {
     const provider = new MockProvider({}, () => '<message to="discord-test">Processed</message>');
     const controller = new AbortController();

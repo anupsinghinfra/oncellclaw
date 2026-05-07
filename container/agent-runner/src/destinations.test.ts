@@ -33,14 +33,14 @@ describe('buildSystemPromptAddendum — multi-destination routing guidance', () 
     expect(prompt).toContain('`whatsapp-mg-17780`');
   });
 
-  it('omits the default-routing nudge for a single destination (short-circuited)', () => {
+  it('requires explicit wrapping even for a single destination', () => {
     seedDestination('casa', 'Casa', 'whatsapp', 'group-1@g.us');
 
     const prompt = buildSystemPromptAddendum('Casa');
 
-    // Single-destination path uses the simpler "no special wrapping needed" copy
-    expect(prompt).toContain('no special wrapping needed');
-    expect(prompt).not.toContain('Default routing');
+    expect(prompt).toContain('Every response must be wrapped');
+    expect(prompt).toContain('<message to="name">');
+    expect(prompt).toContain('`casa`');
   });
 
   it('handles the no-destination case without crashing', () => {
@@ -48,5 +48,16 @@ describe('buildSystemPromptAddendum — multi-destination routing guidance', () 
 
     expect(prompt).toContain('no configured destinations');
     expect(prompt).not.toContain('Default routing');
+  });
+
+  it('includes default-routing and wrapping instructions for single destination', () => {
+    seedDestination('casa', 'Casa', 'whatsapp', 'group-1@g.us');
+
+    const prompt = buildSystemPromptAddendum('Casa');
+
+    expect(prompt).toContain('Every response must be wrapped');
+    expect(prompt).toContain('<message to="name">');
+    expect(prompt).toContain('Default routing');
+    expect(prompt).toContain('`casa`');
   });
 });
