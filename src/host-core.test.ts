@@ -969,12 +969,10 @@ describe('agent-to-agent routing', () => {
     expect(JSON.parse(rows[0].content).text).toBe('research this');
   });
 
-  it('BUG: A2A return path resolves to wrong session when multiple channel sessions exist (#2332)', async () => {
+  it('A2A return path routes to originating session, not newest (#2332)', async () => {
     // PA has Slack session, then gets wired to Discord (newer session).
-    // Researcher responds to PA. routeAgentMessage calls
-    // resolveSession('ag-pa', null, null, 'agent-shared') which calls
-    // findSessionByAgentGroup — picks newest (Discord) instead of the
-    // Slack session that originated the A2A call.
+    // Researcher responds to PA. With the return-path fix, the reply
+    // routes back to the Slack session (originator) not Discord (newest).
     const { routeAgentMessage } = await import('./modules/agent-to-agent/agent-route.js');
 
     const { session: paSlackSession } = resolveSession('ag-pa', 'mg-slack', null, 'shared');
@@ -1013,9 +1011,9 @@ describe('agent-to-agent routing', () => {
     const discordA2a = discordDb.prepare("SELECT * FROM messages_in WHERE channel_type = 'agent'").all();
     discordDb.close();
 
-    // Document the bug: response lands in Discord (newest) not Slack (origin)
-    expect(discordA2a).toHaveLength(1); // BUG: should be 0
-    expect(slackA2a).toHaveLength(0);   // BUG: should be 1
+    // Fixed: response lands in Slack (origin) not Discord (newest)
+    expect(slackA2a).toHaveLength(1);
+    expect(discordA2a).toHaveLength(0);
   });
 
   it('BUG: A2A-only session gets null session_routing (#2332)', async () => {
