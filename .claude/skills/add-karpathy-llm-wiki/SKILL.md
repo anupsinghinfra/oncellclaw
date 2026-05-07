@@ -71,7 +71,7 @@ AskUserQuestion: "Want periodic wiki health checks?"
 2. **Monthly**
 3. **Skip** — lint manually
 
-If yes, ask the agent to schedule the lint task using the `schedule_task` MCP tool in conversation. No direct DB insertion needed.
+If yes, ask the agent to schedule the lint task using the `schedule_task` MCP tool in conversation.
 
 ## Step 6: Restart
 
