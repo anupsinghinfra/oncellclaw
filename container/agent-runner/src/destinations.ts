@@ -102,28 +102,20 @@ function buildDestinationsSection(): string {
     ].join('\n');
   }
 
-  // Single-destination shortcut: the agent just writes its response normally.
+  const lines = ['## Sending messages', ''];
   if (all.length === 1) {
     const d = all[0];
     const label = d.displayName && d.displayName !== d.name ? ` (${d.displayName})` : '';
-    return [
-      '## Sending messages',
-      '',
-      `Your messages are delivered to \`${d.name}\`${label}. Just write your response directly — no special wrapping needed.`,
-      '',
-      'To mark something as scratchpad (logged but not sent), wrap it in `<internal>...</internal>`.',
-      '',
-      'To send a message mid-response (e.g., an acknowledgment before a long task), call the `send_message` MCP tool.',
-    ].join('\n');
-  }
-
-  const lines = ['## Sending messages', '', 'You can send messages to the following destinations:', ''];
-  for (const d of all) {
-    const label = d.displayName && d.displayName !== d.name ? ` (${d.displayName})` : '';
-    lines.push(`- \`${d.name}\`${label}`);
+    lines.push(`Your destination is \`${d.name}\`${label}.`);
+  } else {
+    lines.push('You can send messages to the following destinations:', '');
+    for (const d of all) {
+      const label = d.displayName && d.displayName !== d.name ? ` (${d.displayName})` : '';
+      lines.push(`- \`${d.name}\`${label}`);
+    }
   }
   lines.push('');
-  lines.push('To send a message, wrap it in a `<message to="name">...</message>` block.');
+  lines.push('**Every response must be wrapped** in a `<message to="name">...</message>` block.');
   lines.push('You can include multiple `<message>` blocks in one response to send to multiple destinations.');
   lines.push('Text outside of `<message>` blocks is scratchpad — logged but not sent anywhere.');
   lines.push('Use `<internal>...</internal>` to make scratchpad intent explicit.');
