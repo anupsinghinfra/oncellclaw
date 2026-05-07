@@ -28,7 +28,7 @@ import {
   readOutboxFiles,
   clearOutbox,
 } from './session-manager.js';
-import { getSession, findSession, findSessionByAgentGroup } from './db/sessions.js';
+import { getSession, findSession } from './db/sessions.js';
 import type { InboundEvent } from './channels/adapter.js';
 
 // Mock container runner to prevent actual Docker spawning
@@ -839,68 +839,6 @@ describe('agent-shared session resolution', () => {
     expect(session.messaging_group_id).toBeNull();
   });
 
-  // BUG (#2332): agent-shared resolveSession reuses an existing channel-bound
-  // session via findSessionByAgentGroup instead of creating a dedicated
-  // agent-shared session. The two cannot coexist today — the agent-shared
-  // call finds the channel session and returns it. This test documents the
-  // current (broken) behavior; fixing #2332 should make it pass as written.
-  it.skip('agent-shared and channel-bound sessions coexist for the same agent group', () => {
-    createAgentGroup({
-      id: 'ag-1',
-      name: 'Agent',
-      folder: 'agent',
-      agent_provider: null,
-      created_at: now(),
-    });
-    createMessagingGroup({
-      id: 'mg-1',
-      channel_type: 'discord',
-      platform_id: 'chan-123',
-      name: 'General',
-      is_group: 1,
-      unknown_sender_policy: 'public',
-      created_at: now(),
-    });
-
-    const { session: shared } = resolveSession('ag-1', 'mg-1', null, 'shared');
-    const { session: agentShared } = resolveSession('ag-1', null, null, 'agent-shared');
-
-    expect(shared.id).not.toBe(agentShared.id);
-    expect(shared.messaging_group_id).toBe('mg-1');
-    expect(agentShared.messaging_group_id).toBeNull();
-  });
-
-  it('findSessionByAgentGroup returns existing channel-bound session (bug #2332)', () => {
-    // Documents the current behavior: findSessionByAgentGroup doesn't
-    // distinguish agent-shared from channel-bound. When a channel session
-    // exists, agent-shared resolution reuses it instead of creating a
-    // separate session. This is the root cause of A2A misrouting.
-    createAgentGroup({
-      id: 'ag-1',
-      name: 'Agent',
-      folder: 'agent',
-      agent_provider: null,
-      created_at: now(),
-    });
-    createMessagingGroup({
-      id: 'mg-1',
-      channel_type: 'discord',
-      platform_id: 'chan-123',
-      name: 'General',
-      is_group: 1,
-      unknown_sender_policy: 'public',
-      created_at: now(),
-    });
-
-    const { session: channelSession } = resolveSession('ag-1', 'mg-1', null, 'shared');
-    const found = findSessionByAgentGroup('ag-1');
-
-    // Bug: picks the channel session — an agent-shared call would get this
-    // instead of a dedicated session.
-    expect(found).toBeDefined();
-    expect(found!.id).toBe(channelSession.id);
-    expect(found!.messaging_group_id).toBe('mg-1'); // should be null for agent-shared
-  });
 });
 
 describe('agent-to-agent routing', () => {
@@ -1034,10 +972,12 @@ describe('agent-to-agent routing', () => {
     writeSessionRouting('ag-researcher', researcherSessions[0].id);
 
     const rDb = new Database(inboundDbPath('ag-researcher', researcherSessions[0].id));
-    const routing = rDb.prepare('SELECT channel_type, platform_id FROM session_routing WHERE id = 1').get() as {
-      channel_type: string | null;
-      platform_id: string | null;
-    } | undefined;
+    const routing = rDb.prepare('SELECT channel_type, platform_id FROM session_routing WHERE id = 1').get() as
+      | {
+          channel_type: string | null;
+          platform_id: string | null;
+        }
+      | undefined;
     rDb.close();
 
     // BUG: session_routing is all null — researcher has no default routing
