@@ -1,7 +1,7 @@
-import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
+import { findByName, type DestinationEntry } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
-import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
+import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import {
   clearContinuation,
   migrateLegacyContinuation,
@@ -396,14 +396,10 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
 /**
  * Parse the agent's final text for <message to="name">...</message> blocks
  * and dispatch each one to its resolved destination. Text outside of blocks
- * (including <internal>...</internal>) is normally scratchpad — logged but
- * not sent.
+ * (including <internal>...</internal>) is scratchpad — logged but not sent.
  *
- * Single-destination shortcut: if the agent has exactly one configured
- * destination AND the output contains zero <message> blocks, the entire
- * cleaned text (with <internal> tags stripped) is sent to that destination.
- * This preserves the simple case of one user on one channel — the agent
- * doesn't need to know about wrapping syntax at all.
+ * The agent must always wrap output in <message to="name">...</message>
+ * blocks, even with a single destination. Bare text is scratchpad only.
  */
 function dispatchResultText(text: string, routing: RoutingContext): void {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
@@ -436,30 +432,6 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
 
   const scratchpad = stripInternalTags(scratchpadParts.join(''));
 
-  // Single-destination shortcut: the agent wrote plain text — send to
-  // the session's originating channel (from session_routing) if available,
-  // otherwise fall back to the single destination.
-  if (sent === 0 && scratchpad) {
-    if (routing.channelType && routing.platformId) {
-      // Reply to the channel/thread the message came from
-      writeMessageOut({
-        id: generateId(),
-        in_reply_to: routing.inReplyTo,
-        kind: 'chat',
-        platform_id: routing.platformId,
-        channel_type: routing.channelType,
-        thread_id: routing.threadId,
-        content: JSON.stringify({ text: scratchpad }),
-      });
-      return;
-    }
-    const all = getAllDestinations();
-    if (all.length === 1) {
-      sendToDestination(all[0], scratchpad, routing);
-      return;
-    }
-  }
-
   if (scratchpad) {
     log(`[scratchpad] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`);
   }
@@ -472,18 +444,44 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
 function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {
   const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
   const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
-  // Inherit thread_id from the inbound routing context so replies land in the
-  // same thread the conversation is in. For non-threaded adapters the router
-  // strips thread_id at ingest, so this will already be null.
+  // Resolve thread_id per-destination from the most recent inbound message
+  // that came from this same channel+platform. In agent-shared sessions,
+  // different destinations have different thread contexts — using a single
+  // routing.threadId would stamp one channel's thread onto another.
+  const destRouting = resolveDestinationThread(channelType, platformId);
   writeMessageOut({
     id: generateId(),
-    in_reply_to: routing.inReplyTo,
+    in_reply_to: destRouting?.inReplyTo ?? routing.inReplyTo,
     kind: 'chat',
     platform_id: platformId,
     channel_type: channelType,
-    thread_id: routing.threadId,
+    thread_id: destRouting?.threadId ?? null,
     content: JSON.stringify({ text: body }),
   });
+}
+
+/**
+ * Find the thread_id and message id from the most recent inbound message
+ * matching the given channel+platform. Returns null if no match found.
+ */
+function resolveDestinationThread(
+  channelType: string,
+  platformId: string,
+): { threadId: string | null; inReplyTo: string | null } | null {
+  try {
+    const db = getInboundDb();
+    const row = db
+      .prepare(
+        `SELECT thread_id, id FROM messages_in
+         WHERE channel_type = ? AND platform_id = ?
+         ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(channelType, platformId) as { thread_id: string | null; id: string } | undefined;
+    if (row) return { threadId: row.thread_id, inReplyTo: row.id };
+  } catch (err) {
+    log(`resolveDestinationThread error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {
