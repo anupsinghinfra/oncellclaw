@@ -92,7 +92,7 @@ grep "Channel adapter started" logs/nanoclaw.log | tail -10
 3. If the remaining service unit is missing `EnvironmentFile`, add it:
    ```bash
    # Edit the service unit — add this line under [Service]:
-   # EnvironmentFile=/home/iraa/nanoclaw/.env
+   # EnvironmentFile=/home/[user]/nanoclaw/.env
    systemctl --user daemon-reload
    systemctl --user restart nanoclaw-v2-<id>.service
    ```
