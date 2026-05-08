@@ -1,5 +1,5 @@
 /**
- * SocketTransport — client side. Used by the `nc` binary when running on
+ * SocketTransport — client side. Used by the `ncl` binary when running on
  * the host (i.e. invoked from a shell or by Claude in the project).
  *
  * Wire format: line-delimited JSON. One request per connection; the server
@@ -12,7 +12,7 @@ import { DATA_DIR } from '../config.js';
 import type { RequestFrame, ResponseFrame } from './frame.js';
 import type { Transport } from './transport.js';
 
-export const DEFAULT_SOCKET_PATH = path.join(DATA_DIR, 'nc.sock');
+export const DEFAULT_SOCKET_PATH = path.join(DATA_DIR, 'ncl.sock');
 
 export class SocketTransport implements Transport {
   constructor(private readonly socketPath: string = DEFAULT_SOCKET_PATH) {}

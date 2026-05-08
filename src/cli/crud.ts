@@ -3,7 +3,7 @@
  *
  * Takes a declarative resource definition (table, columns, access levels)
  * and auto-registers list/get/create/update/delete commands in the CLI
- * registry. Column metadata doubles as documentation — `nc <resource> help`
+ * registry. Column metadata doubles as documentation — `ncl <resource> help`
  * is generated from the same definitions.
  */
 import { randomUUID } from 'crypto';

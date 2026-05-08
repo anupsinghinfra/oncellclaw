@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
-# nc — NanoClaw CLI launcher.
+# ncl — NanoClaw CLI launcher.
 #
 # Resolves the project root from this script's location, cd's there so the
 # host-resolved DATA_DIR matches the running host, and execs the TS entry
-# via tsx. Symlink this file into a directory on your PATH (or alias `nc`
+# via tsx. Symlink this file into a directory on your PATH (or alias `ncl`
 # to its full path) to invoke from anywhere:
 #
-#   ln -s "$(pwd)/bin/nc" /usr/local/bin/nc
+#   ln -s "$(pwd)/bin/ncl" /usr/local/bin/ncl
 #   # or
-#   alias nc="$(pwd)/bin/nc"
+#   alias ncl="$(pwd)/bin/ncl"
 
 set -euo pipefail
 

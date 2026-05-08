@@ -1,19 +1,19 @@
 /**
- * `nc` binary entry point.
+ * `ncl` binary entry point.
  *
  * Parses argv, builds a request frame, sends it via the picked transport,
  * formats the response, exits non-zero on error.
  *
  * Usage:
- *   nc <resource> <verb> [target] [--key value ...] [--json]
+ *   ncl <resource> <verb> [target] [--key value ...] [--json]
  *
  * Examples:
- *   nc groups list
- *   nc groups get abc123
- *   nc groups create --name foo --folder bar
- *   nc groups update abc123 --name baz
- *   nc help
- *   nc groups help
+ *   ncl groups list
+ *   ncl groups get abc123
+ *   ncl groups create --name foo --folder bar
+ *   ncl groups update abc123 --name baz
+ *   ncl help
+ *   ncl groups help
  */
 import { randomUUID } from 'crypto';
 
@@ -80,14 +80,14 @@ function parseArgv(argv: string[]): {
   }
 
   if (positional.length === 0) {
-    process.stderr.write('nc: missing command\n');
+    process.stderr.write('ncl: missing command\n');
     printUsage();
     process.exit(2);
   }
 
-  // Single word: `nc help`
-  // Two words: `nc groups list`, `nc groups help`
-  // Three words: `nc groups get abc123`
+  // Single word: `ncl help`
+  // Two words: `ncl groups list`, `ncl groups help`
+  // Three words: `ncl groups get abc123`
   let command: string;
   if (positional.length === 1) {
     command = positional[0];
@@ -106,9 +106,9 @@ function parseArgv(argv: string[]): {
 function printUsage(): void {
   process.stdout.write(
     [
-      'Usage: nc <resource> <verb> [target] [--key value ...] [--json]',
+      'Usage: ncl <resource> <verb> [target] [--key value ...] [--json]',
       '',
-      'Run `nc help` to list available resources and commands.',
+      'Run `ncl help` to list available resources and commands.',
       '',
     ].join('\n'),
   );
@@ -118,7 +118,7 @@ function formatTransportError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (msg.includes('ENOENT') || msg.includes('ECONNREFUSED')) {
     return [
-      `nc: cannot reach NanoClaw host (${msg}).`,
+      `ncl: cannot reach NanoClaw host (${msg}).`,
       `Is the host running? Start it with: pnpm run dev`,
       `Or, if installed as a service:`,
       `  macOS:  launchctl kickstart -k gui/$(id -u)/com.nanoclaw`,
@@ -126,10 +126,10 @@ function formatTransportError(e: unknown): string {
       ``,
     ].join('\n');
   }
-  return `nc: transport error: ${msg}\n`;
+  return `ncl: transport error: ${msg}\n`;
 }
 
 main().catch((err) => {
-  process.stderr.write(`nc: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.stderr.write(`ncl: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(2);
 });

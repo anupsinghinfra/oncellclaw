@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * nc — NanoClaw CLI client (container edition).
+ * ncl — NanoClaw CLI client (container edition).
  *
- * Same interface as the host-side `bin/nc`. Detects that it's inside a
+ * Same interface as the host-side `bin/ncl`. Detects that it's inside a
  * container (the session DBs exist at /workspace/) and uses a DB transport
  * instead of the Unix socket transport.
  *
@@ -162,7 +162,7 @@ function parseArgv(argv: string[]): {
   }
 
   if (positional.length === 0) {
-    process.stderr.write('nc: missing command\n');
+    process.stderr.write('ncl: missing command\n');
     printUsage();
     process.exit(2);
   }
@@ -179,7 +179,7 @@ function parseArgv(argv: string[]): {
 
 function printUsage(): void {
   process.stdout.write(
-    ['Usage: nc <command> [--key value ...] [--json]', '', 'Run `nc help` to list available commands.', ''].join('\n'),
+    ['Usage: ncl <command> [--key value ...] [--json]', '', 'Run `ncl help` to list available commands.', ''].join('\n'),
   );
 }
 
@@ -243,7 +243,7 @@ writeRequest(req);
 const resp = pollResponse(requestId, 30_000);
 
 if (!resp) {
-  process.stderr.write('nc: command timed out after 30s\n');
+  process.stderr.write('ncl: command timed out after 30s\n');
   process.exit(2);
 }
 

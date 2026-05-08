@@ -1,8 +1,8 @@
 /**
  * Built-in help command. Introspects the resource and command registries.
  *
- *   nc help               — list all resources and commands
- *   nc groups help         — show group resource details (verbs, columns, enums)
+ *   ncl help               — list all resources and commands
+ *   ncl groups help         — show group resource details (verbs, columns, enums)
  */
 import { getResource, getResources } from '../crud.js';
 import { listCommands, register } from '../registry.js';
@@ -41,7 +41,7 @@ register({
     }
 
     lines.push('');
-    lines.push('Run `nc <resource> help` for detailed field information.');
+    lines.push('Run `ncl <resource> help` for detailed field information.');
     return lines.join('\n');
   },
 });

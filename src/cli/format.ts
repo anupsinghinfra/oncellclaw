@@ -1,5 +1,5 @@
 /**
- * Output formatting for the `nc` binary. Two modes:
+ * Output formatting for the `ncl` binary. Two modes:
  *   - human (default): a small auto-table for arrays of flat records,
  *     JSON.stringify for everything else, plain "error: ..." line for !ok.
  *   - json: the response frame, pretty-printed.

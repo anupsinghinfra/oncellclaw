@@ -1,5 +1,5 @@
 /**
- * Command registry — single source of truth for what `nc` can do.
+ * Command registry — single source of truth for what `ncl` can do.
  *
  * Each command file under `commands/` calls `register()` at top level,
  * and `commands/index.ts` imports them all for side effects so the

@@ -53,7 +53,7 @@ import './channels/index.js';
 // append registry-based modules. Imported for side effects (registrations).
 import './modules/index.js';
 
-// CLI command barrel — populates the `nc` registry before the CLI server
+// CLI command barrel — populates the `ncl` registry before the CLI server
 // accepts connections.
 import './cli/commands/index.js';
 import './cli/delivery-action.js';
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
   startHostSweep();
   log.info('Host sweep started');
 
-  // 7. Start the `nc` CLI socket server (data/nc.sock).
+  // 7. Start the `ncl` CLI socket server (data/ncl.sock).
   await startCliServer();
 
   log.info('NanoClaw running');

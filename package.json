@@ -5,6 +5,9 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "main": "dist/index.js",
+  "bin": {
+    "ncl": "bin/ncl"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -16,6 +19,7 @@
     "prepare": "husky",
     "setup": "tsx setup/index.ts",
     "setup:auto": "tsx setup/auto.ts",
+    "ncl": "tsx src/cli/client.ts",
     "chat": "tsx scripts/chat.ts",
     "auth": "tsx src/whatsapp-auth.ts",
     "lint": "eslint src/",
