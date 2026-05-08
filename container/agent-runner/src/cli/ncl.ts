@@ -102,8 +102,6 @@ function pollResponse(requestId: string, timeoutMs: number): ResponseFrame | nul
         .get(`%"requestId":"${requestId}"%`) as { id: string; content: string } | null;
 
       if (row) {
-        inDb.close();
-
         // Mark as completed via processing_ack so agent-runner skips it
         const outDb = new Database(OUTBOUND_DB);
         outDb.exec('PRAGMA journal_mode = DELETE');
@@ -119,7 +117,7 @@ function pollResponse(requestId: string, timeoutMs: number): ResponseFrame | nul
         return parsed.frame as ResponseFrame;
       }
     } finally {
-      try { inDb.close(); } catch {}
+      inDb.close();
     }
 
     Bun.sleepSync(500);

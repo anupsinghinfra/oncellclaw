@@ -89,8 +89,21 @@ function visibleColumns(def: ResourceDef): string[] {
 
 function genericList(def: ResourceDef) {
   const cols = visibleColumns(def).join(', ');
-  return async () => {
-    return getDb().prepare(`SELECT ${cols} FROM ${def.table}`).all();
+  const filterableNames = new Set(def.columns.filter((c) => !c.generated).map((c) => c.name));
+  return async (args: Record<string, unknown>) => {
+    const limit = args.limit !== undefined ? Math.max(1, Number(args.limit)) : 200;
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    for (const [k, v] of Object.entries(args)) {
+      if (k === 'id' || k === 'limit') continue;
+      if (filterableNames.has(k)) {
+        filters.push(`${k} = ?`);
+        params.push(v);
+      }
+    }
+    const where = filters.length > 0 ? ` WHERE ${filters.join(' AND ')}` : '';
+    params.push(limit);
+    return getDb().prepare(`SELECT ${cols} FROM ${def.table}${where} LIMIT ?`).all(...params);
   };
 }
 
@@ -211,7 +224,7 @@ export function registerResource(def: ResourceDef): void {
       description: `List all ${def.plural}.`,
       access: def.operations.list,
       resource: def.plural,
-      parseArgs: () => ({}),
+      parseArgs: (raw) => normalizeArgs(raw),
       handler: genericList(def),
     });
   }

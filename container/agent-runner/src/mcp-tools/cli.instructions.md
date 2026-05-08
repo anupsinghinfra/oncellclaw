@@ -73,5 +73,6 @@ ncl destinations add --agent-group-id abc123 --messaging-group-id mg_xyz
 
 - Use `ncl <resource> help` to see all available fields, types, enums, and which fields are required or updatable.
 - Flags use `--hyphen-case` (e.g. `--agent-group-id`), mapped to `underscore_case` DB columns automatically.
+- `list` supports filtering by any non-auto column (e.g. `ncl wirings list --messaging-group-id mg_xyz`). Default limit is 200 rows; override with `--limit N`.
 - For composite-key resources (roles, members, destinations), use the custom verbs (grant/revoke, add/remove) instead of create/delete.
 - Write commands return `approval-pending` immediately — don't treat this as an error. Wait for the system message with the result.
