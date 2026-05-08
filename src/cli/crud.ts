@@ -103,7 +103,9 @@ function genericList(def: ResourceDef) {
     }
     const where = filters.length > 0 ? ` WHERE ${filters.join(' AND ')}` : '';
     params.push(limit);
-    return getDb().prepare(`SELECT ${cols} FROM ${def.table}${where} LIMIT ?`).all(...params);
+    return getDb()
+      .prepare(`SELECT ${cols} FROM ${def.table}${where} LIMIT ?`)
+      .all(...params);
   };
 }
 
