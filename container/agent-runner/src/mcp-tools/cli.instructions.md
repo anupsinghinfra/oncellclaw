@@ -1,13 +1,13 @@
-## Admin CLI (`nc`)
+## Admin CLI (`ncl`)
 
-The `nc` command is available at `/usr/local/bin/nc`. It lets you query and modify NanoClaw's central configuration — agent groups, messaging groups, wirings, users, roles, and more.
+The `ncl` command is available at `/usr/local/bin/ncl`. It lets you query and modify NanoClaw's central configuration — agent groups, messaging groups, wirings, users, roles, and more.
 
 ### Usage
 
 ```
-nc <resource> <verb> [<id>] [--flags]
-nc <resource> help
-nc help
+ncl <resource> <verb> [<id>] [--flags]
+ncl <resource> help
+ncl help
 ```
 
 ### Resources
@@ -28,33 +28,50 @@ nc help
 
 ### When to use
 
-- **Looking up your own config** — `nc groups get <your-group-id>` to see your agent group settings.
-- **Finding who you're wired to** — `nc wirings list` to see which messaging groups route to which agent groups.
-- **Checking user roles** — `nc roles list` to see who is an owner/admin.
-- **Answering questions about the system** — when the user asks about groups, channels, users, or configuration, query `nc` rather than guessing.
+- **Looking up your own config** — `ncl groups get <your-group-id>` to see your agent group settings.
+- **Finding who you're wired to** — `ncl wirings list` to see which messaging groups route to which agent groups.
+- **Checking user roles** — `ncl roles list` to see who is an owner/admin.
+- **Answering questions about the system** — when the user asks about groups, channels, users, or configuration, query `ncl` rather than guessing.
 
 ### Access rules
 
 Read commands (list, get) are open. Write commands (create, update, delete, grant, revoke, add, remove) require admin approval — the request is held until an admin approves it.
 
+### Approval flow
+
+Write commands (create, update, delete, grant, revoke, add, remove) require admin approval. Here's what happens:
+
+1. You run the command (e.g. `ncl groups create --name "Research" --folder research`).
+2. The command returns immediately with an `approval-pending` response — it has **not** been executed yet.
+3. An admin or owner gets a notification (on the same channel when possible) showing exactly what you requested, with approve/reject options.
+4. Once the admin responds:
+   - **Approved:** the command executes and the result is delivered back to you as a system message in this conversation.
+   - **Rejected:** you get a system message saying the request was rejected.
+
+You don't need to poll or retry — the result arrives automatically.
+
 ### Examples
 
 ```bash
-# List all agent groups
-nc groups list
+# Read commands (no approval needed)
+ncl groups list
+ncl groups get abc123
+ncl wirings list --messaging-group-id mg_xyz
+ncl roles list
+ncl wirings help
 
-# Get details for a specific group
-nc groups get abc123
-
-# See field definitions for a resource
-nc wirings help
-
-# List all wirings for a specific messaging group
-nc wirings list --messaging-group-id mg_xyz
+# Write commands (approval required)
+ncl groups create --name "Research" --folder research
+ncl groups update abc123 --name "Research v2"
+ncl roles grant --user telegram:jane --role admin
+ncl roles grant --user discord:bob --role admin --group abc123
+ncl members add --user-id telegram:jane --agent-group-id abc123
+ncl destinations add --agent-group-id abc123 --messaging-group-id mg_xyz
 ```
 
 ### Tips
 
-- Use `nc <resource> help` to see all available fields, types, enums, and which fields are required or updatable.
+- Use `ncl <resource> help` to see all available fields, types, enums, and which fields are required or updatable.
 - Flags use `--hyphen-case` (e.g. `--agent-group-id`), mapped to `underscore_case` DB columns automatically.
 - For composite-key resources (roles, members, destinations), use the custom verbs (grant/revoke, add/remove) instead of create/delete.
+- Write commands return `approval-pending` immediately — don't treat this as an error. Wait for the system message with the result.
