@@ -1,4 +1,5 @@
 import type { McpServerConfig } from '../../container-config.js';
+import { buildAgentGroupImage } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
 import {
   getContainerConfig,
@@ -186,6 +187,9 @@ registerResource({
           }
         }
 
+        await buildAgentGroupImage(id);
+        restartAgentGroupContainers(id, 'package added via ncl');
+
         return { added: { apt: apt || null, npm: npm || null } };
       },
     },
@@ -213,6 +217,9 @@ registerResource({
           const filtered = existing.filter((p) => p !== npm);
           updateContainerConfigJson(id, 'packages_npm', filtered);
         }
+
+        await buildAgentGroupImage(id);
+        restartAgentGroupContainers(id, 'package removed via ncl');
 
         return { removed: { apt: apt || null, npm: npm || null } };
       },

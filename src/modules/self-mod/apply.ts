@@ -30,15 +30,19 @@ export const applyInstallPackages: ApprovalHandler = async ({ session, payload, 
     return;
   }
 
-  // Append new packages to existing lists in the DB
+  // Append new packages to existing lists in the DB (deduplicated)
   if (payload.apt) {
     const existing = JSON.parse(configRow.packages_apt) as string[];
-    existing.push(...(payload.apt as string[]));
+    for (const pkg of payload.apt as string[]) {
+      if (!existing.includes(pkg)) existing.push(pkg);
+    }
     updateContainerConfigJson(agentGroup.id, 'packages_apt', existing);
   }
   if (payload.npm) {
     const existing = JSON.parse(configRow.packages_npm) as string[];
-    existing.push(...(payload.npm as string[]));
+    for (const pkg of payload.npm as string[]) {
+      if (!existing.includes(pkg)) existing.push(pkg);
+    }
     updateContainerConfigJson(agentGroup.id, 'packages_npm', existing);
   }
 

@@ -38,6 +38,9 @@ export function ensureContainerConfig(agentGroupId: string): void {
     .run(agentGroupId, new Date().toISOString());
 }
 
+const SCALAR_COLUMNS = new Set(['provider', 'model', 'effort', 'image_tag', 'assistant_name', 'max_messages_per_prompt']);
+const JSON_COLUMNS = new Set(['skills', 'mcp_servers', 'packages_apt', 'packages_npm', 'additional_mounts']);
+
 /** Update scalar fields on a config row. Only touches fields present in `updates`. */
 export function updateContainerConfigScalars(
   agentGroupId: string,
@@ -53,6 +56,7 @@ export function updateContainerConfigScalars(
 
   for (const [key, value] of Object.entries(updates)) {
     if (value !== undefined) {
+      if (!SCALAR_COLUMNS.has(key)) throw new Error(`Invalid scalar column: ${key}`);
       fields.push(`${key} = @${key}`);
       values[key] = value;
     }
@@ -73,6 +77,7 @@ export function updateContainerConfigJson(
   column: 'skills' | 'mcp_servers' | 'packages_apt' | 'packages_npm' | 'additional_mounts',
   value: unknown,
 ): void {
+  if (!JSON_COLUMNS.has(column)) throw new Error(`Invalid JSON column: ${column}`);
   const now = new Date().toISOString();
   getDb()
     .prepare(`UPDATE container_configs SET ${column} = ?, updated_at = ? WHERE agent_group_id = ?`)
