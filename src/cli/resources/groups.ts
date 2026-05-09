@@ -63,8 +63,10 @@ registerResource({
       description:
         'Restart containers for a group. Use --id <group-id> [--rebuild] [--message <text>]. ' +
         'From inside a container, --id is auto-filled and only the calling session is restarted. ' +
-        '--rebuild rebuilds the container image first. --message sets an on-wake message for the fresh container; ' +
-        'if omitted, containers come back on the next user message.',
+        '--rebuild rebuilds the container image first (required for package changes). ' +
+        '--message sets an on-wake instruction for the fresh container to act on when it starts — ' +
+        'use this when you need to continue after the restart (e.g. verify a new tool works, notify the user). ' +
+        'Without --message, the container is killed and only comes back on the next user message.',
       handler: async (args, ctx) => {
         const id = (args.id as string) || (ctx.caller === 'agent' ? ctx.agentGroupId : undefined);
         if (!id) throw new Error('--id is required');
