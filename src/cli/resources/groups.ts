@@ -1,5 +1,8 @@
 import type { McpServerConfig } from '../../container-config.js';
+import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
+import { getSession } from '../../db/sessions.js';
+import { writeSessionMessage } from '../../session-manager.js';
 import {
   getContainerConfig,
   updateContainerConfigScalars,
@@ -54,6 +57,47 @@ registerResource({
   ],
   operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
   customOperations: {
+    'restart': {
+      access: 'approval',
+      description:
+        'Restart containers for a group. Use --id <group-id> [--rebuild] [--message <text>]. ' +
+        'From inside a container, --id is auto-filled and only the calling session is restarted. ' +
+        '--rebuild rebuilds the container image first. --message sets an on-wake message for the fresh container; ' +
+        'if omitted, containers come back on the next user message.',
+      handler: async (args, ctx) => {
+        const id = (args.id as string) || (ctx.caller === 'agent' ? ctx.agentGroupId : undefined);
+        if (!id) throw new Error('--id is required');
+        if (args.rebuild) {
+          await buildAgentGroupImage(id);
+        }
+        const message = args.message as string | undefined;
+
+        // From an agent: scope to the calling session only
+        if (ctx.caller === 'agent') {
+          if (message) {
+            writeSessionMessage(id, ctx.sessionId, {
+              id: `restart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              kind: 'chat',
+              timestamp: new Date().toISOString(),
+              platformId: id,
+              channelType: 'agent',
+              threadId: null,
+              content: JSON.stringify({ text: message, sender: 'system', senderId: 'system' }),
+              onWake: 1,
+            });
+          }
+          killContainer(ctx.sessionId, 'restarted via ncl', message ? () => {
+            const s = getSession(ctx.sessionId);
+            if (s) wakeContainer(s);
+          } : undefined);
+          return { restarted: 1, rebuilt: !!args.rebuild };
+        }
+
+        // From the host: restart all running containers in the group
+        const count = restartAgentGroupContainers(id, 'restarted via ncl', message);
+        return { restarted: count, rebuilt: !!args.rebuild };
+      },
+    },
     'config get': {
       access: 'open',
       description: 'Show the container config for a group. Use --id <group-id>.',
@@ -96,7 +140,6 @@ registerResource({
         }
 
         updateContainerConfigScalars(id, updates);
-        restartAgentGroupContainers(id, 'config updated via ncl');
 
         const updated = getContainerConfig(id)!;
         return presentConfig(updated);
@@ -124,7 +167,6 @@ registerResource({
           env: args.env ? (JSON.parse(args.env as string) as Record<string, string>) : {},
         };
         updateContainerConfigJson(id, 'mcp_servers', servers);
-        restartAgentGroupContainers(id, `mcp server "${name}" added via ncl`);
 
         return { added: name, servers };
       },
@@ -145,7 +187,6 @@ registerResource({
         if (!servers[name]) throw new Error(`MCP server "${name}" not found`);
         delete servers[name];
         updateContainerConfigJson(id, 'mcp_servers', servers);
-        restartAgentGroupContainers(id, `mcp server "${name}" removed via ncl`);
 
         return { removed: name };
       },
@@ -179,9 +220,10 @@ registerResource({
           }
         }
 
-        restartAgentGroupContainers(id, 'package added via ncl');
-
-        return { added: { apt: apt || null, npm: npm || null }, note: 'Image rebuild required for packages to take effect. Use install_packages from the agent or rebuild manually.' };
+        return {
+          added: { apt: apt || null, npm: npm || null },
+          note: 'Image rebuild required for packages to take effect. Use install_packages from the agent or rebuild manually.',
+        };
       },
     },
     'config remove-package': {
@@ -209,9 +251,10 @@ registerResource({
           updateContainerConfigJson(id, 'packages_npm', filtered);
         }
 
-        restartAgentGroupContainers(id, 'package removed via ncl');
-
-        return { removed: { apt: apt || null, npm: npm || null }, note: 'Image rebuild required for package changes to take effect.' };
+        return {
+          removed: { apt: apt || null, npm: npm || null },
+          note: 'Image rebuild required for package changes to take effect.',
+        };
       },
     },
   },

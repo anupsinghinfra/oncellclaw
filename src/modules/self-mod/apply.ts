@@ -4,14 +4,16 @@
  * The approvals module calls these when an admin clicks Approve on a
  * pending_approvals row whose action matches. Each handler mutates the
  * container config in the DB, rebuilds/kills the container as needed,
- * and lets the host sweep respawn it on the next message.
+ * and writes an on_wake message so the fresh container picks up where
+ * the old one left off.
  *
- * install_packages: update DB + rebuild image + kill container.
- * add_mcp_server: update DB + kill container only.
+ * install_packages: update DB + rebuild image + kill container + on_wake.
+ * add_mcp_server: update DB + kill container + on_wake.
  */
-import { buildAgentGroupImage, killContainer } from '../../container-runner.js';
+import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { getContainerConfig, updateContainerConfigJson } from '../../db/container-configs.js';
+import { getSession } from '../../db/sessions.js';
 import type { McpServerConfig } from '../../container-config.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
@@ -53,7 +55,6 @@ export const applyInstallPackages: ApprovalHandler = async ({ session, payload, 
   log.info('Package install approved', { agentGroupId: session.agent_group_id, userId });
   try {
     await buildAgentGroupImage(session.agent_group_id);
-    killContainer(session.id, 'rebuild applied');
     writeSessionMessage(session.agent_group_id, session.id, {
       id: `appr-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       kind: 'chat',
@@ -66,10 +67,11 @@ export const applyInstallPackages: ApprovalHandler = async ({ session, payload, 
         sender: 'system',
         senderId: 'system',
       }),
-      processAfter: new Date(Date.now() + 5000)
-        .toISOString()
-        .replace('T', ' ')
-        .replace(/\.\d+Z$/, ''),
+      onWake: 1,
+    });
+    killContainer(session.id, 'rebuild applied', () => {
+      const s = getSession(session.id);
+      if (s) wakeContainer(s);
     });
     log.info('Container rebuild completed (bundled with install)', { agentGroupId: session.agent_group_id });
   } catch (e) {
@@ -102,7 +104,23 @@ export const applyAddMcpServer: ApprovalHandler = async ({ session, payload, use
   };
   updateContainerConfigJson(agentGroup.id, 'mcp_servers', servers);
 
-  killContainer(session.id, 'mcp server added');
-  notify(`MCP server "${payload.name}" added. Your container will restart with it on the next message.`);
+  writeSessionMessage(session.agent_group_id, session.id, {
+    id: `appr-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'chat',
+    timestamp: new Date().toISOString(),
+    platformId: session.agent_group_id,
+    channelType: 'agent',
+    threadId: null,
+    content: JSON.stringify({
+      text: `MCP server "${payload.name}" added. Verify it's available (e.g. list your tools) and report the result to the user.`,
+      sender: 'system',
+      senderId: 'system',
+    }),
+    onWake: 1,
+  });
+  killContainer(session.id, 'mcp server added', () => {
+    const s = getSession(session.id);
+    if (s) wakeContainer(s);
+  });
   log.info('MCP server add approved', { agentGroupId: session.agent_group_id, userId });
 };
