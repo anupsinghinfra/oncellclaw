@@ -7,8 +7,7 @@
 export const SCHEMA = `
 -- Agent workspaces: folder, skills, CLAUDE.md.
 -- All workspaces are equal; privilege lives on users, not groups.
--- Container config (mcpServers, packages, imageTag, additionalMounts) lives
--- in groups/<folder>/container.json on disk, not in the DB.
+-- Container config lives in the container_configs table (see migration 014).
 CREATE TABLE agent_groups (
   id               TEXT PRIMARY KEY,
   name             TEXT NOT NULL,
