@@ -11,7 +11,8 @@ const mockKillContainer = vi.fn<(id: string, reason: string, onExit?: () => void
 const mockWakeContainer = vi.fn();
 vi.mock('./container-runner.js', () => ({
   isContainerRunning: (...args: unknown[]) => mockIsContainerRunning(args[0] as string),
-  killContainer: (...args: unknown[]) => mockKillContainer(args[0] as string, args[1] as string, args[2] as (() => void) | undefined),
+  killContainer: (...args: unknown[]) =>
+    mockKillContainer(args[0] as string, args[1] as string, args[2] as (() => void) | undefined),
   wakeContainer: (...args: unknown[]) => mockWakeContainer(...args),
 }));
 
@@ -43,10 +44,7 @@ function makeSession(id: string, agentGroupId: string, status = 'active') {
 
 describe('restartAgentGroupContainers', () => {
   it('skips sessions without a running container', () => {
-    mockGetSessionsByAgentGroup.mockReturnValue([
-      makeSession('s1', 'g1'),
-      makeSession('s2', 'g1'),
-    ]);
+    mockGetSessionsByAgentGroup.mockReturnValue([makeSession('s1', 'g1'), makeSession('s2', 'g1')]);
     mockIsContainerRunning.mockReturnValue(false);
 
     const count = restartAgentGroupContainers('g1', 'test');
@@ -57,9 +55,7 @@ describe('restartAgentGroupContainers', () => {
   });
 
   it('skips non-active sessions', () => {
-    mockGetSessionsByAgentGroup.mockReturnValue([
-      makeSession('s1', 'g1', 'closed'),
-    ]);
+    mockGetSessionsByAgentGroup.mockReturnValue([makeSession('s1', 'g1', 'closed')]);
     mockIsContainerRunning.mockReturnValue(true);
 
     const count = restartAgentGroupContainers('g1', 'test');
@@ -69,10 +65,7 @@ describe('restartAgentGroupContainers', () => {
   });
 
   it('kills running containers and returns count', () => {
-    mockGetSessionsByAgentGroup.mockReturnValue([
-      makeSession('s1', 'g1'),
-      makeSession('s2', 'g1'),
-    ]);
+    mockGetSessionsByAgentGroup.mockReturnValue([makeSession('s1', 'g1'), makeSession('s2', 'g1')]);
     mockIsContainerRunning.mockImplementation((id) => id === 's1');
 
     const count = restartAgentGroupContainers('g1', 'test');
@@ -142,10 +135,7 @@ describe('restartAgentGroupContainers', () => {
   });
 
   it('handles multiple running sessions with wake message', () => {
-    mockGetSessionsByAgentGroup.mockReturnValue([
-      makeSession('s1', 'g1'),
-      makeSession('s2', 'g1'),
-    ]);
+    mockGetSessionsByAgentGroup.mockReturnValue([makeSession('s1', 'g1'), makeSession('s2', 'g1')]);
     mockIsContainerRunning.mockReturnValue(true);
 
     const count = restartAgentGroupContainers('g1', 'test', 'Config updated.');

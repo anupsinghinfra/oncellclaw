@@ -6,6 +6,7 @@
  * Approval gating for risky calls from the container is the only branch
  * that differs by caller. Host callers and `open` commands run inline.
  */
+import { getContainerConfig } from '../db/container-configs.js';
 import { getAgentGroup } from '../db/agent-groups.js';
 import { getSession } from '../db/sessions.js';
 import { registerApprovalHandler, requestApproval } from '../modules/approvals/index.js';
@@ -34,6 +35,46 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
 
   if (!cmd) {
     return err(req.id, 'unknown-command', `no command "${req.command}"`);
+  }
+
+  // CLI scope enforcement for agent callers
+  if (ctx.caller === 'agent') {
+    const configRow = getContainerConfig(ctx.agentGroupId);
+    const cliScope = configRow?.cli_scope ?? 'group';
+
+    if (cliScope === 'disabled') {
+      return err(req.id, 'forbidden', 'CLI access is disabled for this agent group.');
+    }
+
+    if (cliScope === 'group') {
+      const allowed = new Set(['groups', 'sessions', 'destinations', 'members']);
+      // Only allow whitelisted resources and general commands (no resource, like help)
+      if (cmd.resource && !allowed.has(cmd.resource)) {
+        return err(req.id, 'forbidden', `CLI access is scoped to this agent group. Cannot access "${cmd.resource}".`);
+      }
+
+      // Enforce group scope on all agent-group-related args.
+      // Different resources use different arg names for the agent group ID.
+      const groupArgs = ['id', 'agent_group_id', 'group'] as const;
+      for (const key of groupArgs) {
+        if (req.args[key] && req.args[key] !== ctx.agentGroupId) {
+          return err(req.id, 'forbidden', 'CLI access is scoped to this agent group.');
+        }
+      }
+
+      // Auto-fill agent-group-related args so the agent doesn't need
+      // to pass its own group ID explicitly.
+      const fill: Record<string, unknown> = {
+        agent_group_id: req.args.agent_group_id ?? ctx.agentGroupId,
+        group: req.args.group ?? ctx.agentGroupId,
+      };
+      // Only auto-fill --id for resources where it IS the agent group ID
+      // (groups, destinations). For sessions/members --id is a different key.
+      if (cmd.resource === 'groups' || cmd.resource === 'destinations') {
+        fill.id = req.args.id ?? ctx.agentGroupId;
+      }
+      req = { ...req, args: { ...req.args, ...fill } };
+    }
   }
 
   if (ctx.caller !== 'host' && cmd.access === 'approval') {

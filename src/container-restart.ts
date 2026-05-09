@@ -18,11 +18,7 @@ import { writeSessionMessage } from './session-manager.js';
  * wakeContainer call on exit. Without it, containers are killed and
  * only come back on the next real user message.
  */
-export function restartAgentGroupContainers(
-  agentGroupId: string,
-  reason: string,
-  wakeMessage?: string,
-): number {
+export function restartAgentGroupContainers(agentGroupId: string, reason: string, wakeMessage?: string): number {
   const sessions = getSessionsByAgentGroup(agentGroupId).filter(
     (s) => s.status === 'active' && isContainerRunning(s.id),
   );
@@ -44,10 +40,16 @@ export function restartAgentGroupContainers(
         onWake: 1,
       });
     }
-    killContainer(session.id, reason, wakeMessage ? () => {
-      const s = getSession(session.id);
-      if (s) wakeContainer(s);
-    } : undefined);
+    killContainer(
+      session.id,
+      reason,
+      wakeMessage
+        ? () => {
+            const s = getSession(session.id);
+            if (s) wakeContainer(s);
+          }
+        : undefined,
+    );
   }
 
   if (sessions.length > 0) {

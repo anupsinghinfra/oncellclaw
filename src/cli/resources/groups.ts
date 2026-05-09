@@ -26,6 +26,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     packages_apt: JSON.parse(row.packages_apt),
     packages_npm: JSON.parse(row.packages_npm),
     additional_mounts: JSON.parse(row.additional_mounts),
+    cli_scope: row.cli_scope,
     updated_at: row.updated_at,
   };
 }
@@ -57,7 +58,7 @@ registerResource({
   ],
   operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
   customOperations: {
-    'restart': {
+    restart: {
       access: 'approval',
       description:
         'Restart containers for a group. Use --id <group-id> [--rebuild] [--message <text>]. ' +
@@ -86,10 +87,16 @@ registerResource({
               onWake: 1,
             });
           }
-          killContainer(ctx.sessionId, 'restarted via ncl', message ? () => {
-            const s = getSession(ctx.sessionId);
-            if (s) wakeContainer(s);
-          } : undefined);
+          killContainer(
+            ctx.sessionId,
+            'restarted via ncl',
+            message
+              ? () => {
+                  const s = getSession(ctx.sessionId);
+                  if (s) wakeContainer(s);
+                }
+              : undefined,
+          );
           return { restarted: 1, rebuilt: !!args.rebuild };
         }
 
@@ -112,7 +119,7 @@ registerResource({
     'config update': {
       access: 'approval',
       description:
-        'Update container config scalar fields. Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt.',
+        'Update container config scalar fields. Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -122,7 +129,7 @@ registerResource({
         const updates: Partial<
           Pick<
             ContainerConfigRow,
-            'provider' | 'model' | 'effort' | 'image_tag' | 'assistant_name' | 'max_messages_per_prompt'
+            'provider' | 'model' | 'effort' | 'image_tag' | 'assistant_name' | 'max_messages_per_prompt' | 'cli_scope'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -132,10 +139,17 @@ registerResource({
         if (args.assistant_name !== undefined) updates.assistant_name = args.assistant_name as string;
         if (args.max_messages_per_prompt !== undefined)
           updates.max_messages_per_prompt = Number(args.max_messages_per_prompt);
+        if (args['cli-scope'] !== undefined || args.cli_scope !== undefined) {
+          const scope = (args['cli-scope'] ?? args.cli_scope) as string;
+          if (!['disabled', 'group', 'global'].includes(scope)) {
+            throw new Error('--cli-scope must be one of: disabled, group, global');
+          }
+          updates.cli_scope = scope;
+        }
 
         if (Object.keys(updates).length === 0) {
           throw new Error(
-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt',
+            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope',
           );
         }
 
