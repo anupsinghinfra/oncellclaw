@@ -62,7 +62,11 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
           return err(req.id, 'forbidden', 'CLI access is scoped to this agent group.');
         }
       }
-      if ((cmd.resource === 'groups' || cmd.resource === 'destinations') && req.args.id && req.args.id !== ctx.agentGroupId) {
+      if (
+        (cmd.resource === 'groups' || cmd.resource === 'destinations') &&
+        req.args.id &&
+        req.args.id !== ctx.agentGroupId
+      ) {
         return err(req.id, 'forbidden', 'CLI access is scoped to this agent group.');
       }
 
@@ -130,7 +134,10 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
         const groupField = cmd.resource === 'groups' ? 'id' : 'agent_group_id';
         if (Array.isArray(data)) {
           data = data.filter(
-            (row) => typeof row === 'object' && row !== null && (row as Record<string, unknown>)[groupField] === ctx.agentGroupId,
+            (row) =>
+              typeof row === 'object' &&
+              row !== null &&
+              (row as Record<string, unknown>)[groupField] === ctx.agentGroupId,
           );
         } else if (data && typeof data === 'object' && groupField in (data as Record<string, unknown>)) {
           if ((data as Record<string, unknown>)[groupField] !== ctx.agentGroupId) {

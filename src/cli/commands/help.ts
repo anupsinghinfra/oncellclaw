@@ -93,8 +93,7 @@ export function registerResourceHelpCommands(): void {
           lines.push('');
 
           // Verbs
-          const idAutoFilled =
-            cliScope === 'group' && (res.plural === 'groups' || res.plural === 'destinations');
+          const idAutoFilled = cliScope === 'group' && (res.plural === 'groups' || res.plural === 'destinations');
           const idHint = idAutoFilled ? '' : ' <id>';
           const verbs: string[] = [];
           if (res.operations.list) verbs.push(`list [open]`);
@@ -112,9 +111,8 @@ export function registerResourceHelpCommands(): void {
           lines.push('');
 
           // Columns
-          const autoFilledFields = cliScope === 'group'
-            ? new Set(['id', 'agent_group_id', 'group'])
-            : new Set<string>();
+          const autoFilledFields =
+            cliScope === 'group' ? new Set(['id', 'agent_group_id', 'group']) : new Set<string>();
           lines.push('Fields:');
           for (const col of res.columns) {
             const tags: string[] = [];

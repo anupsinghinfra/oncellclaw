@@ -185,10 +185,7 @@ describe('CLI scope enforcement', () => {
   it('group: blocks cli_scope escalation', async () => {
     mockGetContainerConfig.mockReturnValue({ cli_scope: 'group' });
 
-    const resp = await dispatch(
-      { id: '1', command: 'groups-test', args: { cli_scope: 'global' } },
-      agentCtx(),
-    );
+    const resp = await dispatch({ id: '1', command: 'groups-test', args: { cli_scope: 'global' } }, agentCtx());
 
     expect(resp.ok).toBe(false);
     if (!resp.ok) {
@@ -200,10 +197,7 @@ describe('CLI scope enforcement', () => {
   it('group: blocks cli-scope escalation (hyphenated)', async () => {
     mockGetContainerConfig.mockReturnValue({ cli_scope: 'group' });
 
-    const resp = await dispatch(
-      { id: '1', command: 'groups-test', args: { 'cli-scope': 'global' } },
-      agentCtx(),
-    );
+    const resp = await dispatch({ id: '1', command: 'groups-test', args: { 'cli-scope': 'global' } }, agentCtx());
 
     expect(resp.ok).toBe(false);
     if (!resp.ok) {
