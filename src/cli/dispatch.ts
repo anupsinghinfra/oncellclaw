@@ -13,7 +13,25 @@ import type { CallerContext, ErrorCode, RequestFrame, ResponseFrame } from './fr
 import { lookup } from './registry.js';
 
 export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<ResponseFrame> {
-  const cmd = lookup(req.command);
+  let cmd = lookup(req.command);
+
+  // Fallback: if the full command isn't registered, trim the last
+  // dash-segment and treat it as the target ID. This lets clients join
+  // all positional args with dashes (e.g. `ncl groups get abc123`
+  // → command "groups-get-abc123" → trim → "groups-get" + id "abc123").
+  if (!cmd) {
+    const idx = req.command.lastIndexOf('-');
+    if (idx > 0) {
+      const shortened = req.command.slice(0, idx);
+      const tail = req.command.slice(idx + 1);
+      const fallback = lookup(shortened);
+      if (fallback) {
+        cmd = fallback;
+        req = { ...req, command: shortened, args: { ...req.args, id: req.args.id ?? tail } };
+      }
+    }
+  }
+
   if (!cmd) {
     return err(req.id, 'unknown-command', `no command "${req.command}"`);
   }
