@@ -54,7 +54,7 @@ registerResource({
     {
       name: 'agent_provider',
       type: 'string',
-      description: 'Deprecated — use `ncl groups config-update --provider`. Kept for backwards compat.',
+      description: 'Deprecated — use `ncl groups config update --provider`. Kept for backwards compat.',
       updatable: false,
       default: null,
     },
@@ -62,7 +62,7 @@ registerResource({
   ],
   operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
   customOperations: {
-    'config-get': {
+    'config get': {
       access: 'open',
       description: 'Show the container config for a group. Use --id <group-id>.',
       handler: async (args) => {
@@ -73,7 +73,7 @@ registerResource({
         return presentConfig(row);
       },
     },
-    'config-update': {
+    'config update': {
       access: 'approval',
       description:
         'Update container config scalar fields. Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt.',
@@ -110,7 +110,7 @@ registerResource({
         return presentConfig(updated);
       },
     },
-    'config-add-mcp-server': {
+    'config add-mcp-server': {
       access: 'approval',
       description:
         'Add an MCP server to a group. Use --id <group-id> --name <server-name> --command <cmd> [--args <json-array>] [--env <json-object>].',
@@ -137,7 +137,7 @@ registerResource({
         return { added: name, servers };
       },
     },
-    'config-remove-mcp-server': {
+    'config remove-mcp-server': {
       access: 'approval',
       description: 'Remove an MCP server from a group. Use --id <group-id> --name <server-name>.',
       handler: async (args) => {
@@ -158,7 +158,7 @@ registerResource({
         return { removed: name };
       },
     },
-    'config-add-package': {
+    'config add-package': {
       access: 'approval',
       description: 'Add a package to a group. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
       handler: async (args) => {
@@ -193,7 +193,7 @@ registerResource({
         return { added: { apt: apt || null, npm: npm || null } };
       },
     },
-    'config-remove-package': {
+    'config remove-package': {
       access: 'approval',
       description: 'Remove a package from a group. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
       handler: async (args) => {

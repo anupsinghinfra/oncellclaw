@@ -3,7 +3,7 @@
  *
  * Used by:
  * - self-mod approval handlers (after config change)
- * - ncl config-update (after CLI config change)
+ * - ncl groups config update (after CLI config change)
  */
 import { killContainer } from './container-runner.js';
 import { getSessionsByAgentGroup } from './db/sessions.js';
