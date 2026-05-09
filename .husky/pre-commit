@@ -1,1 +1,2 @@
 pnpm run format:fix
+git diff --name-only -- 'src/**/*.ts' | xargs git add 2>/dev/null || true
