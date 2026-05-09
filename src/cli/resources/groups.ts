@@ -51,13 +51,6 @@ registerResource({
         'Directory name under groups/ on the host. Must be unique. Contains CLAUDE.md, skills/, and container.json. Cannot be changed after creation.',
       required: true,
     },
-    {
-      name: 'agent_provider',
-      type: 'string',
-      description: 'Deprecated — use `ncl groups config update --provider`. Kept for backwards compat.',
-      updatable: false,
-      default: null,
-    },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
   operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
