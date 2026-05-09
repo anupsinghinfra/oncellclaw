@@ -71,26 +71,9 @@ ncl groups config add-package --npm some-package
 ncl members add --user telegram:jane
 ```
 
-### Config changes require a restart
+### Important
 
-Changes made via `ncl groups config update` (model, provider, effort, etc.) are saved to the DB but do **not** take effect on the running container. You must restart for them to apply:
-
-```bash
-ncl groups config update --model claude-sonnet-4-5-20250514
-# After approval: config is saved but container still runs the old model
-ncl groups restart --message "Applying config update."
-# After approval: container restarts with the new config
-```
-
-Package and MCP server changes (`config add-package`, `config add-mcp-server`) also require a restart. For packages, use `--rebuild` since they're baked into the image:
-
-```bash
-ncl groups config add-package --npm some-package
-# After approval:
-ncl groups restart --rebuild --message "Installing new package."
-```
-
-Without `--message`, the container is killed but only comes back on the next user message.
+Config changes via `ncl groups config update` do not take effect until `ncl groups restart`. Run `ncl groups config help` for details.
 
 ### Tips
 

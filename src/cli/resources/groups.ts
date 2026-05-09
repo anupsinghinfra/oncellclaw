@@ -119,7 +119,8 @@ registerResource({
     'config update': {
       access: 'approval',
       description:
-        'Update container config scalar fields. Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope.',
+        'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
+        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -162,7 +163,8 @@ registerResource({
     'config add-mcp-server': {
       access: 'approval',
       description:
-        'Add an MCP server to a group. Use --id <group-id> --name <server-name> --command <cmd> [--args <json-array>] [--env <json-object>].',
+        'Add an MCP server to a group. Requires `ncl groups restart` to take effect. ' +
+        'Use --id <group-id> --name <server-name> --command <cmd> [--args <json-array>] [--env <json-object>].',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -187,7 +189,8 @@ registerResource({
     },
     'config remove-mcp-server': {
       access: 'approval',
-      description: 'Remove an MCP server from a group. Use --id <group-id> --name <server-name>.',
+      description:
+        'Remove an MCP server from a group. Requires `ncl groups restart` to take effect. Use --id <group-id> --name <server-name>.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -207,7 +210,8 @@ registerResource({
     },
     'config add-package': {
       access: 'approval',
-      description: 'Add a package to a group. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
+      description:
+        'Add a package to a group. Requires `ncl groups restart --rebuild` to take effect. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -242,7 +246,8 @@ registerResource({
     },
     'config remove-package': {
       access: 'approval',
-      description: 'Remove a package from a group. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
+      description:
+        'Remove a package from a group. Requires `ncl groups restart --rebuild` to take effect. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
