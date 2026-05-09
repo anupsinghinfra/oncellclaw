@@ -1,5 +1,4 @@
 import type { McpServerConfig } from '../../container-config.js';
-import { buildAgentGroupImage } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
 import {
   getContainerConfig,
@@ -180,10 +179,9 @@ registerResource({
           }
         }
 
-        await buildAgentGroupImage(id);
         restartAgentGroupContainers(id, 'package added via ncl');
 
-        return { added: { apt: apt || null, npm: npm || null } };
+        return { added: { apt: apt || null, npm: npm || null }, note: 'Image rebuild required for packages to take effect. Use install_packages from the agent or rebuild manually.' };
       },
     },
     'config remove-package': {
@@ -211,10 +209,9 @@ registerResource({
           updateContainerConfigJson(id, 'packages_npm', filtered);
         }
 
-        await buildAgentGroupImage(id);
         restartAgentGroupContainers(id, 'package removed via ncl');
 
-        return { removed: { apt: apt || null, npm: npm || null } };
+        return { removed: { apt: apt || null, npm: npm || null }, note: 'Image rebuild required for package changes to take effect.' };
       },
     },
   },
