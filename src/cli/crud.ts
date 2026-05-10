@@ -232,6 +232,7 @@ export function registerResource(def: ResourceDef): void {
       description: `List all ${def.plural}.`,
       access: def.operations.list,
       resource: def.plural,
+      generic: 'list',
       parseArgs: (raw) => normalizeArgs(raw),
       handler: genericList(def),
     });
@@ -243,6 +244,7 @@ export function registerResource(def: ResourceDef): void {
       description: `Get a ${def.name} by ID.`,
       access: def.operations.get,
       resource: def.plural,
+      generic: 'get',
       parseArgs: (raw) => normalizeArgs(raw),
       handler: genericGet(def),
     });

@@ -94,7 +94,7 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
       // existence oracle across group boundaries.
       if (cmd.resource === 'sessions' && req.command === 'sessions-get' && req.args.id) {
         const s = getSession(req.args.id as string);
-        if (!s || (s as Record<string, unknown>).agent_group_id !== ctx.agentGroupId) {
+        if (!s || s.agent_group_id !== ctx.agentGroupId) {
           return err(req.id, 'handler-error', `session not found: ${req.args.id}`);
         }
       }
@@ -135,17 +135,26 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
   try {
     let data = await cmd.handler(parsed, ctx);
 
-    // Post-handler group scope enforcement: filter/verify results belong
-    // to the caller's agent group. Catches leaks that pre-handler auto-fill
-    // can't prevent (e.g. `groups list` where the id arg is skipped by the
-    // generic list handler, or `sessions get` by UUID).
-    if (ctx.caller === 'agent' && cmd.resource) {
+    // Post-handler group-scope enforcement. Applies only to the auto-generated
+    // `list` / `get` handlers (`cmd.generic`), which return raw DB rows carrying
+    // the resource's `scopeField`:
+    //   - `list` → drop rows that don't belong to the caller's agent group
+    //              (covers `groups list`, where the generic list handler ignores
+    //              the auto-filled `--id`)
+    //   - `get`  → reject if the single row belongs to another group
+    // Custom operations return ad-hoc shapes (e.g. `groups config get` → a config
+    // object with no `id`) and are NOT checked here — they would be falsely
+    // rejected, and they're already pinned to the caller's group by the
+    // pre-handler `--id` auto-fill (groups/destinations) or gated behind approval,
+    // so they can't reach another group's data anyway.
+    if (ctx.caller === 'agent' && cmd.resource && cmd.generic) {
       const configRow = getContainerConfig(ctx.agentGroupId);
       if ((configRow?.cli_scope ?? 'group') === 'group') {
         const def = getResource(cmd.resource);
         const groupField = def?.scopeField;
         if (!groupField) {
-          // Fail closed: resource not declared as group-scope safe.
+          // Fail closed: a whitelisted resource exposing list/get must declare
+          // `scopeField` so its rows can be filtered.
           return err(req.id, 'forbidden', `"${cmd.resource}" is not available in group scope.`);
         }
         if (Array.isArray(data)) {
