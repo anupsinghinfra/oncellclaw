@@ -11,6 +11,7 @@ import { getAgentGroup } from '../db/agent-groups.js';
 import { getSession } from '../db/sessions.js';
 import { registerApprovalHandler, requestApproval } from '../modules/approvals/index.js';
 import type { CallerContext, ErrorCode, RequestFrame, ResponseFrame } from './frame.js';
+import { getResource } from './crud.js';
 import { lookup } from './registry.js';
 
 export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<ResponseFrame> {
@@ -87,6 +88,16 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
         fill.id = req.args.id ?? ctx.agentGroupId;
       }
       req = { ...req, args: { ...req.args, ...fill } };
+
+      // Fail-closed pre-handler check for sessions-get: returns "not found"
+      // regardless of whether the UUID exists in another group, preventing an
+      // existence oracle across group boundaries.
+      if (cmd.resource === 'sessions' && req.command === 'sessions-get' && req.args.id) {
+        const s = getSession(req.args.id as string);
+        if (!s || (s as Record<string, unknown>).agent_group_id !== ctx.agentGroupId) {
+          return err(req.id, 'handler-error', `session not found: ${req.args.id}`);
+        }
+      }
     }
   }
 
@@ -131,7 +142,12 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
     if (ctx.caller === 'agent' && cmd.resource) {
       const configRow = getContainerConfig(ctx.agentGroupId);
       if ((configRow?.cli_scope ?? 'group') === 'group') {
-        const groupField = cmd.resource === 'groups' ? 'id' : 'agent_group_id';
+        const def = getResource(cmd.resource);
+        const groupField = def?.scopeField;
+        if (!groupField) {
+          // Fail closed: resource not declared as group-scope safe.
+          return err(req.id, 'forbidden', `"${cmd.resource}" is not available in group scope.`);
+        }
         if (Array.isArray(data)) {
           data = data.filter(
             (row) =>
@@ -139,7 +155,7 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
               row !== null &&
               (row as Record<string, unknown>)[groupField] === ctx.agentGroupId,
           );
-        } else if (data && typeof data === 'object' && groupField in (data as Record<string, unknown>)) {
+        } else if (data && typeof data === 'object') {
           if ((data as Record<string, unknown>)[groupField] !== ctx.agentGroupId) {
             return err(req.id, 'forbidden', 'Resource belongs to a different agent group.');
           }
