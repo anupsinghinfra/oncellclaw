@@ -71,6 +71,15 @@ export interface ResourceDef {
   };
   /** Non-standard verbs (grant, revoke, add, remove, restart, etc.). */
   customOperations?: Record<string, CustomOperation>;
+  /**
+   * Runs after a successful `create` INSERT, with the row that was just
+   * written. Used to wire in side effects that the central row alone
+   * doesn't trigger — e.g. creating a `container_configs` row when a new
+   * agent group is added, or the companion `agent_destinations` row when a
+   * wiring is added. The hook receives the same `values` object that was
+   * inserted, so generated fields like `id` and `created_at` are populated.
+   */
+  postCreate?: (row: Record<string, unknown>) => Promise<void> | void;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +171,7 @@ function genericCreate(def: ResourceDef) {
     getDb()
       .prepare(`INSERT INTO ${def.table} (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`)
       .run(values);
+    if (def.postCreate) await def.postCreate(values);
     return values;
   };
 }
