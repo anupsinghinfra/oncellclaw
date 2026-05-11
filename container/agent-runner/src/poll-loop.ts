@@ -386,7 +386,7 @@ async function processQuery(
         // reminder back into the live query so the next turn re-anchors
         // on the destination model. Only do this when there's >1
         // destination — single-destination groups have a fallback that
-        // works without wrapping. See qwibitai/nanoclaw#2325.
+        // works without wrapping. See nanocoai/nanoclaw#2325.
         const destinations = getAllDestinations();
         if (destinations.length > 1) {
           const names = destinations.map((d) => d.name).join(', ');

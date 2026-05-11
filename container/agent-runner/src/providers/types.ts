@@ -95,6 +95,6 @@ export type ProviderEvent =
    * The poll-loop reacts by injecting a destination reminder back into
    * the live query so the agent doesn't drop `<message to="…">` wrapping
    * after compaction. Distinct from `result` so it doesn't mark the turn
-   * completed or get dispatched as a chat message. See qwibitai/nanoclaw#2325.
+   * completed or get dispatched as a chat message. See nanocoai/nanoclaw#2325.
    */
   | { type: 'compacted'; text: string };
