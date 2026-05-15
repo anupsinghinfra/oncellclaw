@@ -164,23 +164,23 @@ ncl groups config add-mcp-server \
   --env '{"GMAIL_OAUTH_PATH":"/workspace/extra/.gmail-mcp/gcp-oauth.keys.json","GMAIL_CREDENTIALS_PATH":"/workspace/extra/.gmail-mcp/credentials.json"}'
 ```
 
-This is an approval-gated write — an admin must approve before it lands.
+Approval behaviour depends on where you run it: from inside an agent's container `ncl` write verbs are approval-gated (admin approves before it lands); from a host operator shell with full scope, it executes immediately. Either way, the response tells you which path it took.
 
 ### Add the `.gmail-mcp` mount
 
-There is no `ncl groups config add-mount` verb yet (tracked in [#2395](https://github.com/nanocoai/nanoclaw/issues/2395)). Until that ships, edit the DB directly:
+There is no `ncl groups config add-mount` verb yet (tracked in [#2395](https://github.com/nanocoai/nanoclaw/issues/2395)). Until that ships, edit the DB directly via the in-tree wrapper (`scripts/q.ts` — `setup/verify.ts:5` codifies that NanoClaw avoids depending on the `sqlite3` CLI binary, so don't shell out to it):
 
 ```bash
 GROUP_ID='<group-id>'
 HOST_PATH="$HOME/.gmail-mcp"
 MOUNT=$(jq -cn --arg h "$HOST_PATH" '{hostPath:$h, containerPath:".gmail-mcp", readonly:false}')
-sqlite3 data/v2.db "UPDATE container_configs \
-  SET additional_mounts = json_insert(additional_mounts, '$[#]', json('$MOUNT')), \
-      updated_at = strftime('%s','now') \
+pnpm exec tsx scripts/q.ts data/v2.db "UPDATE container_configs \
+  SET additional_mounts = json_insert(additional_mounts, '\$[#]', json('$MOUNT')), \
+      updated_at = datetime('now') \
   WHERE agent_group_id = '$GROUP_ID';"
 ```
 
-Run from your NanoClaw project root (where `data/v2.db` lives). The `$[#]` placeholder appends to the JSON array.
+Run from your NanoClaw project root (where `data/v2.db` lives). The `$[#]` placeholder is SQLite JSON1's append-to-end notation; it's `\$`-escaped so bash doesn't arithmetic-expand it before sqlite sees it. `updated_at` is ISO-string everywhere else in the schema, so use `datetime('now')` — not `strftime('%s','now')`, which would silently mix epoch ints into a column of YYYY-MM-DD HH:MM:SS strings.
 
 **Switch to `ncl groups config add-mount` once #2395 lands.** Update this skill at that time.
 
@@ -228,10 +228,10 @@ Common signals:
    ```
 2. Remove the `.gmail-mcp` mount from the DB (no `remove-mount` verb yet — same #2395 dependency):
    ```bash
-   sqlite3 data/v2.db "UPDATE container_configs \
+   pnpm exec tsx scripts/q.ts data/v2.db "UPDATE container_configs \
      SET additional_mounts = (SELECT json_group_array(value) FROM json_each(additional_mounts) \
                               WHERE json_extract(value, '\$.containerPath') != '.gmail-mcp'), \
-         updated_at = strftime('%s','now') \
+         updated_at = datetime('now') \
      WHERE agent_group_id = '<group-id>';"
    ```
 3. Remove the `GMAIL_MCP_VERSION` ARG and the `pnpm install -g @gongrzhe/server-gmail-autoauth-mcp` block from `container/Dockerfile`.

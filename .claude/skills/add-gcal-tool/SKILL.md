@@ -145,27 +145,29 @@ ncl groups config add-mcp-server \
   --env '{"GOOGLE_OAUTH_CREDENTIALS":"/workspace/extra/.calendar-mcp/gcp-oauth.keys.json","GOOGLE_CALENDAR_MCP_TOKEN_PATH":"/workspace/extra/.calendar-mcp/credentials.json"}'
 ```
 
-This is an approval-gated write — an admin must approve before it lands.
+Approval behaviour depends on where you run it: from inside an agent's container `ncl` write verbs are approval-gated (admin approves before it lands); from a host operator shell with full scope, it executes immediately. Either way, the response tells you which path it took.
 
 ### Add the `.calendar-mcp` mount
 
-There is no `ncl groups config add-mount` verb yet (tracked in [#2395](https://github.com/nanocoai/nanoclaw/issues/2395)). Until that ships, edit the DB directly:
+There is no `ncl groups config add-mount` verb yet (tracked in [#2395](https://github.com/nanocoai/nanoclaw/issues/2395)). Until that ships, edit the DB directly via the in-tree wrapper (`scripts/q.ts` — `setup/verify.ts:5` codifies that NanoClaw avoids depending on the `sqlite3` CLI binary, so don't shell out to it):
 
 ```bash
 GROUP_ID='<group-id>'
 HOST_PATH="$HOME/.calendar-mcp"
 MOUNT=$(jq -cn --arg h "$HOST_PATH" '{hostPath:$h, containerPath:".calendar-mcp", readonly:false}')
-sqlite3 data/v2.db "UPDATE container_configs \
-  SET additional_mounts = json_insert(additional_mounts, '$[#]', json('$MOUNT')), \
-      updated_at = strftime('%s','now') \
+pnpm exec tsx scripts/q.ts data/v2.db "UPDATE container_configs \
+  SET additional_mounts = json_insert(additional_mounts, '\$[#]', json('$MOUNT')), \
+      updated_at = datetime('now') \
   WHERE agent_group_id = '$GROUP_ID';"
 ```
 
-Run from your NanoClaw project root (where `data/v2.db` lives).
+Run from your NanoClaw project root (where `data/v2.db` lives). The `$[#]` placeholder is SQLite JSON1's append-to-end notation; it's `\$`-escaped so bash doesn't arithmetic-expand it before sqlite sees it. `updated_at` is ISO-string everywhere else in the schema, so use `datetime('now')` — not `strftime('%s','now')`, which would silently mix epoch ints into a column of YYYY-MM-DD HH:MM:SS strings.
 
 **Switch to `ncl groups config add-mount` once #2395 lands.** Update this skill at that time.
 
 `containerPath` is relative (mount-security rejects absolute paths — additional mounts land at `/workspace/extra/<relative>`).
+
+**Why this can't be `groups/<folder>/container.json`:** post-migration `014-container-configs`, `materializeContainerJson` in `src/container-config.ts` rewrites that file from the DB on every spawn. Anything hand-edited there is silently overwritten on next restart.
 
 **Same-group-as-gmail tip:** if this group already has the gmail MCP + `.gmail-mcp` mount, both coexist — `ncl groups config add-mcp-server` only updates the named entry, and `json_insert` appends to `additional_mounts` without disturbing existing entries.
 
@@ -211,10 +213,10 @@ Common signals:
    ```
 2. Remove the `.calendar-mcp` mount from the DB (no `remove-mount` verb yet — same #2395 dependency):
    ```bash
-   sqlite3 data/v2.db "UPDATE container_configs \
+   pnpm exec tsx scripts/q.ts data/v2.db "UPDATE container_configs \
      SET additional_mounts = (SELECT json_group_array(value) FROM json_each(additional_mounts) \
                               WHERE json_extract(value, '\$.containerPath') != '.calendar-mcp'), \
-         updated_at = strftime('%s','now') \
+         updated_at = datetime('now') \
      WHERE agent_group_id = '<group-id>';"
    ```
 3. Remove `CALENDAR_MCP_VERSION` ARG and the calendar package from the Dockerfile install block.
