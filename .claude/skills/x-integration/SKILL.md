@@ -38,6 +38,8 @@ Before using this skill, ensure:
 
 ## Quick Start
 
+Run from your NanoClaw project root:
+
 ```bash
 # 1. Setup authentication (interactive)
 pnpm exec dotenv -e .env -- pnpm exec tsx .claude/skills/x-integration/scripts/setup.ts
@@ -49,7 +51,7 @@ pnpm exec dotenv -e .env -- pnpm exec tsx .claude/skills/x-integration/scripts/s
 
 # 3. Rebuild host and restart service
 pnpm run build
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
 # Verify: launchctl list | grep "$(launchd_label)" (macOS) or systemctl --user status $(systemd_unit) (Linux)
@@ -271,16 +273,18 @@ cat data/x-auth.json  # Should show {"authenticated": true, ...}
 
 ### 4. Restart Service
 
+Run from your NanoClaw project root:
+
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
 ```
 
-**Verify success:**
+**Verify success** — from your NanoClaw project root:
 ```bash
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl list | grep "$(launchd_label)"  # macOS — should show PID and exit code 0 or -
 # Linux: systemctl --user status $(systemd_unit)
 ```
@@ -346,9 +350,11 @@ echo '{"content":"Test"}' | pnpm exec tsx .claude/skills/x-integration/scripts/p
 
 ### Authentication Expired
 
+Run from your NanoClaw project root:
+
 ```bash
 pnpm exec dotenv -e .env -- pnpm exec tsx .claude/skills/x-integration/scripts/setup.ts
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
 ```

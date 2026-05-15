@@ -171,9 +171,11 @@ Expected: Both operations succeed.
 
 ### Full integration test
 
+Run from your NanoClaw project root:
+
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)
 ```
 

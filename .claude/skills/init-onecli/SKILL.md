@@ -236,7 +236,7 @@ pnpm run build
 
 If build fails, diagnose and fix. Common issue: `@onecli-sh/sdk` not installed — run `pnpm install` first.
 
-Restart the service (run from your NanoClaw project root so the slug helper resolves):
+Restart the service, from your NanoClaw project root:
 - macOS (launchd): `launchctl kickstart -k gui/$(id -u)/"$(. setup/lib/install-slug.sh && launchd_label)"`
 - Linux (systemd): `systemctl --user restart "$(. setup/lib/install-slug.sh && systemd_unit)"`
 - WSL/manual: stop and re-run `bash start-nanoclaw.sh`

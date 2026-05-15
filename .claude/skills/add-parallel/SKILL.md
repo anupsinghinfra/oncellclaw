@@ -229,16 +229,16 @@ echo '{}' | docker run -i --entrypoint /bin/echo nanoclaw-agent:latest "Containe
 
 ### 7. Restart Service
 
-Rebuild the main app and restart:
+Rebuild the main app and restart, from your NanoClaw project root:
 
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
 ```
 
-Wait 3 seconds for service to start, then verify (run from the project root so the slug helper resolves):
+Wait 3 seconds for service to start, then verify:
 ```bash
 sleep 3
 launchctl list | grep "$(. setup/lib/install-slug.sh && launchd_label)"  # macOS

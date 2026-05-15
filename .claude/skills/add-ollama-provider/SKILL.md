@@ -130,10 +130,12 @@ file, not from env vars. This file is bind-mounted into the container as `~/.cla
 
 ## 5. Build and restart
 
+Run from your NanoClaw project root:
+
 ```bash
 export PATH="/opt/homebrew/bin:$PATH"
 pnpm run build
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl unload ~/Library/LaunchAgents/$(launchd_label).plist
 launchctl load   ~/Library/LaunchAgents/$(launchd_label).plist
 # Linux: systemctl --user restart $(systemd_unit)

@@ -41,10 +41,10 @@ npx tsx setup/index.ts --step mounts --force -- --empty
 
 ## After Changes
 
-Restart the service so containers pick up the new config (the unit/label names are per-install — see `setup/lib/install-slug.sh`):
+Restart the service so containers pick up the new config (the unit/label names are per-install — see `setup/lib/install-slug.sh`). Run from your NanoClaw project root:
 
 ```bash
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 systemctl --user restart $(systemd_unit)              # Linux
 ```

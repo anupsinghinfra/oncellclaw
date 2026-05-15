@@ -182,8 +182,10 @@ ATOMIC_CHAT_API_KEY=sk-...
 
 ### Restart the service
 
+Run from your NanoClaw project root:
+
 ```bash
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
 ```

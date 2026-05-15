@@ -128,7 +128,7 @@ echo 'ANTHROPIC_API_KEY=<key>' >> .env
 pnpm run build
 ```
 
-Then restart the service (run from your NanoClaw project root so the slug helper resolves):
+Then restart the service, from your NanoClaw project root:
 - macOS: `launchctl kickstart -k gui/$(id -u)/"$(. setup/lib/install-slug.sh && launchd_label)"`
 - Linux: `systemctl --user restart "$(. setup/lib/install-slug.sh && systemd_unit)"`
 - WSL/manual: stop and re-run `bash start-nanoclaw.sh`

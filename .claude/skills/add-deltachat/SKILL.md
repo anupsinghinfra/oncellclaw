@@ -98,8 +98,10 @@ The `/set-avatar` command (send an image with that caption) is the easiest way t
 
 ### Restart
 
+Run from your NanoClaw project root:
+
 ```bash
-source setup/lib/install-slug.sh  # run from your NanoClaw project root
+source setup/lib/install-slug.sh
 
 # Linux
 systemctl --user restart $(systemd_unit)
