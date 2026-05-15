@@ -139,7 +139,7 @@ If you're in the middle of `/setup`, return to the setup flow now.
 Otherwise, restart the service to pick up the new channel:
 
 ```bash
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 systemctl --user restart $(systemd_unit)              # Linux
 ```

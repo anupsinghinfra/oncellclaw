@@ -95,7 +95,7 @@ Generate the secret: `node -e "console.log('nc-' + require('crypto').randomBytes
 
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 systemctl --user restart $(systemd_unit)              # Linux
 # or: launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 ```

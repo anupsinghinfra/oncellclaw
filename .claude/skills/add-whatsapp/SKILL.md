@@ -247,7 +247,7 @@ rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --met
 Signal sessions corrupted from rapid restarts. Clear sessions:
 
 ```bash
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 systemctl --user stop $(systemd_unit)
 rm store/auth/session-*.json
 systemctl --user start $(systemd_unit)
@@ -258,7 +258,7 @@ systemctl --user start $(systemd_unit)
 1. Auth exists: `test -f store/auth/creds.json`
 2. Connected: `grep "Connected to WhatsApp" logs/nanoclaw.log | tail -1`
 3. Channel wired: `pnpm exec tsx scripts/q.ts data/v2.db "SELECT mg.platform_id, mg.name FROM messaging_groups mg JOIN messaging_group_agents mga ON mg.id=mga.messaging_group_id WHERE mg.channel_type='whatsapp'"`
-4. Service running: `systemctl --user status "$(. setup/lib/install-slug.sh; systemd_unit)"`
+4. Service running: `systemctl --user status "$(. setup/lib/install-slug.sh && systemd_unit)"` (run from the project root so the slug helper resolves)
 
 ### "conflict" disconnection
 

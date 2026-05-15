@@ -173,7 +173,7 @@ Expected: Both operations succeed.
 
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)
 ```
 

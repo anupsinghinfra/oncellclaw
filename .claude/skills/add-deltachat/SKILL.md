@@ -99,7 +99,7 @@ The `/set-avatar` command (send an image with that caption) is the easiest way t
 ### Restart
 
 ```bash
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 
 # Linux
 systemctl --user restart $(systemd_unit)
@@ -234,7 +234,7 @@ Set `DC_SMTP_SECURITY=1` and `DC_SMTP_PORT=465` in `.env`, then restart.
 
 ```bash
 rm -f dc-account/accounts.lock
-systemctl --user restart "$(. setup/lib/install-slug.sh; systemd_unit)"
+systemctl --user restart "$(. setup/lib/install-slug.sh && systemd_unit)"
 ```
 
 ### Bot not responding after restart

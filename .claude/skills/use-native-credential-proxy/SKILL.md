@@ -128,9 +128,9 @@ echo 'ANTHROPIC_API_KEY=<key>' >> .env
 pnpm run build
 ```
 
-Then restart the service:
-- macOS: `launchctl kickstart -k gui/$(id -u)/"$(. setup/lib/install-slug.sh; launchd_label)"`
-- Linux: `systemctl --user restart "$(. setup/lib/install-slug.sh; systemd_unit)"`
+Then restart the service (run from your NanoClaw project root so the slug helper resolves):
+- macOS: `launchctl kickstart -k gui/$(id -u)/"$(. setup/lib/install-slug.sh && launchd_label)"`
+- Linux: `systemctl --user restart "$(. setup/lib/install-slug.sh && systemd_unit)"`
 - WSL/manual: stop and re-run `bash start-nanoclaw.sh`
 
 2. Check logs for successful proxy startup:

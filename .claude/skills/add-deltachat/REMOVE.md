@@ -25,7 +25,7 @@ DC_SMTP_PORT
 
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 
 # Linux
 systemctl --user restart $(systemd_unit)

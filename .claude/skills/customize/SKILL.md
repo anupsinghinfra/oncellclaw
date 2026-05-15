@@ -92,7 +92,7 @@ Always tell the user:
 ```bash
 # Rebuild and restart
 pnpm run build
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 # macOS:
 launchctl unload ~/Library/LaunchAgents/$(launchd_label).plist
 launchctl load ~/Library/LaunchAgents/$(launchd_label).plist

@@ -90,7 +90,7 @@ docker run --rm --entrypoint mnemon nanoclaw-agent:latest --version
 ### Restart the service
 
 ```bash
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 systemctl --user restart $(systemd_unit)              # Linux
 # launchctl kickstart -k gui/$(id -u)/$(launchd_label)   # macOS
 ```

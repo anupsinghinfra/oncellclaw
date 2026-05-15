@@ -233,17 +233,16 @@ Rebuild the main app and restart:
 
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
 ```
 
-Wait 3 seconds for service to start, then verify:
+Wait 3 seconds for service to start, then verify (run from the project root so the slug helper resolves):
 ```bash
 sleep 3
-source setup/lib/install-slug.sh
-launchctl list | grep "$(launchd_label)"  # macOS
-# Linux: systemctl --user status $(systemd_unit)
+launchctl list | grep "$(. setup/lib/install-slug.sh && launchd_label)"  # macOS
+# Linux: systemctl --user status "$(. setup/lib/install-slug.sh && systemd_unit)"
 ```
 
 ### 8. Test Integration

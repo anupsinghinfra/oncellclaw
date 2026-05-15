@@ -164,7 +164,7 @@ If you changed `EMACS_CHANNEL_PORT` from the default:
 
 ```bash
 pnpm run build
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)   # macOS
 # systemctl --user restart $(systemd_unit)             # Linux
 ```
@@ -241,7 +241,7 @@ grep -q "import './emacs.js'" src/channels/index.ts && echo "imported" || echo "
 
 ### No response from agent
 
-1. NanoClaw running: `launchctl list | grep nanoclaw` (macOS) / `systemctl --user status "$(. setup/lib/install-slug.sh; systemd_unit)"` (Linux)
+1. NanoClaw running: `launchctl list | grep "$(. setup/lib/install-slug.sh && launchd_label)"` (macOS) / `systemctl --user status "$(. setup/lib/install-slug.sh && systemd_unit)"` (Linux) — run from the project root so the slug helper resolves
 2. Messaging group wired: `pnpm exec tsx scripts/q.ts data/v2.db "SELECT mg.platform_id, ag.folder FROM messaging_groups mg JOIN messaging_group_agents mga ON mg.id = mga.messaging_group_id JOIN agent_groups ag ON ag.id = mga.agent_group_id WHERE mg.channel_type = 'emacs'"`
 3. Logs show inbound: `grep 'channel_type=emacs\|Emacs' logs/nanoclaw.log | tail -20`
 
@@ -288,7 +288,7 @@ rm src/channels/emacs.ts src/channels/emacs.test.ts emacs/nanoclaw.el
 # Remove the `import './emacs.js';` line from src/channels/index.ts
 # Remove EMACS_* lines from .env
 pnpm run build
-source setup/lib/install-slug.sh
+source setup/lib/install-slug.sh  # run from your NanoClaw project root
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)   # macOS
 # systemctl --user restart $(systemd_unit)             # Linux
 
