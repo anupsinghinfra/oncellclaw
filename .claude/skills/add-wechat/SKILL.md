@@ -82,7 +82,9 @@ Sync to container: `mkdir -p data/env && cp .env data/env/env`
 
 ### 2. Start the service and scan the QR
 
-Restart NanoClaw — run from your NanoClaw project root:
+Restart NanoClaw.
+
+Run from your NanoClaw project root:
 
 ```bash
 source setup/lib/install-slug.sh

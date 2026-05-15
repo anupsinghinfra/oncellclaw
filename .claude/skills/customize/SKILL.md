@@ -88,7 +88,10 @@ Implementation:
 
 ## After Changes
 
-Always tell the user — run from your NanoClaw project root:
+Always tell the user.
+
+Run from your NanoClaw project root:
+
 ```bash
 # Rebuild and restart
 pnpm run build

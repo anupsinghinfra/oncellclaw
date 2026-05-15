@@ -244,7 +244,9 @@ rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --met
 
 ### "waiting for this message" on reactions
 
-Signal sessions corrupted from rapid restarts. Clear sessions — run from your NanoClaw project root:
+Signal sessions corrupted from rapid restarts. Clear sessions.
+
+Run from your NanoClaw project root:
 
 ```bash
 source setup/lib/install-slug.sh

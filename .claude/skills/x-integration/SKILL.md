@@ -282,7 +282,10 @@ launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
 ```
 
-**Verify success** — from your NanoClaw project root:
+**Verify success.**
+
+Run from your NanoClaw project root:
+
 ```bash
 source setup/lib/install-slug.sh
 launchctl list | grep "$(launchd_label)"  # macOS — should show PID and exit code 0 or -
