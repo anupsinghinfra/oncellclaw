@@ -1,6 +1,8 @@
 # Releasing NanoClaw
 
-Starting with v2.0.63, NanoClaw publishes a GitHub Release on every `package.json` version bump. Each release ships:
+Starting with v2.0.63, the goal is to publish a GitHub Release for every `package.json` version bump that lands on `main`. Releases are cut manually by a maintainer, so there can be lag between a bump merging and its release being published. The intent is *timeliness*, not strict 1:1 correlation with every bump.
+
+Each release ships:
 
 - A tagged commit on `main` (`vX.Y.Z`).
 - A `CHANGELOG.md` entry under `## [<version>] - <YYYY-MM-DD>`.
@@ -8,7 +10,7 @@ Starting with v2.0.63, NanoClaw publishes a GitHub Release on every `package.jso
 
 ## When to cut a release
 
-A release is cut whenever `package.json` is bumped on `main`. Maintainers bump the version on whatever cadence the work justifies — there is no fixed schedule. Cutting more frequently is better than batching: smaller releases are easier to read, pin, and revert.
+A release is cut by a maintainer publishing it. The trigger is a `package.json` bump on `main`, but the publish step is manual — there is no fixed schedule, and bumps that land back-to-back may be rolled into a single release (as v2.0.55 through v2.0.63 were). Cutting more frequently is preferable to batching: smaller releases are easier to read, pin, and revert.
 
 ## What goes in a release
 
@@ -35,6 +37,14 @@ A release is cut whenever `package.json` is bumped on `main`. Maintainers bump t
 
 If multiple `package.json` bumps land between two GitHub Releases (as happened between v2.0.54 and v2.0.63), the next release is a rollup: its CHANGELOG entry covers everything merged since the last released tag, and the body opens with a one-line "Rollup release covering vX.Y.Z through vX.Y.W." note. After the catchup, return to one release per bump.
 
-## Pinning
+## Channels and stability
 
-Packagers and forks pin to any tagged release. The tag is the source of truth — the GitHub Release's `target_commitish` always points to a tagged commit.
+NanoClaw currently ships a single channel: every published release is a stable release.
+
+- **Latest** — the most recent release on `main`, shown as "Latest release" on the GitHub Releases page. Consumers that want auto-bump follow GitHub's `/releases/latest` pointer.
+- **Stable** — currently identical to latest. NanoClaw has no separate stable branch and no pre-release/RC channel.
+- **Pinned** — any tagged release. Reproducible and the recommended choice for packagers and forks; published tags are not moved or retracted.
+
+If a pre-release channel is introduced later (e.g. `vX.Y.Z-rc.N`), those releases will be marked "Pre-release" on GitHub so they do not become the `latest` pointer, and this section will be updated to describe the promotion path.
+
+The tag is the source of truth — a GitHub Release's `target_commitish` always points to a tagged commit.
