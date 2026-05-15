@@ -2,8 +2,6 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
-For detailed release notes, see the [full changelog on the documentation site](https://docs.nanoclaw.dev/changelog).
-
 ## [2.0.63] - 2026-05-15
 
 Rollup release covering v2.0.55 through v2.0.63 — everything merged since the v2.0.54 tag. Starting with this release, NanoClaw publishes a GitHub Release on every `package.json` version bump; see [RELEASING.md](RELEASING.md).
