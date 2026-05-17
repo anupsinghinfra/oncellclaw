@@ -1,6 +1,7 @@
 import type { McpServerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
+import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
@@ -57,8 +58,104 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
-  operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
+  // `delete` is intentionally not in `operations` — the generic single-table
+  // DELETE violates FK constraints (see #2525). The cascading handler is
+  // provided as `customOperations.delete` below.
+  operations: { list: 'open', get: 'open', create: 'approval', update: 'approval' },
   customOperations: {
+    delete: {
+      access: 'approval',
+      description:
+        'Delete an agent group and its dependent rows (sessions, destinations, approvals, role grants, ' +
+        'memberships, channel wirings). FK-ordered cascade in a single transaction. ' +
+        'Use --id <group-id>. Out of scope: killing running containers, on-disk cleanup of groups/<folder>/ and data/v2-sessions/<group-id>/.',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const db = getDb();
+
+        // Verify the group exists before doing anything — preserves the
+        // genericDelete behaviour of throwing "not found" for unknown IDs.
+        const exists = db.prepare('SELECT 1 FROM agent_groups WHERE id = ? LIMIT 1').get(id);
+        if (!exists) throw new Error(`group not found: ${id}`);
+
+        const hasAgentDestinations = hasTable(db, 'agent_destinations');
+        const hasPendingApprovals = hasTable(db, 'pending_approvals');
+
+        // Pre-flight counts, outside the transaction. Used only for the
+        // response shape — the deletes themselves are the source of truth.
+        const countOne = (sql: string, ...params: unknown[]): number =>
+          (db.prepare(sql).get(...params) as { c: number }).c;
+
+        const removed = {
+          sessions: countOne('SELECT COUNT(*) AS c FROM sessions WHERE agent_group_id = ?', id),
+          pending_questions: countOne(
+            'SELECT COUNT(*) AS c FROM pending_questions WHERE session_id IN (SELECT id FROM sessions WHERE agent_group_id = ?)',
+            id,
+          ),
+          pending_approvals: hasPendingApprovals
+            ? countOne(
+                'SELECT COUNT(*) AS c FROM pending_approvals WHERE agent_group_id = ? OR session_id IN (SELECT id FROM sessions WHERE agent_group_id = ?)',
+                id,
+                id,
+              )
+            : 0,
+          agent_destinations_owned: hasAgentDestinations
+            ? countOne('SELECT COUNT(*) AS c FROM agent_destinations WHERE agent_group_id = ?', id)
+            : 0,
+          agent_destinations_pointing: hasAgentDestinations
+            ? countOne(
+                "SELECT COUNT(*) AS c FROM agent_destinations WHERE target_type = 'agent' AND target_id = ?",
+                id,
+              )
+            : 0,
+          pending_sender_approvals: countOne(
+            'SELECT COUNT(*) AS c FROM pending_sender_approvals WHERE agent_group_id = ?',
+            id,
+          ),
+          pending_channel_approvals: countOne(
+            'SELECT COUNT(*) AS c FROM pending_channel_approvals WHERE agent_group_id = ?',
+            id,
+          ),
+          messaging_group_agents: countOne(
+            'SELECT COUNT(*) AS c FROM messaging_group_agents WHERE agent_group_id = ?',
+            id,
+          ),
+          agent_group_members: countOne('SELECT COUNT(*) AS c FROM agent_group_members WHERE agent_group_id = ?', id),
+          user_roles: countOne('SELECT COUNT(*) AS c FROM user_roles WHERE agent_group_id = ?', id),
+        };
+
+        // FK-ordered cascade. Single sync transaction — better-sqlite3 rolls
+        // back the whole thing if any statement throws (e.g. an FK constraint
+        // we missed), so the central DB stays consistent.
+        const cascade = db.transaction((groupId: string) => {
+          if (hasAgentDestinations) {
+            db.prepare('DELETE FROM agent_destinations WHERE agent_group_id = ?').run(groupId);
+            db.prepare("DELETE FROM agent_destinations WHERE target_type = 'agent' AND target_id = ?").run(groupId);
+          }
+          db.prepare(
+            'DELETE FROM pending_questions WHERE session_id IN (SELECT id FROM sessions WHERE agent_group_id = ?)',
+          ).run(groupId);
+          if (hasPendingApprovals) {
+            db.prepare(
+              'DELETE FROM pending_approvals WHERE agent_group_id = ? OR session_id IN (SELECT id FROM sessions WHERE agent_group_id = ?)',
+            ).run(groupId, groupId);
+          }
+          db.prepare('DELETE FROM sessions WHERE agent_group_id = ?').run(groupId);
+          db.prepare('DELETE FROM pending_sender_approvals WHERE agent_group_id = ?').run(groupId);
+          db.prepare('DELETE FROM pending_channel_approvals WHERE agent_group_id = ?').run(groupId);
+          db.prepare('DELETE FROM messaging_group_agents WHERE agent_group_id = ?').run(groupId);
+          db.prepare('DELETE FROM agent_group_members WHERE agent_group_id = ?').run(groupId);
+          db.prepare('DELETE FROM user_roles WHERE agent_group_id = ?').run(groupId);
+          // container_configs.agent_group_id has ON DELETE CASCADE, so the
+          // matching row is removed automatically by the final delete below.
+          db.prepare('DELETE FROM agent_groups WHERE id = ?').run(groupId);
+        });
+        cascade(id);
+
+        return { deleted: id, removed };
+      },
+    },
     restart: {
       access: 'approval',
       description:
