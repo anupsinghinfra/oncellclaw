@@ -99,6 +99,7 @@ registerResource({
             messaging_group_agents: 0,
             agent_group_members: 0,
             user_roles: 0,
+            container_configs: 0,
           };
 
           if (hasAgentDestinations) {
@@ -135,8 +136,11 @@ registerResource({
             .prepare('DELETE FROM agent_group_members WHERE agent_group_id = ?')
             .run(groupId).changes;
           counts.user_roles = db.prepare('DELETE FROM user_roles WHERE agent_group_id = ?').run(groupId).changes;
-          // container_configs.agent_group_id has ON DELETE CASCADE, so the
-          // matching row is removed automatically by the final delete below.
+          // migration-014 has ON DELETE CASCADE on container_configs.agent_group_id;
+          // the explicit delete here mirrors the other tables and surfaces the count.
+          counts.container_configs = db
+            .prepare('DELETE FROM container_configs WHERE agent_group_id = ?')
+            .run(groupId).changes;
           db.prepare('DELETE FROM agent_groups WHERE id = ?').run(groupId);
           return counts;
         });

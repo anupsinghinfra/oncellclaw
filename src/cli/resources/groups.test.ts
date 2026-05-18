@@ -156,6 +156,7 @@ describe('groups CLI delete cascades dependent rows (#2525)', () => {
       messaging_group_agents: 1,
       agent_group_members: 1,
       user_roles: 1,
+      container_configs: 1,
     });
 
     // The group and every dependent row must be gone.
