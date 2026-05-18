@@ -40,7 +40,11 @@ function now(): string {
 }
 
 function count(sql: string, ...params: unknown[]): number {
-  return (getDb().prepare(sql).get(...params) as { c: number }).c;
+  return (
+    getDb()
+      .prepare(sql)
+      .get(...params) as { c: number }
+  ).c;
 }
 
 describe('groups CLI delete cascades dependent rows (#2525)', () => {
@@ -81,9 +85,10 @@ describe('groups CLI delete cascades dependent rows (#2525)', () => {
     // Direct inserts for the dependent tables. Keeps the fixture minimal —
     // we only need rows that establish FK relationships, not full domain
     // entities.
-    db.prepare(
-      `INSERT INTO users (id, kind, display_name, created_at) VALUES (?, 'telegram', 'someone', ?)`,
-    ).run(UID, now());
+    db.prepare(`INSERT INTO users (id, kind, display_name, created_at) VALUES (?, 'telegram', 'someone', ?)`).run(
+      UID,
+      now(),
+    );
     db.prepare(
       `INSERT INTO messaging_groups (id, channel_type, platform_id, name, is_group, unknown_sender_policy, created_at)
        VALUES (?, 'telegram', 'tg-1', 'chat', 1, 'strict', ?)`,
@@ -135,10 +140,7 @@ describe('groups CLI delete cascades dependent rows (#2525)', () => {
        VALUES (?, NULL, NULL, NULL, NULL, NULL, NULL, '"all"', '{}', '[]', '[]', '[]', 'group', ?)`,
     ).run(GID, now());
 
-    const resp = await dispatch(
-      { id: 'req-del', command: 'groups-delete', args: { id: GID } },
-      { caller: 'host' },
-    );
+    const resp = await dispatch({ id: 'req-del', command: 'groups-delete', args: { id: GID } }, { caller: 'host' });
 
     expect(resp.ok).toBe(true);
     const data = (resp as { ok: true; data: { deleted: string; removed: Record<string, number> } }).data;
@@ -160,7 +162,9 @@ describe('groups CLI delete cascades dependent rows (#2525)', () => {
     expect(count('SELECT COUNT(*) AS c FROM agent_groups WHERE id = ?', GID)).toBe(0);
     expect(count('SELECT COUNT(*) AS c FROM sessions WHERE agent_group_id = ?', GID)).toBe(0);
     expect(count('SELECT COUNT(*) AS c FROM pending_questions WHERE session_id = ?', SID)).toBe(0);
-    expect(count('SELECT COUNT(*) AS c FROM pending_approvals WHERE agent_group_id = ? OR session_id = ?', GID, SID)).toBe(0);
+    expect(
+      count('SELECT COUNT(*) AS c FROM pending_approvals WHERE agent_group_id = ? OR session_id = ?', GID, SID),
+    ).toBe(0);
     expect(count('SELECT COUNT(*) AS c FROM agent_destinations WHERE agent_group_id = ?', GID)).toBe(0);
     expect(count('SELECT COUNT(*) AS c FROM pending_sender_approvals WHERE agent_group_id = ?', GID)).toBe(0);
     expect(count('SELECT COUNT(*) AS c FROM pending_channel_approvals WHERE agent_group_id = ?', GID)).toBe(0);
@@ -190,10 +194,7 @@ describe('groups CLI delete cascades dependent rows (#2525)', () => {
        VALUES (?, 'sibling', 'agent', ?, ?)`,
     ).run(B, A, now());
 
-    const resp = await dispatch(
-      { id: 'req-del-a', command: 'groups-delete', args: { id: A } },
-      { caller: 'host' },
-    );
+    const resp = await dispatch({ id: 'req-del-a', command: 'groups-delete', args: { id: A } }, { caller: 'host' });
 
     expect(resp.ok).toBe(true);
     const data = (resp as { ok: true; data: { removed: Record<string, number> } }).data;

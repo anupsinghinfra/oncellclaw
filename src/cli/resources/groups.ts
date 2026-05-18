@@ -104,10 +104,7 @@ registerResource({
             ? countOne('SELECT COUNT(*) AS c FROM agent_destinations WHERE agent_group_id = ?', id)
             : 0,
           agent_destinations_pointing: hasAgentDestinations
-            ? countOne(
-                "SELECT COUNT(*) AS c FROM agent_destinations WHERE target_type = 'agent' AND target_id = ?",
-                id,
-              )
+            ? countOne("SELECT COUNT(*) AS c FROM agent_destinations WHERE target_type = 'agent' AND target_id = ?", id)
             : 0,
           pending_sender_approvals: countOne(
             'SELECT COUNT(*) AS c FROM pending_sender_approvals WHERE agent_group_id = ?',
