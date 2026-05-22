@@ -82,6 +82,12 @@ Requires Node.js 18+, a Microsoft 365 account with sideloading permissions, and 
      --endpoint "https://your-domain/api/webhooks/teams"
    ```
 
+   The CLI prints the credentials as `CLIENT_ID`, `CLIENT_SECRET`, and `TENANT_ID`. Map them to NanoClaw's env keys:
+
+   - `CLIENT_ID` → `TEAMS_APP_ID`
+   - `CLIENT_SECRET` → `TEAMS_APP_PASSWORD`
+   - `TENANT_ID` → `TEAMS_APP_TENANT_ID`
+
 4. Pick **Install in Teams** from the post-create menu and confirm in the Teams dialog.
 
 Continue to [Configure environment](#configure-environment).
