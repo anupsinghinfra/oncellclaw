@@ -4,6 +4,7 @@ import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '
 import { getPendingMessages, markCompleted } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
+import { isCorruptionError } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
 
 beforeEach(() => {
@@ -375,5 +376,22 @@ describe('end-to-end with mock provider', () => {
     expect(outMessages).toHaveLength(1);
     expect(JSON.parse(outMessages[0].content).text).toBe('The answer is 4');
     expect(outMessages[0].in_reply_to).toBe('m1');
+  });
+});
+
+describe('isCorruptionError', () => {
+  it('matches the Docker Desktop macOS torn-read symptom', () => {
+    expect(isCorruptionError('database disk image is malformed')).toBe(true);
+  });
+
+  it('matches wrapped SQLite corruption codes', () => {
+    expect(isCorruptionError('SqliteError: SQLITE_CORRUPT_VTAB: ...')).toBe(true);
+    expect(isCorruptionError('file is not a database')).toBe(true);
+  });
+
+  it('returns false for unrelated errors', () => {
+    expect(isCorruptionError('database is locked')).toBe(false);
+    expect(isCorruptionError('no such table: messages_in')).toBe(false);
+    expect(isCorruptionError('')).toBe(false);
   });
 });
