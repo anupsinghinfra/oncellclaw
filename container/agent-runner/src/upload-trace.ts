@@ -80,11 +80,6 @@ export function uploadTrace(): string {
       '   or on the host at http://127.0.0.1:10254 — then Secrets → New secret,',
       '   paste the token, and set the host pattern to  huggingface.co',
       '',
-      '3. Assign it to this agent — new agents start with no secrets attached.',
-      '   In the same dashboard, open this agent and set its secret mode to "all"; or from the host run:',
-      '     onecli agents list                                   # find this agent\'s id',
-      '     onecli agents set-secret-mode --id <agent-id> --mode all',
-      '',
       'Then run /upload-trace again — no restart needed.',
     ].join('\n');
   }
