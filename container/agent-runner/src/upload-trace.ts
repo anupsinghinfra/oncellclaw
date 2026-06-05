@@ -92,10 +92,10 @@ function notSignedInMessage(body: string): string {
     '   (New token → type "Write" → copy it).',
     '',
     setupUrl
-      ? `2. Add it to OneCLI here (host pattern pre-filled): ${setupUrl}`
+      ? `2. Add it to OneCLI here: ${setupUrl}`
       : '2. Add it to the OneCLI vault as a secret with host pattern  huggingface.co',
     '',
-    'Then run /upload-trace again — no restart needed.',
+    'Then run /upload-trace again.',
   ];
   return lines.join('\n');
 }
