@@ -76,9 +76,10 @@ function notSignedInMessage(body: string): string {
     const e = JSON.parse(body) as { secret_url?: string; connect_url?: string; manage_url?: string };
     if (e.secret_url) {
       // The pre-filled `path` defaults to the failing request path
-      // (/api/whoami-v2); broaden it to /* so the secret covers the upload
-      // endpoints too, not just whoami.
-      setupUrl = e.secret_url.replace(/([?&]path=)[^&]*/, '$1%2F*');
+      // (/api/whoami-v2), which scopes the secret to that one endpoint. Blank
+      // it so the secret matches all of huggingface.co — the upload endpoints
+      // included, not just whoami.
+      setupUrl = e.secret_url.replace(/([?&]path=)[^&]*/, '$1');
     } else {
       setupUrl = e.connect_url ?? e.manage_url;
     }
