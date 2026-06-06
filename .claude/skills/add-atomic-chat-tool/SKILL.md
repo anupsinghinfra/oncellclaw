@@ -111,7 +111,7 @@ Then, in `buildContainerArgs`, find the `TZ` env line and add the call right aft
 
 ### Surface `[ATOMIC]` log lines at info level
 
-> **Known hotspot.** This rewrites the shared `container.stderr` logger block, which other local-model tools (e.g. `add-ollama-tool` for `[OLLAMA]`) also rewrite to surface their own prefix. Multiple tools replacing the same block is the signal it should become a small registry of info-level prefixes (e.g. `registerInfoLogPrefix('[ATOMIC]')`); for now it is a full-block replacement, so make only the prefix branch your own and leave the rest of the block intact.
+> **Shared block.** This rewrites the `container.stderr` logger, which other local-model tools (e.g. `add-ollama-tool` for `[OLLAMA]`) also edit to surface their own prefix. Touch only the `[ATOMIC]` branch and leave the rest of the block intact, so the edits coexist and removal restores it cleanly.
 
 In the same file, find the stderr logger:
 
