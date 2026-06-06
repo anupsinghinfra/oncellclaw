@@ -76,6 +76,8 @@ systemctl --user restart $(systemd_unit)              # Linux
 # or: launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 ```
 
+Run `build` **before** the tests: it's what guards the `@nanoco/nanoclaw-dashboard` dependency. `dashboard-pusher.ts` reaches the package through `await import('@nanoco/nanoclaw-dashboard')`, so if step 4 was skipped, `pnpm run build` fails with `TS2307: Cannot find module`. The behavior test deliberately *mocks* that package — its `startDashboard` binds a real dashboard port, a side effect we don't want in a test — so the test alone would pass with the dependency missing. Build is therefore the leg that verifies the dependency is installed; keep it ahead of the tests in the validate step.
+
 ### 6. Verify (runtime smoke check)
 
 Once the service is restarted, confirm the dashboard is live:
