@@ -16,6 +16,7 @@ NanoClaw doesn't ship channels in trunk. This skill copies the Slack adapter in 
 Skip to **Credentials** if all of these are already in place:
 
 - `src/channels/slack.ts` exists
+- `src/channels/slack-registration.test.ts` exists
 - `src/channels/index.ts` contains `import './slack.js';`
 - `@chat-adapter/slack` is listed in `package.json` dependencies
 
@@ -27,10 +28,11 @@ Otherwise continue. Every step below is safe to re-run.
 git fetch origin channels
 ```
 
-### 2. Copy the adapter
+### 2. Copy the adapter and its registration test
 
 ```bash
-git show origin/channels:src/channels/slack.ts > src/channels/slack.ts
+git show origin/channels:src/channels/slack.ts                 > src/channels/slack.ts
+git show origin/channels:src/channels/slack-registration.test.ts > src/channels/slack-registration.test.ts
 ```
 
 ### 3. Append the self-registration import
@@ -47,11 +49,16 @@ import './slack.js';
 pnpm install @chat-adapter/slack@4.27.0
 ```
 
-### 5. Build
+### 5. Build and validate
 
 ```bash
 pnpm run build
+pnpm exec vitest run src/channels/slack-registration.test.ts
 ```
+
+Both must be clean before proceeding. `slack-registration.test.ts` is the one integration test: it asserts the `import './slack.js';` line is present in the channel barrel — the single reach-in that makes the adapter register itself. If that line is missing or drifts, the test goes red. (It checks the barrel structurally rather than importing it, so it stays hermetic and doesn't pull `@chat-adapter/slack` into the test process. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.)
+
+End-to-end message delivery against a real Slack workspace is verified manually once the service is running — see Next Steps and the webhook setup above.
 
 ## Credentials
 
