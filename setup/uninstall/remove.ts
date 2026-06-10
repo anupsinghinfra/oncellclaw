@@ -114,10 +114,31 @@ function runAction(action: RemovalAction, deps: ExecDeps, notes: string[]): void
       // Exit 1 = no matching process — not a failure.
       runCommand('pkill', ['-f', action.pattern]);
       break;
-    case 'rm-containers':
-      runCommand(action.runtime, ['rm', '-f', ...action.containerIds]);
-      log(`✓ removed ${action.containerIds.length} container(s)`);
+    case 'rm-containers': {
+      // Re-list at removal time: the host was alive during the confirm
+      // phase and may have spawned containers the scan never saw.
+      const ps = runCommand(action.runtime, [
+        'ps',
+        '-aq',
+        '--filter',
+        `label=${action.labelFilter}`,
+      ]);
+      if (ps.status !== 0) {
+        notes.push(
+          `Containers: '${action.runtime}' unavailable — remove later with: ` +
+            `${action.runtime} ps -aq --filter label=${action.labelFilter} | xargs -r ${action.runtime} rm -f`,
+        );
+        break;
+      }
+      const ids = ps.stdout
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (ids.length === 0) break;
+      runCommand(action.runtime, ['rm', '-f', ...ids]);
+      log(`✓ removed ${ids.length} container(s)`);
       break;
+    }
     case 'rmi': {
       const res = runCommand(action.runtime, ['rmi', action.image]);
       if (res.status === 0) {
@@ -143,14 +164,24 @@ function runAction(action: RemovalAction, deps: ExecDeps, notes: string[]): void
       ]);
       if (res.status === 0) {
         log(`✓ deleted OneCLI agent ${action.agent.name} (${action.agent.identifier})`);
+      } else if (res.status === null) {
+        // spawn failure (binary gone since the scan), not a missing agent
+        log(`! couldn't run onecli for ${action.agent.identifier}`);
+        notes.push(
+          `OneCLI agent ${action.agent.name} (${action.agent.identifier}): couldn't run onecli — ` +
+            `delete manually with: onecli agents delete --id ${action.agent.uuid}`,
+        );
       } else {
         log(`! OneCLI agent ${action.agent.identifier} already gone`);
       }
       break;
     }
     case 'backup-env': {
+      // Backup and removal are one action so a failed backup (which throws
+      // into executePlan's catch) can never be followed by the deletion.
       const backup = backupEnv(action.envPath);
-      log(`✓ .env backed up to ${backup}`);
+      fs.rmSync(action.envPath, { force: true });
+      log(`✓ removed .env (backup at ${backup})`);
       break;
     }
     case 'delete-path':

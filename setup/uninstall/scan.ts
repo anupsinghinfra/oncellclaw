@@ -141,8 +141,10 @@ export function detectExistingInstall(projectRoot: string): boolean {
     );
   }
   if (process.platform === 'linux') {
-    return fs.existsSync(
-      path.join(home, '.config', 'systemd', 'user', `${getSystemdUnit(projectRoot)}.service`),
+    const unit = getSystemdUnit(projectRoot);
+    return (
+      fs.existsSync(path.join(home, '.config', 'systemd', 'user', `${unit}.service`)) ||
+      fs.existsSync(`/etc/systemd/system/${unit}.service`)
     );
   }
   return false;

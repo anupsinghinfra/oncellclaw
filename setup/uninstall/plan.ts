@@ -33,10 +33,20 @@ export type RemovalAction =
     }
   | { kind: 'kill-pid'; pidFile: string }
   | { kind: 'pkill-host'; pattern: string }
-  | { kind: 'rm-containers'; runtime: string; containerIds: string[] }
+  /**
+   * Containers are re-listed by label at removal time, not removed from
+   * scan-time ids — the host stays alive through the whole confirm phase
+   * and can spawn new containers after the scan.
+   */
+  | { kind: 'rm-containers'; runtime: string; labelFilter: string }
   | { kind: 'rmi'; runtime: string; image: string }
   | { kind: 'rm-ncl-symlink'; linkPath: string }
   | { kind: 'delete-onecli-agent'; agent: VaultAgent }
+  /**
+   * Backs up AND removes .env as one atomic action: a failed backup must
+   * never be followed by the deletion (the backup is the user's only copy
+   * of their API keys). .env is deliberately excluded from `delete-path`.
+   */
   | { kind: 'backup-env'; envPath: string }
   | { kind: 'delete-path'; item: PathItem }
   | { kind: 'delete-runtime-path'; item: PathItem };
@@ -75,13 +85,13 @@ export function buildRemovalPlan(inv: Inventory, d: Decisions): RemovalAction[] 
       kind: 'pkill-host',
       pattern: `${inv.projectRoot}/dist/index.js`,
     });
-    if (s.containerIds.length > 0) {
-      actions.push({
-        kind: 'rm-containers',
-        runtime: inv.containerRuntime,
-        containerIds: s.containerIds,
-      });
-    }
+    // Unconditional (like pkill): the scan may have found zero containers
+    // while the still-running host spawned one since.
+    actions.push({
+      kind: 'rm-containers',
+      runtime: inv.containerRuntime,
+      labelFilter: `nanoclaw-install=${inv.slug}`,
+    });
     if (s.image) {
       actions.push({ kind: 'rmi', runtime: inv.containerRuntime, image: s.image });
     }
@@ -97,7 +107,10 @@ export function buildRemovalPlan(inv: Inventory, d: Decisions): RemovalAction[] 
   if (d.data) {
     const env = inv.data.find((i) => path.basename(i.path) === '.env');
     if (env) actions.push({ kind: 'backup-env', envPath: env.path });
-    for (const item of inv.data) actions.push({ kind: 'delete-path', item });
+    for (const item of inv.data) {
+      if (item === env) continue; // removed by backup-env, never a bare delete
+      actions.push({ kind: 'delete-path', item });
+    }
   }
 
   if (d.user) {

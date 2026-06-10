@@ -13,7 +13,9 @@
  * Ctrl-C anywhere in the confirm phase leaves the install untouched.
  */
 import { spawnSync } from 'child_process';
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 
 import * as p from '@clack/prompts';
 import k from 'kleur';
@@ -75,7 +77,10 @@ export async function runUninstallFlow(opts: {
   const home = os.homedir();
 
   p.intro(k.bold(`Uninstall NanoClaw`));
-  phEmit('uninstall_started', { invokedFrom: opts.invokedFrom, dryRun, yes });
+  // persistId: false — the emit must not create data/install-id, which would
+  // both break --dry-run's "changes nothing" promise and resurrect a data/
+  // row in the very inventory we are about to scan.
+  phEmit('uninstall_started', { invokedFrom: opts.invokedFrom, dryRun, yes }, { persistId: false });
 
   const spinner = p.spinner();
   spinner.start('Checking what exists for this copy…');
@@ -166,17 +171,20 @@ export async function runUninstallFlow(opts: {
 
   const onecliDelete = await decideOnecli(inv, yes, keptNotes);
 
-  // Last point where logs/ is guaranteed to still exist — record the
-  // decisions before execution can delete it.
-  setupLog.userInput(
-    'uninstall_decisions',
-    JSON.stringify({
-      service: serviceYes,
-      data: dataYes,
-      user: userYes,
-      onecliAgentsDeleted: onecliDelete.length,
-    }),
-  );
+  // Record the decisions before execution can delete logs/ — but only into
+  // an existing logs/ (userInput would otherwise mkdir it back into
+  // existence, leaving a fresh logs/setup.log behind after the uninstall).
+  if (fs.existsSync(path.join(projectRoot, 'logs'))) {
+    setupLog.userInput(
+      'uninstall_decisions',
+      JSON.stringify({
+        service: serviceYes,
+        data: dataYes,
+        user: userYes,
+        onecliAgentsDeleted: onecliDelete.length,
+      }),
+    );
+  }
 
   const decisions: Decisions = {
     service: serviceYes,
@@ -192,13 +200,17 @@ export async function runUninstallFlow(opts: {
     process.exit(0);
   }
 
-  phEmit('uninstall_executed', {
-    invokedFrom: opts.invokedFrom,
-    service: serviceYes,
-    data: dataYes,
-    user: userYes,
-    onecliAgentsDeleted: onecliDelete.length,
-  });
+  phEmit(
+    'uninstall_executed',
+    {
+      invokedFrom: opts.invokedFrom,
+      service: serviceYes,
+      data: dataYes,
+      user: userYes,
+      onecliAgentsDeleted: onecliDelete.length,
+    },
+    { persistId: false },
+  );
 
   // The runtime tail (dist/, node_modules/) runs after every other action
   // AND after the summary — nothing but console.log may happen once the
@@ -215,7 +227,11 @@ export async function runUninstallFlow(opts: {
 
   printLeftAlone([...inv.notes, ...keptNotes, ...execNotes]);
 
-  executePlan(tail, { ...deps, log: (line) => console.log(`  ${line}`) });
+  const { notes: tailNotes } = executePlan(tail, {
+    ...deps,
+    log: (line) => console.log(`  ${line}`),
+  });
+  for (const n of tailNotes) console.log(`  • ${n}`);
   console.log(`\n✓ Done. NanoClaw copy ${inv.slug} has been uninstalled.`);
   process.exit(0);
 }

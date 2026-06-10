@@ -36,7 +36,8 @@ for arg in "$@"; do
     # exec tsx directly rather than `pnpm run -- …`: pnpm passes the `--`
     # separator through to the script, where the flag parser treats
     # everything after it as positional args and the flags get dropped.
-    if command -v pnpm >/dev/null 2>&1 && [ -x "$PROJECT_ROOT/node_modules/.bin/tsx" ]; then
+    # Gate on node (tsx's shebang interpreter) — pnpm isn't used here.
+    if command -v node >/dev/null 2>&1 && [ -x "$PROJECT_ROOT/node_modules/.bin/tsx" ]; then
       exec "$PROJECT_ROOT/node_modules/.bin/tsx" "$PROJECT_ROOT/setup/auto.ts" "$@"
     fi
     export NANOCLAW_PROJECT_ROOT="$PROJECT_ROOT"

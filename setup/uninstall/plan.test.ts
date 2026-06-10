@@ -51,14 +51,12 @@ const allYes = (onecliDelete: VaultAgent[] = []): Decisions => ({
 const kinds = (actions: RemovalAction[]) => actions.map((a) => a.kind);
 
 describe('buildRemovalPlan ordering invariants', () => {
-  it('backs up .env strictly before deleting it', () => {
+  it('removes .env only via the atomic backup action, never a bare delete', () => {
     const actions = buildRemovalPlan(inventory(), allYes());
-    const backupIdx = actions.findIndex((a) => a.kind === 'backup-env');
-    const envDeleteIdx = actions.findIndex(
-      (a) => a.kind === 'delete-path' && a.item.path === '/proj/.env',
-    );
-    expect(backupIdx).toBeGreaterThanOrEqual(0);
-    expect(envDeleteIdx).toBeGreaterThan(backupIdx);
+    expect(actions.filter((a) => a.kind === 'backup-env')).toHaveLength(1);
+    expect(
+      actions.some((a) => a.kind === 'delete-path' && a.item.path === '/proj/.env'),
+    ).toBe(false);
   });
 
   it('puts the runtime tail strictly last, with node_modules final', () => {
@@ -140,14 +138,19 @@ describe('buildRemovalPlan conditional actions', () => {
     expect(kinds(buildRemovalPlan(inv, allYes()))).not.toContain('backup-env');
   });
 
-  it('skips container/image actions when nothing was found', () => {
+  it('always re-sweeps containers and processes with a confirmed service group', () => {
     const inv = inventory({ service: { containerIds: [] } });
-    const actionKinds = kinds(buildRemovalPlan(inv, allYes()));
-    expect(actionKinds).not.toContain('rm-containers');
+    const actions = buildRemovalPlan(inv, allYes());
+    const actionKinds = kinds(actions);
     expect(actionKinds).not.toContain('rmi');
     expect(actionKinds).not.toContain('unload-service');
-    // pkill always runs with a confirmed service group — a manually started
-    // host has no plist/unit but must still be stopped.
+    // pkill and rm-containers run unconditionally — a manually started host
+    // has no plist/unit, and the live host may have spawned containers the
+    // scan never saw. Removal re-lists by install label, not scan-time ids.
     expect(actionKinds).toContain('pkill-host');
+    const rm = actions.find((a) => a.kind === 'rm-containers');
+    expect(rm && rm.kind === 'rm-containers' ? rm.labelFilter : '').toBe(
+      'nanoclaw-install=abcd1234',
+    );
   });
 });

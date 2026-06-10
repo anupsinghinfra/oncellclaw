@@ -125,6 +125,71 @@ describe('executePlan', () => {
     expect(notes.some((n) => n.includes('docker rmi img:latest'))).toBe(true);
   });
 
+  it('removes .env only after a successful backup', () => {
+    const envPath = path.join(tempDir, '.env');
+    fs.writeFileSync(envPath, 'KEY=secret');
+
+    const { notes } = executePlan([{ kind: 'backup-env', envPath }], deps());
+
+    expect(fs.existsSync(envPath)).toBe(false);
+    expect(fs.readFileSync(path.join(tempDir, '.env.bak'), 'utf-8')).toBe('KEY=secret');
+    expect(notes).toEqual([]);
+  });
+
+  it('keeps .env when the backup fails', () => {
+    const envPath = path.join(tempDir, '.env');
+    fs.writeFileSync(envPath, 'KEY=secret');
+    fs.chmodSync(tempDir, 0o555); // backup destination unwritable
+
+    try {
+      const { notes } = executePlan([{ kind: 'backup-env', envPath }], deps());
+      expect(fs.existsSync(envPath)).toBe(true);
+      expect(notes.some((n) => n.includes('backup-env'))).toBe(true);
+    } finally {
+      fs.chmodSync(tempDir, 0o755);
+    }
+  });
+
+  it('re-lists containers by label at removal time instead of using scan-time ids', () => {
+    const calls: string[][] = [];
+    const docker: RunCommand = (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ps') return { status: 0, stdout: 'fresh1\nfresh2\n' };
+      return { status: 0, stdout: '' };
+    };
+
+    executePlan(
+      [{ kind: 'rm-containers', runtime: 'docker', labelFilter: 'nanoclaw-install=abcd1234' }],
+      deps({ runCommand: docker }),
+    );
+
+    expect(calls).toEqual([
+      ['docker', 'ps', '-aq', '--filter', 'label=nanoclaw-install=abcd1234'],
+      ['docker', 'rm', '-f', 'fresh1', 'fresh2'],
+    ]);
+  });
+
+  it('notes a manual command when the container runtime is unavailable', () => {
+    const { notes } = executePlan(
+      [{ kind: 'rm-containers', runtime: 'docker', labelFilter: 'nanoclaw-install=x' }],
+      deps({ runCommand: () => ({ status: null, stdout: '' }) }),
+    );
+    expect(notes.some((n) => n.includes('xargs -r docker rm -f'))).toBe(true);
+  });
+
+  it('notes a manual delete when onecli itself cannot be run', () => {
+    const { notes } = executePlan(
+      [
+        {
+          kind: 'delete-onecli-agent',
+          agent: { uuid: 'u-123', identifier: 'ag-mine', name: 'Mine' },
+        },
+      ],
+      deps({ runCommand: () => ({ status: null, stdout: '' }) }),
+    );
+    expect(notes.some((n) => n.includes('onecli agents delete --id u-123'))).toBe(true);
+  });
+
   it('deletes OneCLI agents by vault uuid, never by identifier', () => {
     const calls: string[][] = [];
     const recorder: RunCommand = (cmd, args) => {
