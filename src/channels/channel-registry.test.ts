@@ -30,19 +30,24 @@ function now() {
 /** Create a mock ChannelAdapter for testing. */
 function createMockAdapter(
   channelType: string,
-): ChannelAdapter & { delivered: OutboundMessage[]; inbound: InboundMessage[] } {
+  instance?: string,
+): ChannelAdapter & { delivered: OutboundMessage[]; inbound: InboundMessage[]; setupTimes: number[] } {
   const delivered: OutboundMessage[] = [];
   const inbound: InboundMessage[] = [];
+  const setupTimes: number[] = [];
   let setupConfig: ChannelSetup | null = null;
 
   return {
-    name: channelType,
+    name: instance ?? channelType,
     channelType,
+    instance,
     supportsThreads: false,
     delivered,
     inbound,
+    setupTimes,
 
     async setup(config: ChannelSetup) {
+      setupTimes.push(Date.now());
       setupConfig = config;
     },
 
@@ -114,6 +119,116 @@ describe('channel registry', () => {
     const active = getActiveAdapters();
     const noCreds = active.find((a) => a.name === 'no-creds');
     expect(noCreds).toBeUndefined();
+  });
+});
+
+describe('channel registry — instance keying', () => {
+  // Fresh module per test: the registry and activeAdapters maps are
+  // module-level, and these arms register conflicting same-channelType
+  // adapters that must not leak across tests.
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    const { teardownChannelAdapters } = await import('./channel-registry.js');
+    await teardownChannelAdapters();
+    vi.useRealTimers();
+    // Drop this test's registrations so later describe blocks (which import
+    // the registry without resetting) start from an empty registry instead
+    // of inheriting same-channelType pairs (and their 10s stagger).
+    vi.resetModules();
+  });
+
+  const mockSetup = () => ({
+    onInbound: () => {},
+    onInboundEvent: () => {},
+    onMetadata: () => {},
+    onAction: () => {},
+  });
+
+  it('keys two same-channelType adapters by instance — both resolvable', async () => {
+    const reg = await import('./channel-registry.js');
+    const worker = createMockAdapter('slack', 'slack-worker');
+    const tester = createMockAdapter('slack', 'slack-tester');
+    reg.registerChannelAdapter('slack-worker', { factory: () => worker });
+    reg.registerChannelAdapter('slack-tester', { factory: () => tester });
+
+    vi.useFakeTimers();
+    const init = reg.initChannelAdapters(mockSetup);
+    await vi.runAllTimersAsync();
+    await init;
+    vi.useRealTimers();
+
+    expect(reg.getChannelAdapter('slack-worker')).toBe(worker);
+    expect(reg.getChannelAdapter('slack-tester')).toBe(tester);
+    expect(reg.getActiveAdapters()).toHaveLength(2);
+  });
+
+  it('resolves channelType to the default-instance adapter when one exists, else first-registered', async () => {
+    const reg = await import('./channel-registry.js');
+    const named = createMockAdapter('slack', 'slack-tester');
+    const unnamed = createMockAdapter('slack');
+    reg.registerChannelAdapter('slack-tester', { factory: () => named });
+    reg.registerChannelAdapter('slack', { factory: () => unnamed });
+
+    vi.useFakeTimers();
+    const init = reg.initChannelAdapters(mockSetup);
+    await vi.runAllTimersAsync();
+    await init;
+    vi.useRealTimers();
+
+    // Exact key (default instance keyed by channelType) beats the fallback
+    // scan, even though the named sibling registered first.
+    expect(reg.getChannelAdapter('slack')).toBe(unnamed);
+
+    // With ONLY named instances active, channelType still resolves —
+    // deterministic first-registered fallback.
+    await reg.teardownChannelAdapters();
+    vi.resetModules();
+    const reg2 = await import('./channel-registry.js');
+    const first = createMockAdapter('slack', 'slack-tester');
+    const second = createMockAdapter('slack', 'slack-worker');
+    reg2.registerChannelAdapter('slack-tester', { factory: () => first });
+    reg2.registerChannelAdapter('slack-worker', { factory: () => second });
+    vi.useFakeTimers();
+    const init2 = reg2.initChannelAdapters(mockSetup);
+    await vi.runAllTimersAsync();
+    await init2;
+    vi.useRealTimers();
+    expect(reg2.getChannelAdapter('slack')).toBe(first);
+  });
+
+  it('staggers the second same-channelType adapter setup by 10s; different platforms unstaggered', async () => {
+    vi.useFakeTimers();
+    const reg = await import('./channel-registry.js');
+    const a = createMockAdapter('slack', 'slack-a');
+    const b = createMockAdapter('slack', 'slack-b');
+    const c = createMockAdapter('discord');
+    reg.registerChannelAdapter('slack-a', { factory: () => a });
+    reg.registerChannelAdapter('slack-b', { factory: () => b });
+    reg.registerChannelAdapter('discord', { factory: () => c });
+
+    const init = reg.initChannelAdapters(mockSetup);
+
+    // Flush microtasks without advancing the clock: a sets up, b is held.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(a.setupTimes).toHaveLength(1);
+    expect(b.setupTimes).toHaveLength(0);
+    expect(c.setupTimes).toHaveLength(0);
+
+    // Not yet at the stagger window.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(b.setupTimes).toHaveLength(0);
+
+    // Crossing 10s releases b; discord (different platform) follows with
+    // no additional stagger of its own.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(b.setupTimes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.setupTimes).toHaveLength(1);
+
+    await init;
   });
 });
 

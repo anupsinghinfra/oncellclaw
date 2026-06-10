@@ -18,6 +18,14 @@ function isNetworkError(err: unknown): err is Error {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Two gateway instances of one platform (e.g. two Discord bots) identifying
+ * simultaneously from one IP trip platform rate limits at boot. Stagger the
+ * second (and later) same-platform adapter's setup. Inert for installs with
+ * one adapter per platform — no two registrations share a channelType.
+ */
+const SAME_CHANNEL_SETUP_STAGGER_MS = 10_000;
+
 const registry = new Map<string, ChannelRegistration>();
 const activeAdapters = new Map<string, ChannelAdapter>();
 
@@ -26,9 +34,20 @@ export function registerChannelAdapter(name: string, registration: ChannelRegist
   registry.set(name, registration);
 }
 
-/** Get a live adapter by channel type. */
-export function getChannelAdapter(channelType: string): ChannelAdapter | undefined {
-  return activeAdapters.get(channelType);
+/** Get a live adapter by instance name, falling back to any adapter of the
+ *  given channel type. channelType-only callers (user-id prefix resolution
+ *  and cold DMs in user-dm.ts, approval delivery in channel-approval.ts)
+ *  must still resolve when every instance of a platform is named — first
+ *  registered wins (Map insertion order, deterministic). Default instances
+ *  are keyed by channelType itself, so single-instance installs always hit
+ *  the exact-key path. */
+export function getChannelAdapter(key: string): ChannelAdapter | undefined {
+  const exact = activeAdapters.get(key);
+  if (exact) return exact;
+  for (const adapter of activeAdapters.values()) {
+    if (adapter.channelType === key) return adapter;
+  }
+  return undefined;
 }
 
 /** Get all active adapters. */
@@ -51,12 +70,24 @@ export function getChannelContainerConfig(name: string): ChannelRegistration['co
  * Skips adapters that return null (missing credentials).
  */
 export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => ChannelSetup): Promise<void> {
+  const activeChannelTypes = new Set<string>();
   for (const [name, registration] of registry) {
     try {
       const adapter = await registration.factory();
       if (!adapter) {
         log.warn('Channel credentials missing, skipping', { channel: name });
         continue;
+      }
+
+      // Same-platform stagger: a second instance of an already-active
+      // platform waits before identifying (gateway logins from one IP).
+      if (activeChannelTypes.has(adapter.channelType)) {
+        log.info('Staggering same-platform adapter setup', {
+          channel: name,
+          type: adapter.channelType,
+          delayMs: SAME_CHANNEL_SETUP_STAGGER_MS,
+        });
+        await sleep(SAME_CHANNEL_SETUP_STAGGER_MS);
       }
 
       const setup = setupFn(adapter);
@@ -85,8 +116,17 @@ export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => 
           throw err;
         }
       }
-      activeAdapters.set(adapter.channelType, adapter);
-      log.info('Channel adapter started', { channel: name, type: adapter.channelType });
+      // Adapters key by instance (default instance = channelType), so N
+      // instances of one platform coexist. Duplicate keys warn instead of
+      // throwing — boot stays resilient, matching the historical silent
+      // last-write-wins, but now visibly.
+      const key = adapter.instance ?? adapter.channelType;
+      if (activeAdapters.has(key)) {
+        log.warn('Duplicate adapter instance key — overwriting previous adapter', { key, channel: name });
+      }
+      activeAdapters.set(key, adapter);
+      activeChannelTypes.add(adapter.channelType);
+      log.info('Channel adapter started', { channel: name, type: adapter.channelType, instance: key });
     } catch (err) {
       log.error('Failed to start channel adapter', { channel: name, err });
     }
