@@ -200,7 +200,7 @@ If a step fails, `nanoclaw.sh` hands off to Claude Code to diagnose and resume. 
 
 Only security fixes, bug fixes, and clear improvements will be accepted to the base configuration. That's all.
 
-Everything else (new capabilities, OS compatibility, hardware support, enhancements) should be contributed as skills on the `channels` or `providers` branch.
+Everything else (new capabilities, OS compatibility, hardware support, enhancements) should be contributed as skills: channel and provider code on the `channels`/`providers` registry branches, everything else as a self-contained skill. See [docs/customizing.md](docs/customizing.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This keeps the base system minimal and lets every user customize their installation without inheriting features they don't want.
 
