@@ -97,6 +97,9 @@ async function main(): Promise<void> {
       onInbound(platformId, threadId, message) {
         routeInbound({
           channelType: adapter.channelType,
+          // The one host-side stamping seam: adapters stay instance-blind,
+          // the host stamps the receiving instance on every inbound event.
+          instance: adapter.instance ?? adapter.channelType,
           platformId,
           threadId,
           message: {
@@ -155,16 +158,22 @@ async function main(): Promise<void> {
       kind: string,
       content: string,
       files?: import('./channels/adapter.js').OutboundFile[],
+      instance?: string,
     ): Promise<string | undefined> {
-      const adapter = getChannelAdapter(channelType);
+      const adapter = getChannelAdapter(instance ?? channelType);
       if (!adapter) {
-        log.warn('No adapter for channel type', { channelType });
+        log.warn('No adapter for channel type', { channelType, instance });
         return;
       }
       return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });
     },
-    async setTyping(channelType: string, platformId: string, threadId: string | null): Promise<void> {
-      const adapter = getChannelAdapter(channelType);
+    async setTyping(
+      channelType: string,
+      platformId: string,
+      threadId: string | null,
+      instance?: string,
+    ): Promise<void> {
+      const adapter = getChannelAdapter(instance ?? channelType);
       await adapter?.setTyping?.(platformId, threadId);
     },
   };
