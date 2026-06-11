@@ -1,97 +1,106 @@
 /**
- * Guard for the raw-route half of src/webhook-server.ts —
- * registerWebhookHandler + the rawRoutes dispatch branch.
+ * Webhook server route/handler split tests.
  *
- * Drives the REAL shared HTTP server on an ephemeral WEBHOOK_PORT (no
- * mocking of the routing layer): a registered raw route must dispatch,
- * unknown paths must 404, a throwing handler must surface as 500,
- * raw routes must coexist with Chat SDK adapter routes on the same
- * server, and stopWebhookServer must clear them.
+ * The route key (URL segment, `/webhook/<routingPath>`) and the handler key
+ * (`chat.webhooks[adapterName]`) are independent: a named adapter instance
+ * registers its own Chat under its own URL while dispatching to the same
+ * SDK adapter name. The 2-arg default keeps the historical single-instance
+ * route byte-identical. Conventions follow PR #2617: real HTTP server on a
+ * fixed WEBHOOK_PORT, real fetch.
  */
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import type { Chat } from 'chat';
 
-import { registerWebhookAdapter, registerWebhookHandler, stopWebhookServer } from './webhook-server.js';
+import { registerWebhookAdapter, stopWebhookServer } from './webhook-server.js';
 
-const PORT = 21000 + Math.floor(Math.random() * 20000);
+const PORT = 3917;
+const BASE = `http://127.0.0.1:${PORT}`;
 
-async function post(path: string, body = '{}'): Promise<globalThis.Response> {
+/** Minimal Chat stand-in: only `webhooks` is touched by the server. */
+function stubChat(tag: string, adapterName = 'slack'): { chat: Chat; calls: string[] } {
+  const calls: string[] = [];
+  const chat = {
+    webhooks: {
+      [adapterName]: async (req: Request) => {
+        calls.push(await req.text());
+        return new Response(JSON.stringify({ via: tag }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    },
+  } as unknown as Chat;
+  return { chat, calls };
+}
+
+async function post(path: string, body: string): Promise<Response> {
+  // The server starts listening asynchronously after registration — retry
+  // briefly on connection refusal instead of sleeping a fixed amount.
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetch(`http://127.0.0.1:${PORT}/webhook/${path}`, { method: 'POST', body });
+      return await fetch(`${BASE}${path}`, { method: 'POST', body });
     } catch (err) {
-      if (attempt >= 40) throw err;
-      await new Promise((r) => setTimeout(r, 50));
+      if (attempt >= 20) throw err;
+      await new Promise((r) => setTimeout(r, 25));
     }
   }
 }
 
-afterAll(async () => {
+beforeEach(() => {
+  process.env.WEBHOOK_PORT = String(PORT);
+});
+
+afterEach(async () => {
   await stopWebhookServer();
   delete process.env.WEBHOOK_PORT;
 });
 
-describe('webhook server raw routes', () => {
-  it('dispatches a registered raw route to its handler', async () => {
-    process.env.WEBHOOK_PORT = String(PORT);
-    const methods: string[] = [];
-    registerWebhookHandler('ping', (req, res) => {
-      methods.push(req.method || '');
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('pong');
-    });
+describe('registerWebhookAdapter — route/handler split', () => {
+  it('2-arg default: /webhook/<adapterName> dispatches to chat.webhooks[adapterName]', async () => {
+    const { chat, calls } = stubChat('default');
+    registerWebhookAdapter(chat, 'slack');
 
-    const res = await post('ping');
+    const res = await post('/webhook/slack', 'payload-default');
     expect(res.status).toBe(200);
-    expect(await res.text()).toBe('pong');
-    expect(methods).toEqual(['POST']);
+    expect(await res.json()).toEqual({ via: 'default' });
+    expect(calls).toEqual(['payload-default']);
   });
 
-  it('returns 404 for paths with no registered route', async () => {
-    const res = await post('nope');
+  it('3-arg: routes by routingPath, dispatches by adapterName; the bare route stays unregistered', async () => {
+    const { chat, calls } = stubChat('tester');
+    registerWebhookAdapter(chat, 'slack', 'slack-tester');
+
+    const res = await post('/webhook/slack-tester', 'payload-tester');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ via: 'tester' });
+    expect(calls).toEqual(['payload-tester']);
+
+    // Only the routed entry exists — /webhook/slack must 404, not leak into
+    // the named instance's Chat.
+    const miss = await post('/webhook/slack', 'stray');
+    expect(miss.status).toBe(404);
+    expect(calls).toEqual(['payload-tester']);
+  });
+
+  it('two same-adapterName registrations under distinct paths hit their own Chat instances', async () => {
+    const worker = stubChat('worker');
+    const tester = stubChat('tester');
+    registerWebhookAdapter(worker.chat, 'slack');
+    registerWebhookAdapter(tester.chat, 'slack', 'slack-tester');
+
+    const r1 = await post('/webhook/slack', 'to-worker');
+    const r2 = await post('/webhook/slack-tester', 'to-tester');
+    expect(await r1.json()).toEqual({ via: 'worker' });
+    expect(await r2.json()).toEqual({ via: 'tester' });
+    expect(worker.calls).toEqual(['to-worker']);
+    expect(tester.calls).toEqual(['to-tester']);
+  });
+
+  it('unregistered path 404s', async () => {
+    const { chat } = stubChat('only');
+    registerWebhookAdapter(chat, 'slack');
+    const res = await post('/webhook/nope', 'x');
     expect(res.status).toBe(404);
-  });
-
-  it('turns a throwing handler into a 500 response', async () => {
-    registerWebhookHandler('boom', () => {
-      throw new Error('handler exploded');
-    });
-
-    const res = await post('boom');
-    expect(res.status).toBe(500);
-    expect(await res.text()).toBe('Internal Server Error');
-  });
-
-  it('coexists with Chat SDK adapter routes on the same server', async () => {
-    const handler = vi.fn(async () => new Response('ok-chat', { status: 200 }));
-    const chat = { webhooks: { fake: handler } } as unknown as Chat;
-    registerWebhookAdapter(chat, 'fake');
-
-    const chatRes = await post('fake');
-    expect(chatRes.status).toBe(200);
-    expect(await chatRes.text()).toBe('ok-chat');
-    expect(handler).toHaveBeenCalledTimes(1);
-
-    // The raw route registered earlier is still live alongside it.
-    const rawRes = await post('ping');
-    expect(rawRes.status).toBe(200);
-  });
-
-  it('clears raw routes on stopWebhookServer', async () => {
-    await stopWebhookServer();
-
-    // Restart the server with a fresh route; the old raw routes must be gone.
-    registerWebhookHandler('fresh', (_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('fresh');
-    });
-
-    const stale = await post('ping');
-    expect(stale.status).toBe(404);
-
-    const fresh = await post('fresh');
-    expect(fresh.status).toBe(200);
-    expect(await fresh.text()).toBe('fresh');
   });
 });

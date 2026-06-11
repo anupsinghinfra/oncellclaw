@@ -76,11 +76,19 @@ async function fromWebResponse(webRes: Response, nodeRes: http.ServerResponse): 
 /**
  * Register a webhook adapter on the shared server.
  * Starts the server lazily on first call.
+ *
+ * `routingPath` is the URL segment (`/webhook/<routingPath>`); `adapterName`
+ * stays the handler key into `chat.webhooks`. The split lets N instances of
+ * one platform (each with its own Chat + signing secret) listen on distinct
+ * URLs while dispatching to the same SDK adapter name. Defaulting
+ * routingPath to adapterName keeps the historical single-instance route
+ * byte-identical. Signature adopted verbatim from PR #2617 (@davekim917's
+ * #1804 prototype) so the two changes converge textually.
  */
-export function registerWebhookAdapter(chat: Chat, adapterName: string): void {
-  routes.set(adapterName, { chat, adapterName });
+export function registerWebhookAdapter(chat: Chat, adapterName: string, routingPath: string = adapterName): void {
+  routes.set(routingPath, { chat, adapterName });
   ensureServer();
-  log.info('Webhook adapter registered', { adapter: adapterName, path: `/webhook/${adapterName}` });
+  log.info('Webhook adapter registered', { adapter: adapterName, path: `/webhook/${routingPath}` });
 }
 
 /**
