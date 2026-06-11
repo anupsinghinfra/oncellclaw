@@ -417,6 +417,11 @@ export function registerDeliveryAction(action: string, handler: DeliveryActionHa
   actionHandlers.set(action, handler);
 }
 
+/** Look up a registered delivery-action handler. Lets module registrations be behavior-tested. */
+export function getDeliveryAction(action: string): DeliveryActionHandler | undefined {
+  return actionHandlers.get(action);
+}
+
 /**
  * Handle system actions from the container agent.
  * These are written to messages_out because the container can't write to inbound.db.
