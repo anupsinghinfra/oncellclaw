@@ -2,6 +2,10 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [Unreleased]
+
+- [BREAKING] **`@onecli-sh/sdk` 0.5.0 -> 2.2.1 — requires a OneCLI server with the `/v1` API** (older servers 404 every SDK call). The sanctioned gateway and CLI versions are pinned in `versions.json`; the `onecli` setup step enforces them. **Migration:** [docs/onecli-upgrades.md](docs/onecli-upgrades.md).
+
 ## [2.1.0] - 2026-06-07
 
 - [BREAKING] **Startup now requires an upgrade marker.** The host refuses to boot unless `data/upgrade-state.json` records that this install reached the current version through a sanctioned path (`/setup`, `/update-nanoclaw`, `/migrate-nanoclaw`). After this update completes — and before restarting the service — stamp the marker by running `pnpm exec tsx scripts/upgrade-state.ts set`. If the host has already tripped on restart with "update did not go through the supported path", that same command clears it. See [docs/upgrade-recovery.md](docs/upgrade-recovery.md).
