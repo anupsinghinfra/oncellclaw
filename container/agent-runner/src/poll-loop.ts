@@ -530,10 +530,6 @@ function notifyExchangeComplete(
   hook: ((exchange: ProviderExchange) => void) | undefined,
   exchange: ProviderExchange,
 ): void {
-  // Per-exchange persistence is the provider's concern, not the runner's —
-  // the loop only reports each completed exchange to providers that declare
-  // the hook (see providers/types.ts). Best-effort: a broken hook must never
-  // take down the turn.
   if (!hook) return;
   try {
     hook(exchange);
