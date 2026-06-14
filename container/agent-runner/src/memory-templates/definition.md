@@ -21,3 +21,13 @@ If a fact is corrected, update the memory and keep only useful history.
 When you add, move, or remove memory, update the nearest index.
 Before answering from memory, read the relevant index or file instead of guessing;
 if memory is missing or uncertain, say so and verify when it matters.
+
+## Imported agent memory
+
+If `memory/memories/imported-agent-memory.md` exists, it holds this group's seed
+instructions and/or memory carried over from a previous agent provider — placed
+there by the operator's tooling (group creation, or the operator running
+`/migrate-memory`). Read it on your first turn and treat its contents as binding:
+it may define who you are and how to behave. Integrate its facts into your memory
+files as you work. Files it references live in the workspace root and remain
+readable; never modify files that belong to another provider's memory system.
