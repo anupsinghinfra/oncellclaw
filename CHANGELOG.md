@@ -4,6 +4,7 @@ All notable changes to NanoClaw will be documented in this file.
 
 ## [Unreleased]
 
+- **Budget/billing-exhausted LLM turns now reach the user instead of being silently dropped.** When a turn ends in a non-retryable provider error (e.g. an Anthropic `403 billing_error`) with no `<message>` wrapping, the agent-runner delivers the provider's notice to the originating channel and stops re-nudging the failing gateway. `providers/claude.ts` now surfaces the SDK's `is_error` flag (and the error subtype's `errors[]` text); `poll-loop.ts` delivers that text and skips the re-wrap retry. Fixes the case where a spend-limit notice produced silence plus a turn-after-turn retry loop.
 - [BREAKING] **`@onecli-sh/sdk` 0.5.0 -> 2.2.1 — requires a OneCLI server with the `/v1` API** (older servers 404 every SDK call). The sanctioned gateway and CLI versions are pinned in `versions.json`; the `onecli` setup step enforces them. **Migration:** [docs/onecli-upgrades.md](docs/onecli-upgrades.md).
 - **Slash commands now interrupt an in-flight turn.** A runner-handled command (`/clear`, `/compact`, `/cost`, …) arriving mid-turn aborts the active stream and runs immediately instead of waiting out the turn.
 
