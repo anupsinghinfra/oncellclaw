@@ -8,7 +8,8 @@
  *      event subscriptions, and signing secret
  *   2. Paste the bot token + signing secret (clack password prompts)
  *   3. Validate via auth.test → resolves workspace + bot identity
- *   4. Install the adapter (setup/add-slack.sh, non-interactive)
+ *   4. Apply the /add-slack skill via the directive engine (the skill's
+ *      SKILL.md is the single source of truth) + restart the service
  *   5. Ask for the operator's Slack user ID
  *   6. conversations.open to get the DM channel ID
  *   7. Ask for the messaging-agent name (defaulting to "Nano")
@@ -21,9 +22,12 @@
  *
  * All output obeys the three-level contract. See docs/setup-flow.md.
  */
+import { execSync } from 'node:child_process';
+
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
+import { applySkill, type Prompter } from '../../scripts/skill-apply.js';
 import * as setupLog from '../logs.js';
 import { BACK_TO_CHANNEL_SELECTION, type ChannelFlowResult } from '../lib/back-nav.js';
 import { brightSelect } from '../lib/bright-select.js';
@@ -53,31 +57,12 @@ export async function runSlackChannel(displayName: string): Promise<ChannelFlowR
   const signingSecret = await collectSigningSecret();
   const info = await validateSlackToken(token);
 
-  const install = await runQuietChild(
-    'slack-install',
-    'bash',
-    ['setup/add-slack.sh'],
-    {
-      running: `Connecting Slack to @${info.botName} (${info.teamName})…`,
-      done: 'Slack adapter installed.',
-    },
-    {
-      env: {
-        SLACK_BOT_TOKEN: token,
-        SLACK_SIGNING_SECRET: signingSecret,
-      },
-      extraFields: {
-        BOT_NAME: info.botName,
-        TEAM_NAME: info.teamName,
-        TEAM_ID: info.teamId,
-      },
-    },
-  );
+  const install = await applySlackSkill(token, signingSecret, info);
   if (!install.ok) {
     await fail(
       'slack-install',
       "Couldn't connect Slack.",
-      'See logs/setup-steps/ for details, then retry setup.',
+      install.detail || 'See logs/setup-steps/ for details, then retry setup.',
     );
   }
 
@@ -123,6 +108,94 @@ export async function runSlackChannel(displayName: string): Promise<ChannelFlowR
   }
 
   showPostInstallChecklist(info);
+}
+
+/**
+ * Install the Slack adapter and persist credentials by applying the `/add-slack`
+ * skill through the structured-directive engine. The skill's SKILL.md is the
+ * single source of truth — this replaces the hand-maintained setup/add-slack.sh,
+ * which had already drifted on the pinned adapter version.
+ *
+ * The two secrets collected above are handed to the skill's `prompt` directives
+ * through the in-process Prompter, so they never touch argv or disk. The engine
+ * runs copy/append/dep/build + env-set/env-sync; we restart the service after
+ * (the skill itself doesn't, by design). add-slack is fully deterministic and
+ * both secrets are supplied, so a healthy apply leaves nothing for an agent and
+ * nothing deferred — either bucket being non-empty means the install failed.
+ */
+async function applySlackSkill(
+  token: string,
+  signingSecret: string,
+  info: WorkspaceInfo,
+): Promise<{ ok: boolean; detail: string }> {
+  const projectRoot = process.cwd();
+  const s = p.spinner();
+  const start = Date.now();
+  s.start(`Connecting Slack to @${info.botName} (${info.teamName})…`);
+
+  const prompter: Prompter = {
+    async ask(name) {
+      if (name === 'bot_token') return token;
+      if (name === 'signing_secret') return signingSecret;
+      return undefined;
+    },
+  };
+
+  try {
+    const result = await applySkill('.claude/skills/add-slack', projectRoot, {
+      prompter,
+      exec: (cmd) => {
+        execSync(cmd, { cwd: projectRoot, stdio: 'pipe' });
+      },
+      // Fork-aware: reuse the existing resolver (handles upstream/fork remotes
+      // and the auto-add-upstream fallback) instead of assuming `origin`.
+      resolveRemote: () =>
+        execSync('source setup/lib/channels-remote.sh; resolve_channels_remote', {
+          cwd: projectRoot,
+          shell: '/bin/bash',
+          encoding: 'utf8',
+        }).trim(),
+    });
+
+    if (result.agentTasks.length || result.deferred.length) {
+      const why = [...result.agentTasks.map((t) => t.reason), ...result.deferred].join('; ');
+      s.stop("Couldn't finish installing Slack.", 1);
+      setupLog.step('slack-install', 'failed', Date.now() - start, { ERROR: why });
+      return { ok: false, detail: why };
+    }
+
+    restartService(projectRoot);
+    s.stop('Slack adapter installed.');
+    setupLog.step('slack-install', 'success', Date.now() - start, {
+      APPLIED: String(result.applied.length),
+      SKIPPED: String(result.skipped.length),
+      BOT_NAME: info.botName,
+      TEAM_NAME: info.teamName,
+      TEAM_ID: info.teamId,
+    });
+    return { ok: true, detail: '' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    s.stop("Couldn't install the Slack adapter.", 1);
+    setupLog.step('slack-install', 'failed', Date.now() - start, { ERROR: message });
+    return { ok: false, detail: 'See logs/setup-steps/ for details, then retry setup.' };
+  }
+}
+
+/** Best-effort service restart so the new adapter + credentials take effect. */
+function restartService(projectRoot: string): void {
+  const script = [
+    `source "${projectRoot}/setup/lib/install-slug.sh"`,
+    'case "$(uname -s)" in',
+    '  Darwin) launchctl kickstart -k "gui/$(id -u)/$(launchd_label)" ;;',
+    '  Linux) systemctl --user restart "$(systemd_unit)" || sudo systemctl restart "$(systemd_unit)" ;;',
+    'esac',
+  ].join('\n');
+  try {
+    execSync(script, { cwd: projectRoot, stdio: 'pipe', shell: '/bin/bash' });
+  } catch {
+    // The service may not be installed yet during a fresh setup — best-effort.
+  }
 }
 
 async function walkThroughAppCreation(): Promise<'continue' | 'back'> {

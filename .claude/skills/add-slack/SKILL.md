@@ -5,114 +5,119 @@ description: Add Slack channel integration via Chat SDK.
 
 # Add Slack Channel
 
-Adds Slack support via the Chat SDK bridge.
+Adds Slack support via the Chat SDK bridge. NanoClaw doesn't ship channels in
+trunk — this skill copies the Slack adapter in from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent
+reads the prose and applies them, and a parser can apply them deterministically
+from the same document. Every directive is idempotent, so the whole skill is
+safe to re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the Slack adapter in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter and its registration test
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the Slack adapter and its registration test
+into `src/channels/` (overwrite — the branch is canonical):
 
-- `src/channels/slack.ts` exists
-- `src/channels/slack-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './slack.js';`
-- `@chat-adapter/slack` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/slack.ts
+src/channels/slack-registration.test.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/slack.ts                 > src/channels/slack.ts
-git show origin/channels:src/channels/slack-registration.test.ts > src/channels/slack-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './slack.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install @chat-adapter/slack@4.27.0
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@chat-adapter/slack@4.26.0
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+Build first: it guards the typed `createChatSdkBridge(...)` core call and proves
+the dependency is installed. Then run the one integration test.
+
+```nc:run effect:build
 pnpm run build
+```
+```nc:run effect:test
 pnpm exec vitest run src/channels/slack-registration.test.ts
 ```
 
-Both must be clean before proceeding. `slack-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `slack`. It goes red if the `import './slack.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@chat-adapter/slack` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real Slack workspace is verified manually once the service is running — see Next Steps and the webhook setup above.
+`slack-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `slack`. It goes red if the import line is deleted or drifts,
+if the barrel fails to evaluate, or if `@chat-adapter/slack` isn't installed (the
+import throws) — so it also covers the dependency from step 3. End-to-end
+delivery against a real workspace is verified manually once the service runs.
 
 ## Credentials
 
-### Create Slack App
+Slack app setup is human and interactive — these steps are prose, not directives
+(no parser can click through the Slack UI). A recipe rebuild produces a
+compiling, registered adapter that cannot receive a message until they're done.
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App** > **From scratch**
-2. Name it (e.g., "NanoClaw") and select your workspace
-3. Go to **OAuth & Permissions** and add Bot Token Scopes:
-   - `chat:write`, `im:write`, `channels:history`, `groups:history`, `im:history`, `channels:read`, `groups:read`, `users:read`, `reactions:write`, `files:read`, `files:write`
-4. Click **Install to Workspace** and copy the **Bot User OAuth Token** (`xoxb-...`)
-5. Go to **Basic Information** and copy the **Signing Secret**
+### Create the Slack app
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**.
+2. Name it (e.g. "NanoClaw") and select your workspace.
+3. **OAuth & Permissions** → add Bot Token Scopes: `chat:write`, `im:write`, `channels:history`, `groups:history`, `im:history`, `channels:read`, `groups:read`, `users:read`, `reactions:write`, `files:read`, `files:write`.
+4. **Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`).
+5. **Basic Information** → copy the **Signing Secret**.
 
 ### Enable DMs
 
-6. Go to **App Home** and enable the **Messages Tab**
-7. Check **"Allow users to send Slash commands and messages from the messages tab"**
+6. **App Home** → enable the **Messages Tab**.
+7. Check **"Allow users to send Slash commands and messages from the messages tab."**
 
-### Event Subscriptions
+### Event Subscriptions & Interactivity
 
-8. Go to **Event Subscriptions** and toggle **Enable Events**
-9. Set the **Request URL** to `https://your-domain/webhook/slack` — Slack will send a verification challenge; it must pass before you can save
-10. Under **Subscribe to bot events**, add:
-    - `message.channels`, `message.groups`, `message.im`, `app_mention`
-11. Click **Save Changes**
+8. **Event Subscriptions** → **Enable Events**. Set the **Request URL** to your public `https://your-domain/webhook/slack` (see Webhook server); Slack sends a challenge that must pass before you can save.
+9. Under **Subscribe to bot events**, add `message.channels`, `message.groups`, `message.im`, `app_mention`. **Save Changes**.
+10. **Interactivity & Shortcuts** → toggle **Interactivity** on, set the same Request URL, **Save Changes**, then **reinstall** the app when Slack prompts.
 
-### Interactivity
+### Store the credentials
 
-12. Go to **Interactivity & Shortcuts** and toggle **Interactivity** on
-13. Set the **Request URL** to the same `https://your-domain/webhook/slack`
-14. Click **Save Changes**
-15. Slack will show a banner asking you to **reinstall the app** — click it to apply the new settings
+Capture the two values, then write them. `prompt` only *asks* and binds the
+answer to a name; a separate directive consumes it — so the same prompts could
+feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
+Here they go to `.env` (set-if-absent — a value you've already filled in is
+never overwritten) and sync to the container:
 
-### Configure environment
-
-Add to `.env`:
-
-```bash
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_SIGNING_SECRET=your-signing-secret
+```nc:prompt bot_token secret
+Paste the Bot User OAuth Token — OAuth & Permissions, starts with `xoxb-`.
 ```
-
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+```nc:prompt signing_secret secret
+Paste the Signing Secret — Basic Information.
+```
+```nc:env-set
+SLACK_BOT_TOKEN={{bot_token}}
+SLACK_SIGNING_SECRET={{signing_secret}}
+```
+```nc:env-sync
+```
 
 ### Webhook server
 
-The Chat SDK bridge automatically starts a shared webhook server on port 3000 (configurable via `WEBHOOK_PORT` env var). The server handles `/webhook/slack` for Slack and other webhook-based adapters. This port must be publicly reachable from the internet for Slack to deliver events.
-
-If running locally, discuss options for exposing the server — e.g. ngrok (`ngrok http 3000`), Cloudflare Tunnel, or a reverse proxy on a VPS. The resulting public URL becomes the base for `https://your-domain/webhook/slack`.
+The Chat SDK bridge automatically starts a shared webhook server on port 3000
+(`WEBHOOK_PORT` to change it), handling `/webhook/slack`. This port must be
+publicly reachable for Slack to deliver events. Running locally, expose it with
+ngrok (`ngrok http 3000`), a Cloudflare Tunnel, or a reverse proxy on a VPS —
+the resulting public URL is the base for the Request URL above.
 
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now.
-
-Otherwise, run `/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
+`/manage-channels` to wire this channel to an agent group.
 
 ## Channel Info
 
