@@ -36,6 +36,8 @@ export interface ColumnDef {
 
 export interface CustomOperation {
   access: Access;
+  /** Operator-only: never runnable from inside a container (see CommandDef.hostOnly). */
+  hostOnly?: boolean;
   description: string;
   args?: ColumnDef[];
   handler: (args: Record<string, unknown>, ctx: CallerContext) => Promise<unknown>;
@@ -290,6 +292,7 @@ export function registerResource(def: ResourceDef): void {
         name: `${def.plural}-${verb.replace(/ /g, '-')}`,
         description: op.description,
         access: op.access,
+        hostOnly: op.hostOnly,
         resource: def.plural,
         parseArgs: (raw) => normalizeArgs(raw),
         handler: async (args, ctx) => op.handler(args as Record<string, unknown>, ctx),

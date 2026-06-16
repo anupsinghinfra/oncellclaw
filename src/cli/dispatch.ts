@@ -38,6 +38,14 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
     return err(req.id, 'unknown-command', `no command "${req.command}"`);
   }
 
+  // Host-only commands (e.g. mount management) are operator-only: rejected for
+  // ANY container caller, regardless of cli_scope (even `global`) or approval.
+  // The mount allowlist is the boundary cli_scope itself lives inside, so an
+  // agent must never alter it — not even with admin approval.
+  if (cmd.hostOnly && ctx.caller !== 'host') {
+    return err(req.id, 'forbidden', `"${req.command}" is operator-only and cannot be run from inside a container.`);
+  }
+
   // CLI scope enforcement for agent callers
   if (ctx.caller === 'agent') {
     const configRow = getContainerConfig(ctx.agentGroupId);

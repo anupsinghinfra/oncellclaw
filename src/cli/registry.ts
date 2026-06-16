@@ -13,6 +13,13 @@ export type CommandDef<TArgs = unknown, TData = unknown> = {
   name: string;
   description: string;
   access: Access;
+  /**
+   * Operator-only: rejected for ANY container (agent) caller regardless of
+   * cli_scope (even `global`) or approval. For privileged host-boundary ops
+   * like mount management — the mount allowlist is the boundary cli_scope
+   * itself lives inside, so an agent must never be able to alter it.
+   */
+  hostOnly?: boolean;
   /** Resource this command belongs to (for help grouping). */
   resource?: string;
   /**

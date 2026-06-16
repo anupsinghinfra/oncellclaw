@@ -1,4 +1,4 @@
-import type { McpServerConfig } from '../../container-config.js';
+import type { AdditionalMountConfig, McpServerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
 import { getDb, hasTable } from '../../db/connection.js';
@@ -367,6 +367,58 @@ registerResource({
           removed: { apt: apt || null, npm: npm || null },
           note: 'Image rebuild required for package changes to take effect.',
         };
+      },
+    },
+    'config add-mount': {
+      access: 'approval',
+      hostOnly: true,
+      description:
+        "Mount a host directory into a group's containers. OPERATOR-ONLY — never runnable from " +
+        'inside a container (mounting host paths is a filesystem-access boundary). Requires ' +
+        '`ncl groups restart` to take effect. Use --id <group-id> --host <host-path> --container <container-path> [--ro].',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const hostPath = (args.host ?? args['host-path']) as string | undefined;
+        const containerPath = (args.container ?? args['container-path']) as string | undefined;
+        if (!hostPath || !containerPath) throw new Error('Provide --host <host-path> and --container <container-path>');
+
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+
+        const mount: AdditionalMountConfig = {
+          hostPath,
+          containerPath,
+          ...(args.ro || args.readonly ? { readonly: true } : {}),
+        };
+        const existing = JSON.parse(row.additional_mounts) as AdditionalMountConfig[];
+        if (!existing.some((m) => m.hostPath === hostPath && m.containerPath === containerPath)) {
+          existing.push(mount);
+          updateContainerConfigJson(id, 'additional_mounts', existing);
+        }
+        return { added: mount, note: `Run \`ncl groups restart --id ${id}\` for the mount to take effect.` };
+      },
+    },
+    'config remove-mount': {
+      access: 'approval',
+      hostOnly: true,
+      description:
+        'Remove a host mount from a group. OPERATOR-ONLY. Requires `ncl groups restart` to take effect. ' +
+        'Use --id <group-id> --host <host-path> --container <container-path>.',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const hostPath = (args.host ?? args['host-path']) as string | undefined;
+        const containerPath = (args.container ?? args['container-path']) as string | undefined;
+        if (!hostPath || !containerPath) throw new Error('Provide --host <host-path> and --container <container-path>');
+
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+
+        const existing = JSON.parse(row.additional_mounts) as AdditionalMountConfig[];
+        const filtered = existing.filter((m) => !(m.hostPath === hostPath && m.containerPath === containerPath));
+        updateContainerConfigJson(id, 'additional_mounts', filtered);
+        return { removed: { hostPath, containerPath }, note: `Run \`ncl groups restart --id ${id}\` to apply.` };
       },
     },
   },
