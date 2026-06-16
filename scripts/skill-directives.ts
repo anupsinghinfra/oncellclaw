@@ -18,12 +18,18 @@
 // from "what you do with the answer" (env, ncl, the OneCLI vault, a file).
 //
 //   copy [from-branch:<b>]  body: `PATH` (src==dst) or `SRC -> DST`   overwrite
-//   append to:<file>        body: line(s) to add                      skip if present
+//   append to:<file> [at:<marker>]  body: line(s) to add             skip if present
 //   dep [manager:pnpm]      body: `pkg@<exact-semver>` line(s)        reinstall no-op
 //   run [effect:build|test|fetch|external]  body: shell command(s)    re-runnable
 //   prompt <var> [secret]   body: the question → binds {{var}}        skip if satisfied
 //   env-set                 body: `KEY=value` ({{var}} allowed)       set-if-absent
 //   env-sync                (no body) `.env` → data/env/env           idempotent copy
+//   json-merge into:<file> key:<field>  body: a JSON object          push-if-absent
+//
+// `append` without `at:` adds to EOF; with `at:<marker>` it inserts before the
+// `// <<< <marker>` closing line of a dormant marker region (see setup/index.ts).
+// `json-merge` reads an array-of-objects JSON file and pushes the body object
+// unless an element already has body[key]===element[key] (idempotent by key).
 //
 // Usage: pnpm exec tsx scripts/skill-directives.ts <SKILL.md>
 
@@ -47,7 +53,7 @@ export interface Problem {
 const FENCE = /^```(\S.*)?$/;
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const VAR_REF = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
-const KNOWN = new Set(['copy', 'append', 'dep', 'run', 'prompt', 'env-set', 'env-sync']);
+const KNOWN = new Set(['copy', 'append', 'dep', 'run', 'prompt', 'env-set', 'env-sync', 'json-merge']);
 const PROMPT_FLAGS = new Set(['secret']);
 
 export function parseDirectives(markdown: string): Directive[] {
@@ -147,6 +153,27 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
       case 'copy':
         if (d.body.length === 0) flag(d, 'copy requires at least one path');
         break;
+      case 'json-merge': {
+        if (!d.attrs.into) flag(d, 'json-merge requires into:<json-file>');
+        if (!d.attrs.key) flag(d, 'json-merge requires key:<field>');
+        if (d.body.length === 0) {
+          flag(d, 'json-merge requires a JSON object in its body');
+        } else {
+          let obj: unknown;
+          try {
+            obj = JSON.parse(d.body.join('\n'));
+          } catch {
+            flag(d, 'json-merge body must be a single parseable JSON object');
+            break;
+          }
+          if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+            flag(d, 'json-merge body must be a single JSON object (not an array or scalar)');
+          } else if (typeof d.attrs.key === 'string' && !(d.attrs.key in obj)) {
+            flag(d, `json-merge body has no "${d.attrs.key}" field to match on`);
+          }
+        }
+        break;
+      }
       case 'prompt':
         if (!promptVar(d)) flag(d, 'prompt requires a variable name, e.g. `nc:prompt token`');
         if (d.body.length === 0) flag(d, 'prompt requires a question in its body');

@@ -66,6 +66,16 @@ function envKeySet(root: string, key: string): boolean {
       return m !== null && m[1] === key && m[2].trim().length > 0;
     });
 }
+// Does the array-of-objects JSON at `rel` already contain an element whose
+// [key] equals `value`? The idempotency probe for json-merge.
+function jsonArrayHasKey(root: string, rel: string, key: string, value: unknown): boolean {
+  try {
+    const arr = JSON.parse(read(join(root, rel)) || '[]');
+    return Array.isArray(arr) && arr.some((el) => el !== null && typeof el === 'object' && (el as Record<string, unknown>)[key] === value);
+  } catch {
+    return false;
+  }
+}
 
 // Per-directive idempotency check + "what it would do". Read-only.
 function selfStatus(d: Directive, root: string): { status: StepStatus; detail: string } {
@@ -102,6 +112,19 @@ function selfStatus(d: Directive, root: string): { status: StepStatus; detail: s
     }
     case 'env-sync':
       return { status: 'apply', detail: 'sync .env → data/env/env' };
+    case 'json-merge': {
+      const into = String(d.attrs.into ?? '');
+      const key = String(d.attrs.key ?? '');
+      let value: unknown;
+      try {
+        value = (JSON.parse(d.body.join('\n')) as Record<string, unknown>)[key];
+      } catch {
+        return { status: 'agent', detail: `nc:json-merge body is not parseable JSON — an agent applies it from the prose` };
+      }
+      return jsonArrayHasKey(root, into, key, value)
+        ? { status: 'skip', detail: `${into} already has ${key}=${JSON.stringify(value)}` }
+        : { status: 'apply', detail: `merge ${key}=${JSON.stringify(value)} into ${into}` };
+    }
     case 'prompt':
       return { status: 'needs-input', detail: '' };
     default:
@@ -144,6 +167,7 @@ export type JournalEntry =
   | { op: 'wrote'; path: string }
   | { op: 'appended'; path: string; line: string }
   | { op: 'set-env'; key: string }
+  | { op: 'json-merge'; path: string; key: string; value: unknown }
   | { op: 'ran'; cmd: string; undo?: string };
 
 export interface AgentTask {
@@ -235,9 +259,27 @@ async function applyOne(
       break;
     case 'append': {
       const to = String(d.attrs.to);
-      for (const line of d.body) {
-        appendFileSync(join(root, to), (read(join(root, to)).endsWith('\n') || read(join(root, to)) === '' ? '' : '\n') + line + '\n');
-        journal.push({ op: 'appended', path: to, line });
+      const marker = typeof d.attrs.at === 'string' ? d.attrs.at : undefined;
+      const target = join(root, to);
+      if (marker) {
+        // Insert before the `// <<< <marker>` closing line of a dormant marker
+        // region, matching that line's indentation. removeSkill still deletes
+        // by line (position-agnostic), so the journal entry is unchanged.
+        const close = `<<< ${marker}`;
+        for (const line of d.body) {
+          const lines = read(target).split('\n');
+          const idx = lines.findIndex((l) => l.includes(close));
+          if (idx === -1) throw new Error(`append marker "${marker}" not found in ${to}`);
+          const indent = lines[idx].match(/^\s*/)?.[0] ?? '';
+          lines.splice(idx, 0, indent + line);
+          writeFileSync(target, lines.join('\n'));
+          journal.push({ op: 'appended', path: to, line });
+        }
+      } else {
+        for (const line of d.body) {
+          appendFileSync(target, (read(target).endsWith('\n') || read(target) === '' ? '' : '\n') + line + '\n');
+          journal.push({ op: 'appended', path: to, line });
+        }
       }
       break;
     }
@@ -271,6 +313,22 @@ async function applyOne(
       mkdirSync(join(root, 'data/env'), { recursive: true });
       copyFileSync(join(root, '.env'), join(root, 'data/env/env'));
       break;
+    case 'json-merge': {
+      const into = String(d.attrs.into);
+      const key = String(d.attrs.key);
+      const obj = JSON.parse(d.body.join('\n')) as Record<string, unknown>;
+      const target = join(root, into);
+      const arr = JSON.parse(read(target) || '[]') as unknown[];
+      if (!Array.isArray(arr)) throw new Error(`${into} is not a JSON array`);
+      const value = obj[key];
+      // Idempotent: only push when no element already matches on the key.
+      if (!arr.some((el) => el !== null && typeof el === 'object' && (el as Record<string, unknown>)[key] === value)) {
+        arr.push(obj);
+        writeFileSync(target, JSON.stringify(arr, null, 2) + '\n');
+        journal.push({ op: 'json-merge', path: into, key, value });
+      }
+      break;
+    }
     default:
       throw new Error(`no handler for nc:${d.kind}`);
   }
@@ -321,6 +379,12 @@ export async function removeSkill(root: string, journal: JournalEntry[], exec?: 
     } else if (e.op === 'set-env') {
       const p = join(root, '.env');
       writeFileSync(p, read(p).split('\n').filter((l) => !l.startsWith(`${e.key}=`)).join('\n'));
+    } else if (e.op === 'json-merge') {
+      const p = join(root, e.path);
+      const arr = JSON.parse(read(p) || '[]') as unknown[];
+      if (Array.isArray(arr)) {
+        writeFileSync(p, JSON.stringify(arr.filter((el) => !(el !== null && typeof el === 'object' && (el as Record<string, unknown>)[e.key] === e.value)), null, 2) + '\n');
+      }
     } else if (e.op === 'ran' && e.undo && exec) {
       await exec(e.undo);
     }

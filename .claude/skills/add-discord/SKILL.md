@@ -5,60 +5,67 @@ description: Add Discord bot channel integration via Chat SDK.
 
 # Add Discord Channel
 
-Adds Discord bot support via the Chat SDK bridge.
+Adds Discord bot support via the Chat SDK bridge. NanoClaw doesn't ship channels
+in trunk — this skill copies the Discord adapter in from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent
+reads the prose and applies them, and a parser can apply them deterministically
+from the same document. Every directive is idempotent, so the whole skill is
+safe to re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the Discord adapter in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter and its registration test
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the Discord adapter and its registration
+test into `src/channels/` (overwrite — the branch is canonical):
 
-- `src/channels/discord.ts` exists
-- `src/channels/discord-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './discord.js';`
-- `@chat-adapter/discord` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/discord.ts
+src/channels/discord-registration.test.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/discord.ts                 > src/channels/discord.ts
-git show origin/channels:src/channels/discord-registration.test.ts > src/channels/discord-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './discord.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install @chat-adapter/discord@4.27.0
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@chat-adapter/discord@4.26.0
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+Build first: it guards the typed `createChatSdkBridge(...)` core call and proves
+the dependency is installed. Then run the one integration test.
+
+```nc:run effect:build
 pnpm run build
+```
+```nc:run effect:test
 pnpm exec vitest run src/channels/discord-registration.test.ts
 ```
 
-Both must be clean before proceeding. `discord-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `discord`. It goes red if the `import './discord.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@chat-adapter/discord` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
+`discord-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `discord`. It goes red if the import line is deleted or drifts,
+if the barrel fails to evaluate, or if `@chat-adapter/discord` isn't installed
+(the import throws) — so it also covers the dependency from step 3. End-to-end
+delivery against a real server is verified manually once the service runs.
 
 ## Credentials
+
+Discord app setup is human and interactive — these steps are prose, not
+directives (no parser can click through the Discord Developer Portal). A recipe
+rebuild produces a compiling, registered adapter that cannot receive a message
+until they're done.
 
 ### Create Discord Bot
 
@@ -73,25 +80,36 @@ Both must be clean before proceeding. `discord-registration.test.ts` is the one 
    - Bot Permissions: select `Send Messages`, `Read Message History`, `Add Reactions`, `Attach Files`, `Use Slash Commands`
 8. Copy the generated URL and open it in your browser to invite the bot to your server
 
-### Configure environment
+### Store the credentials
 
-All three values are required — the adapter will fail to start without `DISCORD_PUBLIC_KEY` and `DISCORD_APPLICATION_ID`.
+All three values are required — the adapter will fail to start without
+`DISCORD_PUBLIC_KEY` and `DISCORD_APPLICATION_ID`. Capture them, then write them.
+`prompt` only *asks* and binds the answer to a name; a separate directive
+consumes it — so the same prompts could feed `ncl` or the OneCLI vault instead of
+`.env` by swapping only the consumer. Here they go to `.env` (set-if-absent — a
+value you've already filled in is never overwritten) and sync to the container:
 
-Add to `.env`:
-
-```bash
-DISCORD_BOT_TOKEN=your-bot-token
-DISCORD_APPLICATION_ID=your-application-id
-DISCORD_PUBLIC_KEY=your-public-key
+```nc:prompt bot_token secret
+Paste the Bot Token — Bot tab. Click `Reset Token` if you need a new one.
 ```
-
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+```nc:prompt application_id
+Paste the Application ID — General Information tab.
+```
+```nc:prompt public_key
+Paste the Public Key — General Information tab.
+```
+```nc:env-set
+DISCORD_BOT_TOKEN={{bot_token}}
+DISCORD_APPLICATION_ID={{application_id}}
+DISCORD_PUBLIC_KEY={{public_key}}
+```
+```nc:env-sync
+```
 
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now.
-
-Otherwise, run `/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
+`/manage-channels` to wire this channel to an agent group.
 
 ## Channel Info
 

@@ -5,64 +5,59 @@ description: Add GitHub channel integration via Chat SDK. PR and issue comment t
 
 # Add GitHub Channel
 
-Adds GitHub support via the Chat SDK bridge. The agent participates in PR and issue comment threads.
+Adds GitHub support via the Chat SDK bridge. The agent participates in PR and
+issue comment threads. NanoClaw doesn't ship channels in trunk — this skill
+copies the GitHub adapter in from the `channels` branch.
+
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent
+reads the prose and applies them, and a parser can apply them deterministically
+from the same document. Every directive is idempotent, so the whole skill is
+safe to re-run; anything a parser can't apply falls back to the prose beside it.
 
 ## Prerequisites
 
 You need a **dedicated GitHub bot account** (not your personal account). The adapter uses this account to post replies and filters out its own messages to avoid loops. Create a free GitHub account for your bot (e.g. `my-org-bot`), then invite it as a collaborator with write access to the repos you want monitored.
 
-## Install
+## Apply
 
-NanoClaw doesn't ship channels in trunk. This skill copies the GitHub adapter in from the `channels` branch.
+### 1. Copy the adapter
 
-### Pre-flight (idempotent)
+Fetch the `channels` branch and copy the GitHub adapter into `src/channels/`
+(overwrite — the branch is canonical):
 
-Skip to **Credentials** if all of these are already in place:
-
-- `src/channels/github.ts` exists
-- `src/channels/github-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './github.js';`
-- `@chat-adapter/github` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/github.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/github.ts                 > src/channels/github.ts
-git show origin/channels:src/channels/github-registration.test.ts > src/channels/github-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './github.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install @chat-adapter/github@4.27.0
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@chat-adapter/github@4.26.0
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+The build guards the typed `createChatSdkBridge(...)` core call and proves the
+dependency is installed (the adapter import throws if `@chat-adapter/github`
+isn't present):
+
+```nc:run effect:build
 pnpm run build
-pnpm exec vitest run src/channels/github-registration.test.ts
 ```
 
-Both must be clean before proceeding. `github-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `github`. It goes red if the `import './github.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@chat-adapter/github` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real GitHub repo is verified manually once the service is running — see Next Steps and the webhook setup above.
+End-to-end message delivery against a real GitHub repo is verified manually once
+the service is running — see Next Steps and the webhook setup below.
 
 ## Credentials
 
@@ -88,17 +83,30 @@ On each repo (logged in as the repo owner/admin):
 
 ### 3. Configure environment
 
-Add to `.env`:
+Capture the three values, then write them. `prompt` only *asks* and binds the
+answer to a name; a separate directive consumes it — so the same prompts could
+feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
+Here they go to `.env` (set-if-absent — a value you've already filled in is
+never overwritten) and sync to the container:
 
-```bash
-GITHUB_TOKEN=github_pat_...
-GITHUB_WEBHOOK_SECRET=your-webhook-secret
-GITHUB_BOT_USERNAME=your-bot-username
+```nc:prompt github_token secret
+Paste the Fine-grained Personal Access Token for the bot account — starts with `github_pat_`.
+```
+```nc:prompt webhook_secret secret
+Paste the webhook secret you generated for the repo webhook(s).
+```
+```nc:prompt bot_username
+Enter the bot account's GitHub username exactly (used for @-mention detection).
+```
+```nc:env-set
+GITHUB_TOKEN={{github_token}}
+GITHUB_WEBHOOK_SECRET={{webhook_secret}}
+GITHUB_BOT_USERNAME={{bot_username}}
+```
+```nc:env-sync
 ```
 
 `GITHUB_BOT_USERNAME` must match the bot account's GitHub username exactly. This is used for @-mention detection — the agent responds when someone writes `@your-bot-username` in a PR or issue comment.
-
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
 
 ## Wiring
 

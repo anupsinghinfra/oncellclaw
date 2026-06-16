@@ -39,6 +39,7 @@ import { runTelegramChannel } from './channels/telegram.js';
 import { runWhatsAppChannel } from './channels/whatsapp.js';
 import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
 import { getSetupProvider, listSetupProviders } from './providers/registry.js';
+import { applyProviderSkill } from './providers/install.js';
 // Provider payloads self-register their picker entry + auth on import.
 import './providers/index.js';
 import { brightSelect } from './lib/bright-select.js';
@@ -342,26 +343,36 @@ async function main(): Promise<void> {
     let providerEntry = getSetupProvider(agentProvider);
     if (agentProvider !== 'claude' && !providerEntry) {
       // A non-claude provider picked from the hard-wired list isn't wired in
-      // this install yet — install it via its self-contained script (channel
-      // style, idempotent: self-skips if already installed), rebuild the image
-      // (the container step already ran, the Dockerfile just changed), then
-      // load the payload's setup module so it self-registers.
-      const install = await runQuietChild(
-        `add-${agentProvider}`,
-        'bash',
-        [`setup/add-${agentProvider}.sh`],
-        {
-          running: `Installing ${agentProvider}…`,
-          done: `${agentProvider} installed.`,
-        },
-      );
-      if (!install.ok) {
+      // this install yet — install it by applying its `/add-<name>` SKILL.md
+      // in-process via the directive engine (channel style, idempotent:
+      // self-skips if already installed), rebuild the image (the container step
+      // already ran, the CLI manifest just changed), then load the payload's
+      // setup module so it self-registers.
+      const skillDir = `.claude/skills/add-${agentProvider}`;
+      const s = p.spinner();
+      s.start(`Installing ${agentProvider}…`);
+      let blockers: string[];
+      try {
+        ({ blockers } = await applyProviderSkill(skillDir, process.cwd()));
+      } catch (err) {
+        s.stop(`Couldn't install ${agentProvider}.`, 1);
+        const message = err instanceof Error ? err.message : String(err);
         await fail(
           `add-${agentProvider}`,
           `Couldn't install ${agentProvider}.`,
-          'See logs/setup-steps/ for details, then retry setup.',
+          message,
+        );
+        return; // unreachable — fail() exits — but narrows blockers for TS
+      }
+      if (blockers.length) {
+        s.stop(`Couldn't install ${agentProvider}.`, 1);
+        await fail(
+          `add-${agentProvider}`,
+          `Couldn't install ${agentProvider}.`,
+          blockers.join('; '),
         );
       }
+      s.stop(`${agentProvider} installed.`);
       p.log.info(brandBody('Rebuilding the container image with the new provider…'));
       spawnSync('./container/build.sh', [], { stdio: 'inherit' });
       await import(`./providers/${agentProvider}.js`);
@@ -801,7 +812,8 @@ function sendChatMessage(message: string): Promise<void> {
 // Providers offered for install are hard-wired in trunk — an audited control
 // surface (no branch enumeration that anyone with write access could extend).
 // Codex is the only one offered here; opencode/ollama install via their own
-// /add-* skills. Each is installed by its self-contained setup/add-<name>.sh.
+// /add-* skills. Each is installed by applying its `/add-<name>` SKILL.md
+// in-process via the directive engine.
 const INSTALLABLE_PROVIDERS = [
   { value: 'codex', label: 'Codex', hint: 'OpenAI — ChatGPT subscription or API key' },
 ] as const;
@@ -810,7 +822,7 @@ async function askAgentProviderChoice(): Promise<string> {
   const installed = listSetupProviders();
   const installedNames = new Set(installed.map((entry) => entry.value));
   // Offer the hard-wired installable providers this install hasn't wired yet —
-  // selecting one installs it via setup/add-<name>.sh.
+  // selecting one applies its `/add-<name>` SKILL.md in-process.
   const available = INSTALLABLE_PROVIDERS.filter((prov) => !installedNames.has(prov.value));
   const options = [
     ...installed.map(({ value, label, hint }) => ({ value, label, hint })),

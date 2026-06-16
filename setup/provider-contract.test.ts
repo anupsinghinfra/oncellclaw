@@ -65,19 +65,33 @@ describe('setup carries the picked provider to creation via a setup-run env var'
   }
 });
 
-describe('codex installs from a hard-wired self-contained script', () => {
+describe('codex installs from its hard-wired /add-codex skill in-process', () => {
   // The provider picker no longer enumerates a remote manifest branch (an
-  // unaudited control surface). Codex is offered in trunk and installed by its
-  // own setup/add-<name>.sh, exactly like a channel adapter.
-  it('setup/add-codex.sh exists', () => {
-    expect(fs.existsSync(path.join(repoRoot, 'setup/add-codex.sh'))).toBe(true);
+  // unaudited control surface). Codex is offered in trunk and installed by
+  // applying its `/add-codex` SKILL.md in-process via the directive engine —
+  // the same path channel adapters now take (no drift-prone setup/add-<name>.sh).
+  it('the /add-codex skill ships in trunk', () => {
+    expect(fs.existsSync(path.join(repoRoot, '.claude/skills/add-codex/SKILL.md'))).toBe(true);
   });
 
-  it('setup/auto.ts installs the picked provider by running setup/add-<name>.sh', () => {
+  it('the bespoke setup/add-codex.sh install script is gone', () => {
+    expect(fs.existsSync(path.join(repoRoot, 'setup/add-codex.sh'))).toBe(false);
+  });
+
+  it('setup/auto.ts installs the picked provider in-process via applyProviderSkill', () => {
     const src = read('setup/auto.ts');
-    expect(src).toContain('setup/add-${agentProvider}.sh');
+    expect(src).toContain('applyProviderSkill');
+    expect(src).toContain('.claude/skills/add-${agentProvider}');
+    // No shell-out to a per-provider install script.
+    expect(src).not.toContain('setup/add-${agentProvider}.sh');
     // The removed branch-enumeration machinery must not creep back in.
     expect(src).not.toContain('listBranchProviderManifests');
     expect(src).not.toContain('installProviderFromBranch');
+  });
+
+  it('setup/provider-auth.ts installs the picked provider in-process via applyProviderSkill', () => {
+    const src = read('setup/provider-auth.ts');
+    expect(src).toContain('applyProviderSkill');
+    expect(src).not.toContain('setup/add-codex.sh');
   });
 });

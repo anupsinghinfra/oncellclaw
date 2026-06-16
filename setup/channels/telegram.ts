@@ -8,7 +8,8 @@
  *   2. Paste the bot token (clack password) — format-validated
  *   3. getMe via the Bot API to resolve the bot's username
  *   4. Confirm + deep-link into the bot's Telegram chat (tg://resolve)
- *   5. Install the adapter (setup/add-telegram.sh, non-interactive)
+ *   5. Install the adapter by applying the /add-telegram skill in-process
+ *      (directive engine; the skill's SKILL.md is the single source of truth)
  *   6. Run the pair-telegram step, rendering code events as clack notes
  *   7. Ask for the messaging-agent name (defaulting to "Nano")
  *   8. Wire the agent via scripts/init-first-agent.ts
@@ -17,9 +18,12 @@
  * structured entries in logs/setup.log, full raw output in per-step files
  * under logs/setup-steps/. See docs/setup-flow.md.
  */
+import { execSync } from 'node:child_process';
+
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
+import { applySkill, type Prompter } from '../../scripts/skill-apply.js';
 import * as setupLog from '../logs.js';
 import { isHeadless } from '../platform.js';
 import { BACK_TO_CHANNEL_SELECTION, type ChannelFlowResult } from '../lib/back-nav.js';
@@ -85,24 +89,12 @@ export async function runTelegramChannel(displayName: string): Promise<ChannelFl
     openUrl(botUrl);
   }
 
-  const install = await runQuietChild(
-    'telegram-install',
-    'bash',
-    ['setup/add-telegram.sh'],
-    {
-      running: `Connecting Telegram to @${botUsername}…`,
-      done: 'Telegram connected.',
-    },
-    {
-      env: { TELEGRAM_BOT_TOKEN: token },
-      extraFields: { BOT_USERNAME: botUsername },
-    },
-  );
+  const install = await applyTelegramSkill(token, botUsername);
   if (!install.ok) {
     await fail(
       'telegram-install',
       "Couldn't connect Telegram.",
-      'See logs/setup-steps/ for details, then retry setup.',
+      install.detail || 'See logs/setup-steps/ for details, then retry setup.',
     );
   }
 
@@ -156,6 +148,97 @@ export async function runTelegramChannel(displayName: string): Promise<ChannelFl
       `Couldn't finish connecting ${agentName}.`,
       'You can retry later with `/manage-channels`.',
     );
+  }
+}
+
+/**
+ * Install the Telegram adapter and persist the bot token by applying the
+ * `/add-telegram` skill through the structured-directive engine. The skill's
+ * SKILL.md is the single source of truth — this replaces the hand-maintained
+ * setup/add-telegram.sh, which duplicated the copy/append/dep/build/env steps
+ * and had to be kept in sync with the skill by hand.
+ *
+ * The bot token collected above is handed to the skill's `prompt bot_token`
+ * directive through the in-process Prompter, so it never touches argv or disk
+ * (the engine's env-set/env-sync directives write it to .env + data/env/env).
+ * The engine runs copy/append/dep/build + env-set/env-sync; we restart the
+ * service after (the skill itself doesn't, by design) and let the caller settle
+ * before pairing so the polling adapter is up. add-telegram is fully
+ * deterministic and the token is supplied, so a healthy apply leaves nothing
+ * for an agent and nothing deferred — either bucket being non-empty means the
+ * install failed.
+ */
+async function applyTelegramSkill(
+  token: string,
+  botUsername: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const projectRoot = process.cwd();
+  const s = p.spinner();
+  const start = Date.now();
+  s.start(`Connecting Telegram to @${botUsername}…`);
+
+  const prompter: Prompter = {
+    async ask(name) {
+      if (name === 'bot_token') return token;
+      return undefined;
+    },
+  };
+
+  try {
+    const result = await applySkill('.claude/skills/add-telegram', projectRoot, {
+      prompter,
+      exec: (cmd) => {
+        execSync(cmd, { cwd: projectRoot, stdio: 'pipe' });
+      },
+      // Fork-aware: reuse the existing resolver (handles upstream/fork remotes
+      // and the auto-add-upstream fallback) instead of assuming `origin`.
+      resolveRemote: () =>
+        execSync('source setup/lib/channels-remote.sh; resolve_channels_remote', {
+          cwd: projectRoot,
+          shell: '/bin/bash',
+          encoding: 'utf8',
+        }).trim(),
+    });
+
+    if (result.agentTasks.length || result.deferred.length) {
+      const why = [...result.agentTasks.map((t) => t.reason), ...result.deferred].join('; ');
+      s.stop("Couldn't finish installing Telegram.", 1);
+      setupLog.step('telegram-install', 'failed', Date.now() - start, { ERROR: why });
+      return { ok: false, detail: why };
+    }
+
+    restartService(projectRoot);
+    // Give the Telegram adapter a moment to finish starting before pairing
+    // begins polling for the user's code message.
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    s.stop('Telegram connected.');
+    setupLog.step('telegram-install', 'success', Date.now() - start, {
+      APPLIED: String(result.applied.length),
+      SKIPPED: String(result.skipped.length),
+      BOT_USERNAME: botUsername,
+    });
+    return { ok: true, detail: '' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    s.stop("Couldn't install the Telegram adapter.", 1);
+    setupLog.step('telegram-install', 'failed', Date.now() - start, { ERROR: message });
+    return { ok: false, detail: 'See logs/setup-steps/ for details, then retry setup.' };
+  }
+}
+
+/** Best-effort service restart so the new adapter + credentials take effect. */
+function restartService(projectRoot: string): void {
+  const script = [
+    `source "${projectRoot}/setup/lib/install-slug.sh"`,
+    'case "$(uname -s)" in',
+    '  Darwin) launchctl kickstart -k "gui/$(id -u)/$(launchd_label)" ;;',
+    '  Linux) systemctl --user restart "$(systemd_unit)" || sudo systemctl restart "$(systemd_unit)" ;;',
+    'esac',
+  ].join('\n');
+  try {
+    execSync(script, { cwd: projectRoot, stdio: 'pipe', shell: '/bin/bash' });
+  } catch {
+    // The service may not be installed yet during a fresh setup — best-effort.
   }
 }
 

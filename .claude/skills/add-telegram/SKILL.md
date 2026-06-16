@@ -5,76 +5,80 @@ description: Add Telegram channel integration via Chat SDK.
 
 # Add Telegram Channel
 
-Adds Telegram bot support via the Chat SDK bridge.
+Adds Telegram bot support via the Chat SDK bridge. NanoClaw doesn't ship
+channels in trunk — this skill copies the Telegram adapter, its
+formatting/pairing helpers, their tests, and the `pair-telegram` setup step in
+from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent
+reads the prose and applies them, and a parser can apply them deterministically
+from the same document. Every directive is idempotent, so the whole skill is
+safe to re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the Telegram adapter, its formatting/pairing helpers, their tests, and the `pair-telegram` setup step in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter, helpers, tests, and setup step
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the Telegram adapter, its pairing and
+markdown-sanitize helpers (with their tests), and the `pair-telegram` setup step
+into place (overwrite — the branch is canonical):
 
-- `src/channels/telegram.ts`, `telegram-pairing.ts`, `telegram-markdown-sanitize.ts` (and their `.test.ts` siblings) all exist
-- `src/channels/telegram-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './telegram.js';`
-- `setup/pair-telegram.ts` exists and `setup/index.ts`'s `STEPS` map contains `'pair-telegram':`
-- `@chat-adapter/telegram` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/telegram.ts
+src/channels/telegram-pairing.ts
+src/channels/telegram-pairing.test.ts
+src/channels/telegram-markdown-sanitize.ts
+src/channels/telegram-markdown-sanitize.test.ts
+setup/pair-telegram.ts
 ```
 
-### 2. Copy the adapter, helpers, tests, registration test, and setup step
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/telegram.ts                        > src/channels/telegram.ts
-git show origin/channels:src/channels/telegram-registration.test.ts      > src/channels/telegram-registration.test.ts
-git show origin/channels:src/channels/telegram-pairing.ts                > src/channels/telegram-pairing.ts
-git show origin/channels:src/channels/telegram-pairing.test.ts           > src/channels/telegram-pairing.test.ts
-git show origin/channels:src/channels/telegram-markdown-sanitize.ts      > src/channels/telegram-markdown-sanitize.ts
-git show origin/channels:src/channels/telegram-markdown-sanitize.test.ts > src/channels/telegram-markdown-sanitize.test.ts
-git show origin/channels:setup/pair-telegram.ts                          > setup/pair-telegram.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './telegram.js';
 ```
 
-### 4. Register the setup step
+### 3. Register the setup step
 
-In `setup/index.ts`, add this entry to the `STEPS` map (right after the `register` line is fine; skip if already present):
+Add the `pair-telegram` loader to the `STEPS` map in `setup/index.ts`, inside the
+dormant marker region (skipped if already present — `pair-telegram` ships in core,
+so this idempotent-skips on a normal install, but is expressed for a
+clean-upstream rebuild):
 
-```typescript
+```nc:append to:setup/index.ts at:nanoclaw:setup-steps
 'pair-telegram': () => import('./pair-telegram.js'),
 ```
 
-### 5. Install the adapter package (pinned)
+### 4. Install the adapter package
 
-```bash
-pnpm install @chat-adapter/telegram@4.27.0
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@chat-adapter/telegram@4.26.0
 ```
 
-### 6. Build and validate
+### 5. Build and validate
 
-```bash
+Build guards the typed `createChatSdkBridge(...)` core call and proves the
+dependency is installed — it goes red if the `import './telegram.js';` line is
+deleted or drifts, if the barrel fails to evaluate, or if
+`@chat-adapter/telegram` isn't installed (the import throws):
+
+```nc:run effect:build
 pnpm run build
-pnpm exec vitest run src/channels/telegram-registration.test.ts
 ```
 
-Both must be clean before proceeding. `telegram-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `telegram`. It goes red if the `import './telegram.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@chat-adapter/telegram` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 5. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real Telegram bot is verified manually once the service is running — see Next Steps and the pairing flow in Channel Info.
+End-to-end message delivery against a real Telegram bot is verified manually once
+the service is running — see Next Steps and the pairing flow in Channel Info.
 
 ## Credentials
+
+Bot creation in Telegram is human and interactive — these steps are prose, not
+directives (no parser can click through BotFather). A recipe rebuild produces a
+compiling, registered adapter that cannot receive a message until they're done.
 
 ### Create Telegram Bot
 
@@ -89,15 +93,22 @@ End-to-end message delivery against a real Telegram bot is verified manually onc
 1. Open `@BotFather` > `/mybots` > select your bot
 2. **Bot Settings** > **Group Privacy** > **Turn off**
 
-### Configure environment
+### Store the credentials
 
-Add to `.env`:
+Capture the bot token, then write it. `prompt` only *asks* and binds the answer
+to a name; a separate directive consumes it — so the same prompt could feed `ncl`
+or the OneCLI vault instead of `.env` by swapping only the consumer. Here it goes
+to `.env` (set-if-absent — a value you've already filled in is never overwritten)
+and syncs to the container:
 
-```bash
-TELEGRAM_BOT_TOKEN=your-bot-token
+```nc:prompt bot_token secret
+Paste the bot token from BotFather (looks like `123456:ABC-DEF...`).
 ```
-
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+```nc:env-set
+TELEGRAM_BOT_TOKEN={{bot_token}}
+```
+```nc:env-sync
+```
 
 ## Next Steps
 

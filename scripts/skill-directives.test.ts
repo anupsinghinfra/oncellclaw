@@ -97,3 +97,59 @@ describe('validation catches malformed directives', () => {
     expect(validate(parseDirectives(md), { chatVersion: '4.26.0' })).toEqual([]);
   });
 });
+
+describe('json-merge directive', () => {
+  const codex = ['```nc:json-merge into:container/cli-tools.json key:name', '{ "name": "@openai/codex", "version": "0.138.0" }', '```'].join('\n');
+
+  it('parses into/key attrs and the JSON object body', () => {
+    const [d] = parseDirectives(codex);
+    expect(d.kind).toBe('json-merge');
+    expect(d.attrs.into).toBe('container/cli-tools.json');
+    expect(d.attrs.key).toBe('name');
+    expect(JSON.parse(d.body.join('\n'))).toEqual({ name: '@openai/codex', version: '0.138.0' });
+  });
+
+  it('passes validation when into + key + a parseable object are all present', () => {
+    expect(validate(parseDirectives(codex))).toEqual([]);
+  });
+
+  it('flags a missing into:', () => {
+    const md = ['```nc:json-merge key:name', '{ "name": "x" }', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /requires into:/.test(p.message))).toBe(true);
+  });
+
+  it('flags a missing key:', () => {
+    const md = ['```nc:json-merge into:container/cli-tools.json', '{ "name": "x" }', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /requires key:/.test(p.message))).toBe(true);
+  });
+
+  it('flags an unparseable body', () => {
+    const md = ['```nc:json-merge into:f.json key:name', '{ not json', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /parseable JSON object/.test(p.message))).toBe(true);
+  });
+
+  it('flags a body that is an array, not a single object', () => {
+    const md = ['```nc:json-merge into:f.json key:name', '[{ "name": "x" }]', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /single JSON object/.test(p.message))).toBe(true);
+  });
+
+  it('flags a body missing the match key field', () => {
+    const md = ['```nc:json-merge into:f.json key:name', '{ "version": "1.0.0" }', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /no "name" field/.test(p.message))).toBe(true);
+  });
+});
+
+describe('append at:<marker> attribute', () => {
+  it('parses an optional at:<marker> alongside to:', () => {
+    const md = ['```nc:append to:setup/index.ts at:nanoclaw:setup-steps', "  codex: () => import('./codex.js'),", '```'].join('\n');
+    const [d] = parseDirectives(md);
+    expect(d.kind).toBe('append');
+    expect(d.attrs.to).toBe('setup/index.ts');
+    expect(d.attrs.at).toBe('nanoclaw:setup-steps');
+  });
+
+  it('still validates an append that carries at: (to + a line are all it needs)', () => {
+    const md = ['```nc:append to:setup/index.ts at:nanoclaw:setup-steps', "  codex: () => import('./codex.js'),", '```'].join('\n');
+    expect(validate(parseDirectives(md))).toEqual([]);
+  });
+});

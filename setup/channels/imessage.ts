@@ -19,26 +19,29 @@
  *      Remote: prompt for Photon server URL + API key
  *   3. Ask for the phone or email the operator messages from — this is
  *      the platform-id for first-agent wiring
- *   4. Install the adapter (setup/add-imessage.sh, non-interactive)
+ *   4. Install the adapter by applying the /add-imessage skill in-process
+ *      (SKILL.md is the single source of truth) + restart the service
  *   5. Wire the agent via scripts/init-first-agent.ts — the welcome
  *      iMessage goes out through the normal delivery path
  *
  * All output obeys the three-level contract. See docs/setup-flow.md.
  */
 import { execSync } from 'child_process';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
+import { applySkill, type Prompter } from '../../scripts/skill-apply.js';
 import * as setupLog from '../logs.js';
 import { BACK_TO_CHANNEL_SELECTION, type ChannelFlowResult } from '../lib/back-nav.js';
 import { brightSelect } from '../lib/bright-select.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
 import { accentGreen, note, wrapForGutter } from '../lib/theme.js';
-import { readEnvKey } from '../environment.js';
+import { readEnvKey, upsertEnvKey } from '../environment.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
 
@@ -71,34 +74,12 @@ export async function runIMessageChannel(displayName: string): Promise<ChannelFl
 
   const handle = await askOperatorHandle();
 
-  const install = await runQuietChild(
-    'imessage-install',
-    'bash',
-    ['setup/add-imessage.sh'],
-    {
-      running:
-        mode === 'local'
-          ? "Connecting the iMessage adapter to this Mac…"
-          : `Connecting the iMessage adapter to ${remoteCreds!.serverUrl}…`,
-      done: 'iMessage adapter installed.',
-    },
-    {
-      env:
-        mode === 'local'
-          ? { IMESSAGE_LOCAL: 'true', IMESSAGE_ENABLED: 'true' }
-          : {
-              IMESSAGE_LOCAL: 'false',
-              IMESSAGE_SERVER_URL: remoteCreds!.serverUrl,
-              IMESSAGE_API_KEY: remoteCreds!.apiKey,
-            },
-      extraFields: { MODE: mode },
-    },
-  );
+  const install = await applyIMessageSkill(mode, remoteCreds);
   if (!install.ok) {
     await fail(
       'imessage-install',
       "Couldn't install the iMessage adapter.",
-      'See logs/setup-steps/ for details, then retry setup.',
+      install.detail || 'See logs/setup-steps/ for details, then retry setup.',
     );
   }
 
@@ -138,6 +119,130 @@ export async function runIMessageChannel(displayName: string): Promise<ChannelFl
       `Couldn't finish connecting ${agentName}.`,
       'Double-check Full Disk Access (local mode) or Photon credentials (remote), then retry.',
     );
+  }
+}
+
+/**
+ * Install the iMessage adapter and persist mode/creds by applying the
+ * `/add-imessage` skill through the structured-directive engine. The skill's
+ * SKILL.md is the single source of truth — this replaces the hand-maintained
+ * setup/add-imessage.sh.
+ *
+ * The skill's deterministic directives cover copy/append/dep/build/env-sync,
+ * but the mode-specific `.env` keys live in the skill's prose (the engine has no
+ * `prompt` directive for them, and the keys differ by mode). So this flow writes
+ * the canonical keys for the chosen mode — and strips the opposite mode's keys —
+ * before applying the skill; the skill's `nc:env-sync` directive then copies
+ * `.env` → `data/env/env`. We restart the service after (the skill itself
+ * doesn't, by design).
+ *
+ * add-imessage has no `prompt` directives, so the Prompter is a no-op
+ * pass-through. A healthy apply leaves nothing for an agent and nothing
+ * deferred — either bucket being non-empty means the install failed.
+ */
+async function applyIMessageSkill(
+  mode: Mode,
+  remoteCreds: RemoteCreds | null,
+): Promise<{ ok: boolean; detail: string }> {
+  const projectRoot = process.cwd();
+  const s = p.spinner();
+  const start = Date.now();
+  s.start(
+    mode === 'local'
+      ? 'Connecting the iMessage adapter to this Mac…'
+      : `Connecting the iMessage adapter to ${remoteCreds!.serverUrl}…`,
+  );
+
+  // The mode keys are prose in SKILL.md — write them before applySkill so the
+  // skill's nc:env-sync picks them up. Strip the opposite mode's keys so a stale
+  // value can't confuse the adapter's factory.
+  if (mode === 'local') {
+    upsertEnvKey('IMESSAGE_LOCAL', 'true', projectRoot);
+    upsertEnvKey('IMESSAGE_ENABLED', 'true', projectRoot);
+    removeEnvKey('IMESSAGE_SERVER_URL', projectRoot);
+    removeEnvKey('IMESSAGE_API_KEY', projectRoot);
+  } else {
+    upsertEnvKey('IMESSAGE_LOCAL', 'false', projectRoot);
+    upsertEnvKey('IMESSAGE_SERVER_URL', remoteCreds!.serverUrl, projectRoot);
+    upsertEnvKey('IMESSAGE_API_KEY', remoteCreds!.apiKey, projectRoot);
+    removeEnvKey('IMESSAGE_ENABLED', projectRoot);
+  }
+
+  // add-imessage has no prompt vars; this satisfies the Prompter contract
+  // without ever asking the human (and never returns a value to defer on).
+  const prompter: Prompter = {
+    async ask() {
+      return undefined;
+    },
+  };
+
+  try {
+    const result = await applySkill('.claude/skills/add-imessage', projectRoot, {
+      prompter,
+      exec: (cmd) => {
+        execSync(cmd, { cwd: projectRoot, stdio: 'pipe' });
+      },
+      // Fork-aware: reuse the existing resolver (handles upstream/fork remotes
+      // and the auto-add-upstream fallback) instead of assuming `origin`.
+      resolveRemote: () =>
+        execSync('source setup/lib/channels-remote.sh; resolve_channels_remote', {
+          cwd: projectRoot,
+          shell: '/bin/bash',
+          encoding: 'utf8',
+        }).trim(),
+    });
+
+    if (result.agentTasks.length || result.deferred.length) {
+      const why = [...result.agentTasks.map((t) => t.reason), ...result.deferred].join('; ');
+      s.stop("Couldn't finish installing iMessage.", 1);
+      setupLog.step('imessage-install', 'failed', Date.now() - start, { ERROR: why });
+      return { ok: false, detail: why };
+    }
+
+    restartService(projectRoot);
+    s.stop('iMessage adapter installed.');
+    setupLog.step('imessage-install', 'success', Date.now() - start, {
+      APPLIED: String(result.applied.length),
+      SKIPPED: String(result.skipped.length),
+      MODE: mode,
+    });
+    return { ok: true, detail: '' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    s.stop("Couldn't install the iMessage adapter.", 1);
+    setupLog.step('imessage-install', 'failed', Date.now() - start, { ERROR: message });
+    return { ok: false, detail: 'See logs/setup-steps/ for details, then retry setup.' };
+  }
+}
+
+/** Remove a single `KEY=…` line from `.env` (no-op if absent). */
+function removeEnvKey(key: string, projectRoot: string): void {
+  const envPath = path.join(projectRoot, '.env');
+  let content: string;
+  try {
+    content = fs.readFileSync(envPath, 'utf-8');
+  } catch {
+    return; // no .env yet — nothing to remove
+  }
+  const kept = content
+    .split('\n')
+    .filter((l) => !l.trim().startsWith(`${key}=`));
+  fs.writeFileSync(envPath, kept.join('\n'));
+}
+
+/** Best-effort service restart so the new adapter + creds take effect. */
+function restartService(projectRoot: string): void {
+  const script = [
+    `source "${projectRoot}/setup/lib/install-slug.sh"`,
+    'case "$(uname -s)" in',
+    '  Darwin) launchctl kickstart -k "gui/$(id -u)/$(launchd_label)" ;;',
+    '  Linux) systemctl --user restart "$(systemd_unit)" || sudo systemctl restart "$(systemd_unit)" ;;',
+    'esac',
+  ].join('\n');
+  try {
+    execSync(script, { cwd: projectRoot, stdio: 'pipe', shell: '/bin/bash' });
+  } catch {
+    // The service may not be installed yet during a fresh setup — best-effort.
   }
 }
 

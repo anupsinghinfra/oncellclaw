@@ -5,64 +5,61 @@ description: Add Microsoft Teams channel integration via Chat SDK.
 
 # Add Microsoft Teams Channel
 
-Connect NanoClaw to Microsoft Teams for interactive chat in team channels, group chats, and direct messages.
+Connect NanoClaw to Microsoft Teams for interactive chat in team channels, group
+chats, and direct messages. NanoClaw doesn't ship channels in trunk — this skill
+copies the Teams adapter in from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent reads
+the prose and applies them, and a parser can apply them deterministically from
+the same document. Every directive is idempotent, so the whole skill is safe to
+re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the Teams adapter in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the Teams adapter into `src/channels/`
+(overwrite — the branch is canonical):
 
-- `src/channels/teams.ts` exists
-- `src/channels/teams-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './teams.js';`
-- `@chat-adapter/teams` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/teams.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/teams.ts                 > src/channels/teams.ts
-git show origin/channels:src/channels/teams-registration.test.ts > src/channels/teams-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './teams.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install @chat-adapter/teams@4.27.0
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@chat-adapter/teams@4.26.0
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+Build guards the typed `createChatSdkBridge(...)` core call and proves the
+dependency is installed — the adapter import throws if `@chat-adapter/teams`
+isn't there, so the barrel fails to evaluate and the build goes red.
+
+```nc:run effect:build
 pnpm run build
-pnpm exec vitest run src/channels/teams-registration.test.ts
 ```
 
-Both must be clean before proceeding. `teams-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `teams`. It goes red if the `import './teams.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@chat-adapter/teams` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real Teams workspace is verified manually once the service is running — see Next Steps and the webhook setup above.
+End-to-end message delivery against a real Teams workspace is verified manually
+once the service is running — see Credentials and the webhook setup below.
 
 ## Credentials
 
-Two paths — manual (Azure Portal) or auto (Teams CLI).
+Two paths — manual (Azure Portal) or auto (Teams CLI). Teams app setup is human
+and interactive — these steps are prose, not directives (no parser can click
+through the Azure or Teams UI).
 
 ### Auto: Teams CLI
 
@@ -220,17 +217,33 @@ By default, the bot only receives messages when @-mentioned. To receive all mess
 
 ### Configure environment
 
-Add to `.env`:
+Capture the credentials, then write them. `prompt` only *asks* and binds the
+answer to a name; a separate directive consumes it — so the same prompts could
+feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
+Here they go to `.env` (set-if-absent — a value you've already filled in is never
+overwritten) and sync to the container. `TEAMS_APP_TENANT_ID` is required only
+for Single Tenant apps; leave it blank for Multi Tenant.
 
-```bash
-TEAMS_APP_ID=your-app-id
-TEAMS_APP_PASSWORD=your-client-secret
-# For Single Tenant only:
-TEAMS_APP_TENANT_ID=your-tenant-id
-TEAMS_APP_TYPE=SingleTenant
+```nc:prompt app_id
+Paste the Application (client) ID — Azure App Registration Overview page (maps to TEAMS_APP_ID).
 ```
-
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+```nc:prompt app_password secret
+Paste the client secret Value — Certificates & secrets (maps to TEAMS_APP_PASSWORD; shown only once).
+```
+```nc:prompt app_type
+Enter the app type — `SingleTenant` or `MultiTenant` (must match your Azure Bot / App Registration).
+```
+```nc:prompt app_tenant_id
+Paste the Directory (tenant) ID — Azure App Registration Overview page (TEAMS_APP_TENANT_ID; Single Tenant only, leave blank for Multi Tenant).
+```
+```nc:env-set
+TEAMS_APP_ID={{app_id}}
+TEAMS_APP_PASSWORD={{app_password}}
+TEAMS_APP_TYPE={{app_type}}
+TEAMS_APP_TENANT_ID={{app_tenant_id}}
+```
+```nc:env-sync
+```
 
 ### Webhook server
 

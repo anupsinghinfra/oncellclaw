@@ -6,61 +6,61 @@ description: Add WhatsApp Business Cloud API channel via Chat SDK. Official Meta
 # Add WhatsApp Cloud API Channel
 
 Connect NanoClaw to WhatsApp via the official Meta WhatsApp Business Cloud API.
+NanoClaw doesn't ship channels in trunk — this skill copies the WhatsApp Cloud
+adapter in from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent reads
+the prose and applies them, and a parser can apply them deterministically from
+the same document. Every directive is idempotent, so the whole skill is safe to
+re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the WhatsApp Cloud adapter in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the WhatsApp Cloud adapter into
+`src/channels/` (overwrite — the branch is canonical):
 
-- `src/channels/whatsapp-cloud.ts` exists
-- `src/channels/whatsapp-cloud-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './whatsapp-cloud.js';`
-- `@chat-adapter/whatsapp` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/whatsapp-cloud.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/whatsapp-cloud.ts                 > src/channels/whatsapp-cloud.ts
-git show origin/channels:src/channels/whatsapp-cloud-registration.test.ts > src/channels/whatsapp-cloud-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './whatsapp-cloud.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install @chat-adapter/whatsapp@4.27.0
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@chat-adapter/whatsapp@4.26.0
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+Build guards the typed `createChatSdkBridge(...)` core call and proves the
+dependency is installed — the import throws at evaluation if `@chat-adapter/whatsapp`
+is missing or the barrel drifts:
+
+```nc:run effect:build
 pnpm run build
-pnpm exec vitest run src/channels/whatsapp-cloud-registration.test.ts
 ```
 
-Both must be clean before proceeding. `whatsapp-cloud-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `whatsapp-cloud`. It goes red if the `import './whatsapp-cloud.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@chat-adapter/whatsapp` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real WhatsApp Business number is verified manually once the service is running — see Next Steps and the webhook setup above.
+End-to-end message delivery against a real WhatsApp Business number is verified
+manually once the service is running — see Next Steps and the webhook setup
+below.
 
 ## Credentials
+
+Meta app setup is human and interactive — these steps are prose, not directives
+(no parser can click through the Meta dashboard). A recipe rebuild produces a
+compiling, registered adapter that cannot receive a message until they're done.
 
 1. Go to [Meta for Developers](https://developers.facebook.com/apps/) and create an app (type: Business).
 2. Add the **WhatsApp** product.
@@ -73,18 +73,43 @@ End-to-end message delivery against a real WhatsApp Business number is verified 
    - Subscribe to webhook fields: `messages`.
 5. Copy the **App Secret** from **Settings** > **Basic**.
 
-### Configure environment
+### Store the credentials
 
-Add to `.env`:
+Capture the four values, then write them. `prompt` only *asks* and binds the
+answer to a name; a separate directive consumes it — so the same prompts could
+feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
+Here they go to `.env` (set-if-absent — a value you've already filled in is
+never overwritten) and sync to the container:
 
-```bash
-WHATSAPP_ACCESS_TOKEN=your-system-user-access-token
-WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
-WHATSAPP_APP_SECRET=your-app-secret
-WHATSAPP_VERIFY_TOKEN=your-verify-token
+```nc:prompt access_token secret
+Paste the System User access token — WhatsApp > API Setup, with `whatsapp_business_messaging` permission.
+```
+```nc:prompt phone_number_id
+Paste the Phone Number ID — WhatsApp > API Setup (not the phone number itself).
+```
+```nc:prompt app_secret secret
+Paste the App Secret — Settings > Basic.
+```
+```nc:prompt verify_token secret
+Paste the Verify Token — the random string you set under WhatsApp > Configuration.
+```
+```nc:env-set
+WHATSAPP_ACCESS_TOKEN={{access_token}}
+WHATSAPP_PHONE_NUMBER_ID={{phone_number_id}}
+WHATSAPP_APP_SECRET={{app_secret}}
+WHATSAPP_VERIFY_TOKEN={{verify_token}}
+```
+```nc:env-sync
 ```
 
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+### Webhook server
+
+The Chat SDK bridge automatically starts a shared webhook server on port 3000
+(`WEBHOOK_PORT` to change it), handling `/webhook/whatsapp`. This port must be
+publicly reachable for Meta to deliver events. Running locally, expose it with
+ngrok (`ngrok http 3000`), a Cloudflare Tunnel, or a reverse proxy on a VPS —
+the resulting public URL is the base for the webhook URL set under WhatsApp >
+Configuration above.
 
 ## Next Steps
 
@@ -100,3 +125,5 @@ Otherwise, run `/manage-channels` to wire this channel to an agent group.
 - **supports-threads**: no
 - **typical-use**: Interactive 1:1 chat -- direct messages only
 - **default-isolation**: Same agent group if you're the only person messaging the bot. Each additional person who messages gets their own conversation automatically, but they share the agent's workspace and memory -- use a separate agent group if you need information isolation between different contacts.
+</content>
+</invoke>

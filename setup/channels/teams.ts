@@ -24,12 +24,14 @@
  *     stops there; the operator DMs the bot, NanoClaw auto-creates the
  *     messaging group, and they wire an agent via `/manage-channels`.
  */
+import { execSync } from 'node:child_process';
 import os from 'os';
 import path from 'path';
 
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
+import { applySkill, type Prompter } from '../../scripts/skill-apply.js';
 import { BACK_TO_CHANNEL_SELECTION, type ChannelFlowResult } from '../lib/back-nav.js';
 import { brightSelect } from '../lib/bright-select.js';
 import { confirmThenOpen } from '../lib/browser.js';
@@ -39,7 +41,7 @@ import {
   validateWithHelpEscape,
   type HandoffContext,
 } from '../lib/claude-handoff.js';
-import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
+import { ensureAnswer, fail } from '../lib/runner.js';
 import { buildTeamsAppPackage } from '../lib/teams-manifest.js';
 import { note } from '../lib/theme.js';
 import * as setupLog from '../logs.js';
@@ -539,38 +541,103 @@ async function stepSideload(args: {
 
 // ─── step: install adapter ─────────────────────────────────────────────
 
+/**
+ * Install the Teams adapter and persist credentials by applying the `/add-teams`
+ * skill through the structured-directive engine. The skill's SKILL.md is the
+ * single source of truth — this replaces the hand-maintained setup/add-teams.sh,
+ * which duplicated the copy/append/dep/build/env steps and could drift on the
+ * pinned adapter version.
+ *
+ * The credentials collected above are handed to the skill's `prompt` directives
+ * through the in-process Prompter, so they never touch argv or disk until the
+ * skill's env-set/env-sync directives write them. The engine runs
+ * copy/append/dep/build + env-set/env-sync; we restart the service after (the
+ * skill itself doesn't, by design). add-teams is fully deterministic and every
+ * prompt var is supplied, so a healthy apply leaves nothing for an agent and
+ * nothing deferred — either bucket being non-empty means the install failed.
+ *
+ * `app_tenant_id` is required only for Single Tenant apps; for Multi Tenant we
+ * supply an empty string so the env-set directive writes a blank
+ * TEAMS_APP_TENANT_ID, matching the skill's "leave blank for Multi Tenant" prose.
+ */
 async function installAdapter(collected: Collected): Promise<void> {
-  const env: Record<string, string> = {
-    TEAMS_APP_ID: collected.appId!,
-    TEAMS_APP_PASSWORD: collected.appPassword!,
-    TEAMS_APP_TYPE: collected.appType!,
-  };
-  if (collected.appType === 'SingleTenant') {
-    env.TEAMS_APP_TENANT_ID = collected.tenantId!;
-  }
+  const projectRoot = process.cwd();
+  const s = p.spinner();
+  const start = Date.now();
+  s.start('Installing the Teams adapter and restarting the service…');
 
-  const install = await runQuietChild(
-    'teams-install',
-    'bash',
-    ['setup/add-teams.sh'],
-    {
-      running: 'Installing the Teams adapter and restarting the service…',
-      done: 'Teams adapter installed.',
+  const prompter: Prompter = {
+    async ask(name) {
+      if (name === 'app_id') return collected.appId;
+      if (name === 'app_password') return collected.appPassword;
+      if (name === 'app_type') return collected.appType;
+      if (name === 'app_tenant_id') {
+        return collected.appType === 'SingleTenant' ? collected.tenantId ?? '' : '';
+      }
+      return undefined;
     },
-    {
-      env,
-      extraFields: {
-        APP_ID: collected.appId!,
-        APP_TYPE: collected.appType!,
+  };
+
+  try {
+    const result = await applySkill('.claude/skills/add-teams', projectRoot, {
+      prompter,
+      exec: (cmd) => {
+        execSync(cmd, { cwd: projectRoot, stdio: 'pipe' });
       },
-    },
-  );
-  if (!install.ok) {
+      // Fork-aware: reuse the existing resolver (handles upstream/fork remotes
+      // and the auto-add-upstream fallback) instead of assuming `origin`.
+      resolveRemote: () =>
+        execSync('source setup/lib/channels-remote.sh; resolve_channels_remote', {
+          cwd: projectRoot,
+          shell: '/bin/bash',
+          encoding: 'utf8',
+        }).trim(),
+    });
+
+    if (result.agentTasks.length || result.deferred.length) {
+      const why = [...result.agentTasks.map((t) => t.reason), ...result.deferred].join('; ');
+      s.stop("Couldn't finish installing Teams.", 1);
+      setupLog.step('teams-install', 'failed', Date.now() - start, { ERROR: why });
+      fail(
+        'teams-install',
+        "Couldn't install the Teams adapter.",
+        why || 'See logs/setup-steps/ for details, then retry setup.',
+      );
+    }
+
+    restartService(projectRoot);
+    s.stop('Teams adapter installed.');
+    setupLog.step('teams-install', 'success', Date.now() - start, {
+      APPLIED: String(result.applied.length),
+      SKIPPED: String(result.skipped.length),
+      APP_ID: collected.appId!,
+      APP_TYPE: collected.appType!,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    s.stop("Couldn't install the Teams adapter.", 1);
+    setupLog.step('teams-install', 'failed', Date.now() - start, { ERROR: message });
     fail(
       'teams-install',
       "Couldn't install the Teams adapter.",
       'See logs/setup-steps/ for details, then retry setup.',
     );
+  }
+}
+
+/** Best-effort service restart so the new adapter + credentials take effect. */
+function restartService(projectRoot: string): void {
+  const script = [
+    `source "${projectRoot}/setup/lib/install-slug.sh"`,
+    'case "$(uname -s)" in',
+    '  Darwin) launchctl kickstart -k "gui/$(id -u)/$(launchd_label)" ;;',
+    '  Linux) systemctl --user restart "$(systemd_unit)" || sudo systemctl restart "$(systemd_unit)" ;;',
+    'esac',
+  ].join('\n');
+  try {
+    execSync(script, { cwd: projectRoot, stdio: 'pipe', shell: '/bin/bash' });
+  } catch {
+    // The service may not be installed yet during a fresh setup — best-effort.
   }
 }
 
@@ -688,7 +755,7 @@ async function offerHandoff(args: {
     stepDescription: args.stepDescription,
     completedSteps: args.args.completed.slice(),
     collectedValues: redactCollected(args.args.collected),
-    files: ['setup/channels/teams.ts', 'setup/add-teams.sh'],
+    files: ['setup/channels/teams.ts', '.claude/skills/add-teams/SKILL.md'],
   };
   await offerClaudeHandoff(ctx);
 }

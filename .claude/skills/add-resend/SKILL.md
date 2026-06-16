@@ -5,60 +5,60 @@ description: Add Resend (email) channel integration via Chat SDK.
 
 # Add Resend Email Channel
 
-Connect NanoClaw to email via Resend for async email conversations.
+Connect NanoClaw to email via Resend for async email conversations. NanoClaw
+doesn't ship channels in trunk — this skill copies the Resend adapter in from the
+`channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent reads
+the prose and applies them, and a parser can apply them deterministically from
+the same document. Every directive is idempotent, so the whole skill is safe to
+re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the Resend adapter in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the Resend adapter into `src/channels/`
+(overwrite — the branch is canonical):
 
-- `src/channels/resend.ts` exists
-- `src/channels/resend-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './resend.js';`
-- `@resend/chat-sdk-adapter` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/resend.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/resend.ts                 > src/channels/resend.ts
-git show origin/channels:src/channels/resend-registration.test.ts > src/channels/resend-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './resend.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install @resend/chat-sdk-adapter@0.1.1
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@resend/chat-sdk-adapter@0.1.1
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+Build guards the typed `createChatSdkBridge(...)` core call and proves the
+dependency is installed (the adapter imports `@resend/chat-sdk-adapter`; if it
+isn't installed the barrel throws). End-to-end email delivery against a real
+domain is verified manually once the service runs.
+
+```nc:run effect:build
 pnpm run build
-pnpm exec vitest run src/channels/resend-registration.test.ts
 ```
-
-Both must be clean before proceeding. `resend-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `resend`. It goes red if the `import './resend.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@resend/chat-sdk-adapter` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
 
 ## Credentials
+
+Resend account and domain setup is human and interactive — these steps are
+prose, not directives (no parser can verify a sending domain or click through the
+Resend UI). A recipe rebuild produces a compiling, registered adapter that cannot
+receive a message until they're done.
 
 1. Go to [resend.com](https://resend.com) and create an account.
 2. Add and verify your sending domain.
@@ -69,24 +69,39 @@ Both must be clean before proceeding. `resend-registration.test.ts` is the one i
    - Events: select **email.received**.
    - Copy the signing secret.
 
-### Configure environment
+### Store the credentials
 
-Add to `.env`:
+Capture the secrets, then write them. `prompt` only *asks* and binds the answer
+to a name; a separate directive consumes it — so the same prompts could feed
+`ncl` or the OneCLI vault instead of `.env` by swapping only the consumer. Here
+they go to `.env` (set-if-absent — a value you've already filled in is never
+overwritten) and sync to the container:
 
-```bash
-RESEND_API_KEY=re_...
-RESEND_FROM_ADDRESS=bot@yourdomain.com
-RESEND_FROM_NAME=NanoClaw
-RESEND_WEBHOOK_SECRET=your-webhook-secret
+```nc:prompt api_key secret
+Paste the Resend API key — API Keys, starts with `re_`.
 ```
-
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+```nc:prompt webhook_secret secret
+Paste the webhook signing secret — Webhooks, the value you copied above.
+```
+```nc:prompt from_address
+The bot's sending email address on your verified domain (e.g. `bot@yourdomain.com`).
+```
+```nc:prompt from_name
+The display name to send as (e.g. `NanoClaw`).
+```
+```nc:env-set
+RESEND_API_KEY={{api_key}}
+RESEND_FROM_ADDRESS={{from_address}}
+RESEND_FROM_NAME={{from_name}}
+RESEND_WEBHOOK_SECRET={{webhook_secret}}
+```
+```nc:env-sync
+```
 
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now.
-
-Otherwise, run `/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
+`/manage-channels` to wire this channel to an agent group.
 
 ## Channel Info
 

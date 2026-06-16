@@ -5,7 +5,15 @@ description: Add Linear channel integration via Chat SDK. Issue comment threads 
 
 # Add Linear Channel
 
-Adds Linear support via the Chat SDK bridge. The agent participates in issue comment threads. Every comment on a Linear issue triggers the agent — no @-mention needed.
+Adds Linear support via the Chat SDK bridge. The agent participates in issue
+comment threads. Every comment on a Linear issue triggers the agent — no
+@-mention needed. NanoClaw doesn't ship channels in trunk — this skill copies the
+Linear adapter in from the `channels` branch.
+
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent reads
+the prose and applies them, and a parser can apply them deterministically from
+the same document. Every directive is idempotent, so the whole skill is safe to
+re-run; anything a parser can't apply falls back to the prose beside it.
 
 ## Prerequisites
 
@@ -20,60 +28,112 @@ Adds Linear support via the Chat SDK bridge. The agent participates in issue com
 
 **Alternative:** Use a Personal API Key (`LINEAR_API_KEY`) for simpler setup. The agent will post as you, and your own comments will be filtered (other team members' comments still work).
 
-## Install
+## Apply
 
-NanoClaw doesn't ship channels in trunk. This skill copies the Linear adapter in from the `channels` branch and wires it into the channel registry. Linear OAuth apps post and read comments under an app identity that can't be @-mentioned, so when you wire the channel in `/manage-channels`, pick an engage mode that responds to plain comments rather than mention-only.
+Linear OAuth apps post and read comments under an app identity that can't be
+@-mentioned, so when you wire the channel in `/manage-channels`, pick an engage
+mode that responds to plain comments rather than mention-only.
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter and its registration test
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the Linear adapter and its registration
+test into `src/channels/` (overwrite — the branch is canonical):
 
-- `src/channels/linear.ts` exists
-- `src/channels/linear-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './linear.js';`
-- `@chat-adapter/linear` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/linear.ts
+src/channels/linear-registration.test.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/linear.ts                 > src/channels/linear.ts
-git show origin/channels:src/channels/linear-registration.test.ts > src/channels/linear-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into the channel
+registry:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './linear.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Patch the bridge for catch-all forwarding
 
-```bash
-pnpm install @chat-adapter/linear@4.27.0
+Linear OAuth apps can't be @-mentioned, so the bridge's `onNewMention` handler
+never fires — it needs a `catchAll` path that forwards every comment in an
+unsubscribed thread and auto-subscribes on first message. This patches
+`src/channels/chat-sdk-bridge.ts` in two places (adds the `catchAll?` config
+field and the handler). The awk insertions are guarded by `grep`, so the step is
+a no-op once applied.
+
+```nc:run effect:build
+if ! grep -q 'catchAll?: boolean;' src/channels/chat-sdk-bridge.ts; then
+  awk '
+    /^export interface ChatSdkBridgeConfig \{/ { in_iface = 1 }
+    in_iface && /^\}/ && !inserted {
+      print "  /**"
+      print "   * Forward ALL messages in unsubscribed threads, not just @-mentions."
+      print "   * Use for platforms where the bot identity can'\''t be @-mentioned (e.g."
+      print "   * Linear OAuth apps). The thread is auto-subscribed on first message."
+      print "   */"
+      print "  catchAll?: boolean;"
+      inserted = 1
+      in_iface = 0
+    }
+    { print }
+  ' src/channels/chat-sdk-bridge.ts > src/channels/chat-sdk-bridge.ts.tmp \
+    && mv src/channels/chat-sdk-bridge.ts.tmp src/channels/chat-sdk-bridge.ts
+fi
+if ! grep -q 'if (config.catchAll) {' src/channels/chat-sdk-bridge.ts; then
+  awk '
+    /      \/\/ DMs — apply engage rules too/ && !inserted {
+      print "      // Catch-all for platforms where @-mention isn'\''t possible (e.g. Linear"
+      print "      // OAuth apps). Forward every unsubscribed message and auto-subscribe."
+      print "      if (config.catchAll) {"
+      print "        chat.onNewMessage(/.*/, async (thread, message) => {"
+      print "          const channelId = adapter.channelIdFromThreadId(thread.id);"
+      print "          await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, false));"
+      print "          await thread.subscribe();"
+      print "        });"
+      print "      }"
+      print ""
+      inserted = 1
+    }
+    { print }
+  ' src/channels/chat-sdk-bridge.ts > src/channels/chat-sdk-bridge.ts.tmp \
+    && mv src/channels/chat-sdk-bridge.ts.tmp src/channels/chat-sdk-bridge.ts
+fi
+```
+
+### 4. Install the adapter package
+
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+@chat-adapter/linear@4.26.0
 ```
 
 ### 5. Build and validate
 
-```bash
+Build first: it guards the typed `createChatSdkBridge(...)` core call and proves
+the dependency is installed. Then run the one integration test.
+
+```nc:run effect:build
 pnpm run build
+```
+```nc:run effect:test
 pnpm exec vitest run src/channels/linear-registration.test.ts
 ```
 
-Both must be clean before proceeding. `linear-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `linear`. It goes red if the `import './linear.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@chat-adapter/linear` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real Linear workspace is verified manually once the service is running — see Wiring and Next Steps.
+Both must be clean before proceeding. `linear-registration.test.ts` imports the
+real channel barrel and asserts the registry contains `linear`. It goes red if
+the `import './linear.js';` line is deleted or drifts, if the barrel fails to
+evaluate, or if `@chat-adapter/linear` isn't installed (the import throws) — so
+it also covers the dependency from step 4. End-to-end message delivery against a
+real Linear workspace is verified manually once the service is running — see
+Wiring and Next Steps.
 
 ## Credentials
+
+Linear app and webhook setup is human and interactive — these steps are prose
+(no parser can click through the Linear UI), except the final env write.
 
 ### 1. Set up a webhook
 
@@ -86,27 +146,52 @@ End-to-end message delivery against a real Linear workspace is verified manually
 
 Note: Linear webhook delivery may be delayed 1-5 minutes for new webhooks. This is normal.
 
-### 2. Configure environment
+### 2. Store the credentials
 
-Add to `.env`:
+Capture the values, then write them. `prompt` only *asks* and binds the answer
+to a name; a separate directive consumes it. Here they go to `.env`
+(set-if-absent — a value you've already filled in is never overwritten) and sync
+to the container.
 
-```bash
-# OAuth app (recommended)
-LINEAR_CLIENT_ID=your-client-id
-LINEAR_CLIENT_SECRET=your-client-secret
+Use **either** the OAuth app credentials (recommended) **or** a Personal API key.
+For the API-key path, paste `none` at the OAuth prompts and set `LINEAR_API_KEY`
+in `.env` by hand (commented in the template below). `LINEAR_BOT_USERNAME` is the
+display name for the bot, used for self-message detection when using a Personal
+API Key. `LINEAR_TEAM_KEY` is the Linear team key (e.g. `ENG`, `NAN`) — find it
+in Linear under Settings > Teams; all issues in this team route to one messaging
+group.
 
-# OR Personal API key (simpler, but agent posts as you)
-# LINEAR_API_KEY=lin_api_...
-
-LINEAR_WEBHOOK_SECRET=your-webhook-signing-secret
-LINEAR_BOT_USERNAME=NanoClaw Bot
-LINEAR_TEAM_KEY=ENG
+```nc:prompt linear_client_id secret
+Paste the OAuth Client ID — Linear Settings > API > OAuth Applications. Paste `none` if using a Personal API key instead.
+```
+```nc:prompt linear_client_secret secret
+Paste the OAuth Client Secret. Paste `none` if using a Personal API key instead.
+```
+```nc:prompt linear_webhook_secret secret
+Paste the webhook signing secret from the webhook you just created.
+```
+```nc:prompt linear_team_key
+Enter the Linear team key (e.g. `ENG`, `NAN`) — Settings > Teams.
+```
+```nc:prompt linear_bot_username
+Enter the bot display name (e.g. `NanoClaw Bot`).
+```
+```nc:env-set
+LINEAR_CLIENT_ID={{linear_client_id}}
+LINEAR_CLIENT_SECRET={{linear_client_secret}}
+LINEAR_WEBHOOK_SECRET={{linear_webhook_secret}}
+LINEAR_TEAM_KEY={{linear_team_key}}
+LINEAR_BOT_USERNAME={{linear_bot_username}}
+```
+```nc:env-sync
 ```
 
-- `LINEAR_BOT_USERNAME`: display name for the bot (used for self-message detection when using a Personal API Key)
-- `LINEAR_TEAM_KEY`: the Linear team key (e.g. `ENG`, `NAN`). Find it in Linear under Settings > Teams. All issues in this team route to one messaging group.
+If you went the Personal API key route, add this line to `.env` instead of the
+OAuth pair (agent posts as you, your own comments are filtered):
 
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+```bash
+LINEAR_API_KEY=lin_api_...
+```
 
 ## Wiring
 

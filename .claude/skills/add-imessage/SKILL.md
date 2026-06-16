@@ -5,62 +5,61 @@ description: Add iMessage channel integration via Chat SDK. Local (macOS) or rem
 
 # Add iMessage Channel
 
-Adds iMessage support via the Chat SDK bridge. Two modes: local (macOS with Full Disk Access) or remote (Photon API).
+Adds iMessage support via the Chat SDK bridge. Two modes: local (macOS with Full
+Disk Access) or remote (Photon API). NanoClaw doesn't ship channels in trunk —
+this skill copies the iMessage adapter in from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent reads
+the prose and applies them, and a parser can apply them deterministically from
+the same document. Every directive is idempotent, so the whole skill is safe to
+re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the iMessage adapter in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the iMessage adapter into `src/channels/`
+(overwrite — the branch is canonical):
 
-- `src/channels/imessage.ts` exists
-- `src/channels/imessage-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './imessage.js';`
-- `chat-adapter-imessage` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/imessage.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/imessage.ts                    > src/channels/imessage.ts
-git show origin/channels:src/channels/imessage-registration.test.ts > src/channels/imessage-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './imessage.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install chat-adapter-imessage@0.1.1
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
+
+```nc:dep
+chat-adapter-imessage@0.1.1
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+Build guards the typed `createChatSdkBridge(...)` core call and proves the
+dependency is installed (the adapter's top-level `import` from
+`chat-adapter-imessage` throws if it isn't):
+
+```nc:run effect:build
 pnpm run build
-pnpm exec vitest run src/channels/imessage-registration.test.ts
 ```
 
-Both must be clean before proceeding. `imessage-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `imessage`. It goes red if the `import './imessage.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `chat-adapter-imessage` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real iMessage account is verified manually once the service is running — see Next Steps.
+End-to-end message delivery against a real iMessage account is verified manually
+once the service is running — see Next Steps.
 
 ## Credentials
+
+iMessage runs in one of two modes. Mode choice and the Full Disk Access /
+Photon walkthrough are human and interactive — these steps stay prose, not
+directives.
 
 ### Local Mode (macOS)
 
@@ -87,14 +86,19 @@ Stop and wait for the user to confirm before continuing.
 
 ### Configure environment
 
-**Local mode** -- add to `.env`:
+The two modes use different `.env` keys. Write only the keys for the chosen
+mode, and remove the opposite mode's keys so a stale value can't confuse the
+adapter's factory.
+
+**Local mode** — add to `.env` (and remove `IMESSAGE_SERVER_URL` /
+`IMESSAGE_API_KEY` if present):
 
 ```bash
 IMESSAGE_ENABLED=true
 IMESSAGE_LOCAL=true
 ```
 
-**Remote mode** -- add to `.env`:
+**Remote mode** — add to `.env` (and remove `IMESSAGE_ENABLED` if present):
 
 ```bash
 IMESSAGE_LOCAL=false
@@ -102,7 +106,11 @@ IMESSAGE_SERVER_URL=https://your-photon-server.com
 IMESSAGE_API_KEY=your-api-key
 ```
 
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+Once the keys for your mode are written, sync `.env` to the container (the host
+mounts `data/env/env`):
+
+```nc:env-sync
+```
 
 ## Next Steps
 

@@ -13,7 +13,8 @@
  *   5. Confirm owner identity (falls back to a manual user-id prompt with
  *      Developer Mode instructions if declined or if the app is team-owned)
  *   6. Print the OAuth invite URL, open it, wait for "I've added the bot"
- *   7. Install the adapter via setup/add-discord.sh (non-interactive)
+ *   7. Apply the /add-discord skill via the directive engine (the skill's
+ *      SKILL.md is the single source of truth) + restart the service
  *   8. POST /users/@me/channels to open the DM channel (yields dm channel id)
  *   9. Ask for the messaging-agent name (defaulting to "Nano")
  *  10. Wire the agent via scripts/init-first-agent.ts, which sends the welcome
@@ -23,9 +24,12 @@
  * entries in logs/setup.log, full raw output in per-step files under
  * logs/setup-steps/. See docs/setup-flow.md.
  */
+import { execSync } from 'node:child_process';
+
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
+import { applySkill, type Prompter } from '../../scripts/skill-apply.js';
 import * as setupLog from '../logs.js';
 import { BACK_TO_CHANNEL_SELECTION, type ChannelFlowResult } from '../lib/back-nav.js';
 import { brightSelect } from '../lib/bright-select.js';
@@ -76,31 +80,12 @@ export async function runDiscordChannel(displayName: string): Promise<ChannelFlo
 
   await promptInviteBot(app.applicationId, botUsername);
 
-  const install = await runQuietChild(
-    'discord-install',
-    'bash',
-    ['setup/add-discord.sh'],
-    {
-      running: `Connecting Discord to @${botUsername}…`,
-      done: 'Discord connected.',
-    },
-    {
-      env: {
-        DISCORD_BOT_TOKEN: token,
-        DISCORD_APPLICATION_ID: app.applicationId,
-        DISCORD_PUBLIC_KEY: app.publicKey,
-      },
-      extraFields: {
-        BOT_USERNAME: botUsername,
-        APPLICATION_ID: app.applicationId,
-      },
-    },
-  );
+  const install = await applyDiscordSkill(token, app, botUsername);
   if (!install.ok) {
     await fail(
       'discord-install',
       "Couldn't connect Discord.",
-      'See logs/setup-steps/ for details, then retry setup.',
+      install.detail || 'See logs/setup-steps/ for details, then retry setup.',
     );
   }
 
@@ -142,6 +127,96 @@ export async function runDiscordChannel(displayName: string): Promise<ChannelFlo
       `Couldn't finish connecting ${agentName}.`,
       'Most likely the bot and you don\'t share a server yet — invite the bot, then retry later with `/manage-channels`.',
     );
+  }
+}
+
+/**
+ * Install the Discord adapter and persist credentials by applying the
+ * `/add-discord` skill through the structured-directive engine. The skill's
+ * SKILL.md is the single source of truth — this replaces the hand-maintained
+ * setup/add-discord.sh, which had already drifted into a parallel copy of the
+ * pinned adapter version and install steps.
+ *
+ * The three credentials collected/derived above (bot token, application ID,
+ * public key) are handed to the skill's `prompt` directives through the
+ * in-process Prompter, so they never touch argv or disk en route. The engine
+ * runs copy/append/dep/build + env-set/env-sync; we restart the service after
+ * (the skill itself doesn't, by design). add-discord is fully deterministic and
+ * all three values are supplied, so a healthy apply leaves nothing for an agent
+ * and nothing deferred — either bucket being non-empty means the install failed.
+ */
+async function applyDiscordSkill(
+  token: string,
+  app: AppInfo,
+  botUsername: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const projectRoot = process.cwd();
+  const s = p.spinner();
+  const start = Date.now();
+  s.start(`Connecting Discord to @${botUsername}…`);
+
+  const prompter: Prompter = {
+    async ask(name) {
+      if (name === 'bot_token') return token;
+      if (name === 'application_id') return app.applicationId;
+      if (name === 'public_key') return app.publicKey;
+      return undefined;
+    },
+  };
+
+  try {
+    const result = await applySkill('.claude/skills/add-discord', projectRoot, {
+      prompter,
+      exec: (cmd) => {
+        execSync(cmd, { cwd: projectRoot, stdio: 'pipe' });
+      },
+      // Fork-aware: reuse the existing resolver (handles upstream/fork remotes
+      // and the auto-add-upstream fallback) instead of assuming `origin`.
+      resolveRemote: () =>
+        execSync('source setup/lib/channels-remote.sh; resolve_channels_remote', {
+          cwd: projectRoot,
+          shell: '/bin/bash',
+          encoding: 'utf8',
+        }).trim(),
+    });
+
+    if (result.agentTasks.length || result.deferred.length) {
+      const why = [...result.agentTasks.map((t) => t.reason), ...result.deferred].join('; ');
+      s.stop("Couldn't finish installing Discord.", 1);
+      setupLog.step('discord-install', 'failed', Date.now() - start, { ERROR: why });
+      return { ok: false, detail: why };
+    }
+
+    restartService(projectRoot);
+    s.stop('Discord adapter installed.');
+    setupLog.step('discord-install', 'success', Date.now() - start, {
+      APPLIED: String(result.applied.length),
+      SKIPPED: String(result.skipped.length),
+      BOT_USERNAME: botUsername,
+      APPLICATION_ID: app.applicationId,
+    });
+    return { ok: true, detail: '' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    s.stop("Couldn't install the Discord adapter.", 1);
+    setupLog.step('discord-install', 'failed', Date.now() - start, { ERROR: message });
+    return { ok: false, detail: 'See logs/setup-steps/ for details, then retry setup.' };
+  }
+}
+
+/** Best-effort service restart so the new adapter + credentials take effect. */
+function restartService(projectRoot: string): void {
+  const script = [
+    `source "${projectRoot}/setup/lib/install-slug.sh"`,
+    'case "$(uname -s)" in',
+    '  Darwin) launchctl kickstart -k "gui/$(id -u)/$(launchd_label)" ;;',
+    '  Linux) systemctl --user restart "$(systemd_unit)" || sudo systemctl restart "$(systemd_unit)" ;;',
+    'esac',
+  ].join('\n');
+  try {
+    execSync(script, { cwd: projectRoot, stdio: 'pipe', shell: '/bin/bash' });
+  } catch {
+    // The service may not be installed yet during a fresh setup — best-effort.
   }
 }
 

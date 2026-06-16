@@ -102,3 +102,125 @@ describe('apply engine lifecycle', () => {
     expect(existsSync(join(root, 'src/sample.ts'))).toBe(false); // planning mutated nothing
   });
 });
+
+// json-merge: push a body object into an array-of-objects JSON file, keyed.
+const JSON_MERGE_SKILL = `# json-merge demo
+
+## Register the CLI tool
+\`\`\`nc:json-merge into:container/cli-tools.json key:name
+{ "name": "@openai/codex", "version": "0.138.0" }
+\`\`\`
+`;
+
+describe('json-merge directive', () => {
+  let jroot: string;
+  let jskill: string;
+  beforeEach(() => {
+    jskill = mkdtempSync(join(tmpdir(), 'nc-skill-'));
+    jroot = mkdtempSync(join(tmpdir(), 'nc-proj-'));
+    writeFileSync(join(jskill, 'SKILL.md'), JSON_MERGE_SKILL);
+    mkdirSync(join(jroot, 'container'), { recursive: true });
+    writeFileSync(join(jroot, 'container/cli-tools.json'), '[\n  { "name": "vercel", "version": "52.2.1" }\n]\n');
+  });
+
+  it('pushes the object, preserving 2-space indent + trailing newline', async () => {
+    const res = await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
+    const out = readFileSync(join(jroot, 'container/cli-tools.json'), 'utf8');
+    expect(out.endsWith('\n')).toBe(true);
+    const arr = JSON.parse(out);
+    expect(arr).toEqual([
+      { name: 'vercel', version: '52.2.1' },
+      { name: '@openai/codex', version: '0.138.0' },
+    ]);
+    expect(out).toBe(JSON.stringify(arr, null, 2) + '\n'); // 2-space indent
+    expect(res.journal.some((e) => e.op === 'json-merge')).toBe(true);
+  });
+
+  it('is idempotent — re-applying does not duplicate the element', async () => {
+    await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
+    const second = await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
+    expect(second.applied).toEqual([]);
+    expect(second.skipped.length).toBe(1);
+    const arr = JSON.parse(readFileSync(join(jroot, 'container/cli-tools.json'), 'utf8'));
+    expect(arr.filter((e: { name: string }) => e.name === '@openai/codex')).toHaveLength(1);
+  });
+
+  it('removeSkill drops the element whose key matches', async () => {
+    const res = await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
+    await removeSkill(jroot, res.journal);
+    const arr = JSON.parse(readFileSync(join(jroot, 'container/cli-tools.json'), 'utf8'));
+    expect(arr).toEqual([{ name: 'vercel', version: '52.2.1' }]);
+  });
+
+  it('plan marks it →apply when absent, ✓skip when present', () => {
+    const before = planSkill(jskill, jroot);
+    expect(before.steps[0].status).toBe('apply');
+    // simulate already-merged
+    writeFileSync(
+      join(jroot, 'container/cli-tools.json'),
+      JSON.stringify([{ name: '@openai/codex', version: '0.138.0' }], null, 2) + '\n',
+    );
+    const after = planSkill(jskill, jroot);
+    expect(after.steps[0].status).toBe('skip');
+  });
+});
+
+// append at:<marker>: insert before a dormant region's closing line.
+const MARKER_FILE = ['const STEPS = {', "  auth: () => import('./auth.js'),", '  // >>> nanoclaw:setup-steps', '  // <<< nanoclaw:setup-steps', '};', ''].join('\n');
+const APPEND_AT_SKILL = `# append-at demo
+
+## Register a setup step
+\`\`\`nc:append to:setup/index.ts at:nanoclaw:setup-steps
+codex: () => import('./codex.js'),
+\`\`\`
+`;
+const APPEND_EOF_SKILL = `# append-eof demo
+
+## Register at EOF
+\`\`\`nc:append to:setup/index.ts
+// trailing line
+\`\`\`
+`;
+
+describe('append at:<marker>', () => {
+  let aroot: string;
+  let askill: string;
+  beforeEach(() => {
+    askill = mkdtempSync(join(tmpdir(), 'nc-skill-'));
+    aroot = mkdtempSync(join(tmpdir(), 'nc-proj-'));
+    mkdirSync(join(aroot, 'setup'), { recursive: true });
+    writeFileSync(join(aroot, 'setup/index.ts'), MARKER_FILE);
+  });
+
+  it('inserts before the `<<< marker` line, matching its indentation', async () => {
+    writeFileSync(join(askill, 'SKILL.md'), APPEND_AT_SKILL);
+    await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    const out = readFileSync(join(aroot, 'setup/index.ts'), 'utf8').split('\n');
+    const closeIdx = out.findIndex((l) => l.includes('<<< nanoclaw:setup-steps'));
+    expect(out[closeIdx - 1]).toBe("  codex: () => import('./codex.js'),"); // inserted just above, 2-space indent
+    expect(out[closeIdx - 2]).toContain('>>> nanoclaw:setup-steps'); // open marker untouched
+  });
+
+  it('is idempotent (whole-file line check) regardless of position', async () => {
+    writeFileSync(join(askill, 'SKILL.md'), APPEND_AT_SKILL);
+    await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    const second = await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    expect(second.applied).toEqual([]);
+    const count = readFileSync(join(aroot, 'setup/index.ts'), 'utf8').split('\n').filter((l) => l.trim() === "codex: () => import('./codex.js'),").length;
+    expect(count).toBe(1);
+  });
+
+  it('removeSkill deletes the inserted line (position-agnostic, by trimmed line)', async () => {
+    writeFileSync(join(askill, 'SKILL.md'), APPEND_AT_SKILL);
+    const res = await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    await removeSkill(aroot, res.journal);
+    expect(readFileSync(join(aroot, 'setup/index.ts'), 'utf8')).not.toContain("codex: () => import('./codex.js'),");
+  });
+
+  it('without at: still appends at EOF (unchanged behavior)', async () => {
+    writeFileSync(join(askill, 'SKILL.md'), APPEND_EOF_SKILL);
+    await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    const lines = readFileSync(join(aroot, 'setup/index.ts'), 'utf8').split('\n').filter(Boolean);
+    expect(lines[lines.length - 1]).toBe('// trailing line'); // at EOF, not before the marker
+  });
+});

@@ -5,85 +5,113 @@ description: Add Webex channel integration via Chat SDK.
 
 # Add Webex Channel
 
-Adds Cisco Webex support via the Chat SDK bridge.
+Adds Cisco Webex support via the Chat SDK bridge. NanoClaw doesn't ship channels
+in trunk — this skill copies the Webex adapter in from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent
+reads the prose and applies them, and a parser can apply them deterministically
+from the same document. Every directive is idempotent, so the whole skill is
+safe to re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the Webex adapter in from the `channels` branch.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter and its registration test
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the Webex adapter and its registration test
+into `src/channels/` (overwrite — the branch is canonical):
 
-- `src/channels/webex.ts` exists
-- `src/channels/webex-registration.test.ts` exists
-- `src/channels/index.ts` contains `import './webex.js';`
-- `@bitbasti/chat-adapter-webex` is listed in `package.json` dependencies
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/webex.ts
+src/channels/webex-registration.test.ts
 ```
 
-### 2. Copy the adapter and its registration test
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/webex.ts                 > src/channels/webex.ts
-git show origin/channels:src/channels/webex-registration.test.ts > src/channels/webex-registration.test.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if the line is already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './webex.js';
 ```
 
-### 4. Install the adapter package (pinned)
+### 3. Install the adapter package
 
-```bash
-pnpm install @bitbasti/chat-adapter-webex@0.1.0
+Pinned to an exact version — the supply-chain policy rejects ranges and `latest`.
+The Webex adapter ships under the third-party `@bitbasti/*` namespace, not
+`@chat-adapter/*`, so it carries its own version line (`0.1.0`) rather than
+tracking the chat core version:
+
+```nc:dep
+@bitbasti/chat-adapter-webex@0.1.0
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
-```bash
+Build first: it guards the typed `createChatSdkBridge(...)` core call and proves
+the dependency is installed. Then run the one integration test.
+
+```nc:run effect:build
 pnpm run build
+```
+```nc:run effect:test
 pnpm exec vitest run src/channels/webex-registration.test.ts
 ```
 
-Both must be clean before proceeding. `webex-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `webex`. It goes red if the `import './webex.js';` line is deleted or drifts, if the barrel fails to evaluate, or if `@bitbasti/chat-adapter-webex` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 4. The adapter also calls core's `createChatSdkBridge(...)`; that typed core-API consumption is guarded by `pnpm run build`.
-
-End-to-end message delivery against a real Webex space is verified manually once the service is running — see Next Steps and the webhook setup above.
+`webex-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `webex`. It goes red if the import line is deleted or drifts,
+if the barrel fails to evaluate, or if `@bitbasti/chat-adapter-webex` isn't
+installed (the import throws) — so it also covers the dependency from step 3.
+End-to-end delivery against a real Webex space is verified manually once the
+service runs — see the webhook setup below.
 
 ## Credentials
 
-1. Go to [developer.webex.com](https://developer.webex.com/my-apps/new/bot) and create a new bot
-2. Copy the **Bot Access Token**
+Webex bot setup is human and interactive — these steps are prose, not directives
+(no parser can click through the Webex Developer Portal). A recipe rebuild
+produces a compiling, registered adapter that cannot receive a message until
+they're done.
+
+### Create the Webex bot
+
+1. Go to [developer.webex.com](https://developer.webex.com/my-apps/new/bot) and create a new bot.
+2. Copy the **Bot Access Token**.
 3. Set up a webhook:
-   - Use the Webex API or Developer Portal to create a webhook pointing to `https://your-domain/webhook/webex`
-   - Set a webhook secret for signature verification
+   - Use the Webex API or Developer Portal to create a webhook pointing to `https://your-domain/webhook/webex`.
+   - Set a webhook secret for signature verification.
 
-### Configure environment
+### Store the credentials
 
-Add to `.env`:
+Capture the two values, then write them. `prompt` only *asks* and binds the
+answer to a name; a separate directive consumes it — so the same prompts could
+feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
+Here they go to `.env` (set-if-absent — a value you've already filled in is
+never overwritten) and sync to the container:
 
-```bash
-WEBEX_BOT_TOKEN=your-bot-token
-WEBEX_WEBHOOK_SECRET=your-webhook-secret
+```nc:prompt bot_token secret
+Paste the Bot Access Token — from the Webex bot you created.
+```
+```nc:prompt webhook_secret secret
+Paste the webhook secret you set for signature verification.
+```
+```nc:env-set
+WEBEX_BOT_TOKEN={{bot_token}}
+WEBEX_WEBHOOK_SECRET={{webhook_secret}}
+```
+```nc:env-sync
 ```
 
-Sync to container: `mkdir -p data/env && cp .env data/env/env`
+### Webhook server
+
+The Chat SDK bridge automatically starts a shared webhook server on port 3000
+(`WEBHOOK_PORT` to change it), handling `/webhook/webex`. This port must be
+publicly reachable for Webex to deliver events. Running locally, expose it with
+ngrok (`ngrok http 3000`), a Cloudflare Tunnel, or a reverse proxy on a VPS —
+the resulting public URL is the base for the webhook URL above.
 
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now.
-
-Otherwise, run `/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
+`/manage-channels` to wire this channel to an agent group.
 
 ## Channel Info
 
