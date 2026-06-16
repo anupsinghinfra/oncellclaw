@@ -54,55 +54,7 @@ registry:
 import './linear.js';
 ```
 
-### 3. Patch the bridge for catch-all forwarding
-
-Linear OAuth apps can't be @-mentioned, so the bridge's `onNewMention` handler
-never fires — it needs a `catchAll` path that forwards every comment in an
-unsubscribed thread and auto-subscribes on first message. This patches
-`src/channels/chat-sdk-bridge.ts` in two places (adds the `catchAll?` config
-field and the handler). The awk insertions are guarded by `grep`, so the step is
-a no-op once applied.
-
-```nc:run effect:build
-if ! grep -q 'catchAll?: boolean;' src/channels/chat-sdk-bridge.ts; then
-  awk '
-    /^export interface ChatSdkBridgeConfig \{/ { in_iface = 1 }
-    in_iface && /^\}/ && !inserted {
-      print "  /**"
-      print "   * Forward ALL messages in unsubscribed threads, not just @-mentions."
-      print "   * Use for platforms where the bot identity can'\''t be @-mentioned (e.g."
-      print "   * Linear OAuth apps). The thread is auto-subscribed on first message."
-      print "   */"
-      print "  catchAll?: boolean;"
-      inserted = 1
-      in_iface = 0
-    }
-    { print }
-  ' src/channels/chat-sdk-bridge.ts > src/channels/chat-sdk-bridge.ts.tmp \
-    && mv src/channels/chat-sdk-bridge.ts.tmp src/channels/chat-sdk-bridge.ts
-fi
-if ! grep -q 'if (config.catchAll) {' src/channels/chat-sdk-bridge.ts; then
-  awk '
-    /      \/\/ DMs — apply engage rules too/ && !inserted {
-      print "      // Catch-all for platforms where @-mention isn'\''t possible (e.g. Linear"
-      print "      // OAuth apps). Forward every unsubscribed message and auto-subscribe."
-      print "      if (config.catchAll) {"
-      print "        chat.onNewMessage(/.*/, async (thread, message) => {"
-      print "          const channelId = adapter.channelIdFromThreadId(thread.id);"
-      print "          await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, false));"
-      print "          await thread.subscribe();"
-      print "        });"
-      print "      }"
-      print ""
-      inserted = 1
-    }
-    { print }
-  ' src/channels/chat-sdk-bridge.ts > src/channels/chat-sdk-bridge.ts.tmp \
-    && mv src/channels/chat-sdk-bridge.ts.tmp src/channels/chat-sdk-bridge.ts
-fi
-```
-
-### 4. Install the adapter package
+### 3. Install the adapter package
 
 Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
 
@@ -110,7 +62,7 @@ Pinned to an exact version — the supply-chain policy rejects ranges and `lates
 @chat-adapter/linear@4.26.0
 ```
 
-### 5. Build and validate
+### 4. Build and validate
 
 Build first: it guards the typed `createChatSdkBridge(...)` core call and proves
 the dependency is installed. Then run the one integration test.
@@ -126,7 +78,7 @@ Both must be clean before proceeding. `linear-registration.test.ts` imports the
 real channel barrel and asserts the registry contains `linear`. It goes red if
 the `import './linear.js';` line is deleted or drifts, if the barrel fails to
 evaluate, or if `@chat-adapter/linear` isn't installed (the import throws) — so
-it also covers the dependency from step 4. End-to-end message delivery against a
+it also covers the dependency from step 3. End-to-end message delivery against a
 real Linear workspace is verified manually once the service is running — see
 Wiring and Next Steps.
 
