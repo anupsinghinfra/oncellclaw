@@ -22,6 +22,7 @@ Fetch the `channels` branch and copy the Matrix adapter into `src/channels/`
 
 ```nc:copy from-branch:channels
 src/channels/matrix.ts
+src/channels/matrix-registration.test.ts
 ```
 
 ### 2. Register the adapter
@@ -73,6 +74,14 @@ the `import './matrix.js';` line is missing or the barrel can't evaluate.
 ```nc:run effect:build
 pnpm run build
 ```
+```nc:run effect:test
+pnpm exec vitest run src/channels/matrix-registration.test.ts
+```
+
+`matrix-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `matrix`. It goes red if the import line is deleted or drifts,
+if the barrel fails to evaluate, or if `@beeper/chat-adapter-matrix` isn't
+installed (the import throws) — so it also covers the dependency from step 3.
 
 End-to-end message delivery against a real Matrix homeserver is verified
 manually once the service is running — see Next Steps.

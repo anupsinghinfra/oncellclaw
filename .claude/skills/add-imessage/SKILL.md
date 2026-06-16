@@ -23,6 +23,7 @@ Fetch the `channels` branch and copy the iMessage adapter into `src/channels/`
 
 ```nc:copy from-branch:channels
 src/channels/imessage.ts
+src/channels/imessage-registration.test.ts
 ```
 
 ### 2. Register the adapter
@@ -51,6 +52,14 @@ dependency is installed (the adapter's top-level `import` from
 ```nc:run effect:build
 pnpm run build
 ```
+```nc:run effect:test
+pnpm exec vitest run src/channels/imessage-registration.test.ts
+```
+
+`imessage-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `imessage` — it goes red if the import line is deleted or
+drifts, if the barrel fails to evaluate, or if `chat-adapter-imessage` isn't
+installed (the import throws), so it also covers the dependency from step 3.
 
 End-to-end message delivery against a real iMessage account is verified manually
 once the service is running — see Next Steps.

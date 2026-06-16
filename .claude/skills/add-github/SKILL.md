@@ -27,6 +27,7 @@ Fetch the `channels` branch and copy the GitHub adapter into `src/channels/`
 
 ```nc:copy from-branch:channels
 src/channels/github.ts
+src/channels/github-registration.test.ts
 ```
 
 ### 2. Register the adapter
@@ -55,6 +56,14 @@ isn't present):
 ```nc:run effect:build
 pnpm run build
 ```
+```nc:run effect:test
+pnpm exec vitest run src/channels/github-registration.test.ts
+```
+
+`github-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `github`. It goes red if the import line is deleted or drifts,
+if the barrel fails to evaluate, or if `@chat-adapter/github` isn't installed
+(the import throws) — so it also covers the dependency from step 3.
 
 End-to-end message delivery against a real GitHub repo is verified manually once
 the service is running — see Next Steps and the webhook setup below.

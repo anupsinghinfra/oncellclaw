@@ -23,6 +23,7 @@ Fetch the `channels` branch and copy the WhatsApp Cloud adapter into
 
 ```nc:copy from-branch:channels
 src/channels/whatsapp-cloud.ts
+src/channels/whatsapp-cloud-registration.test.ts
 ```
 
 ### 2. Register the adapter
@@ -51,6 +52,14 @@ is missing or the barrel drifts:
 ```nc:run effect:build
 pnpm run build
 ```
+```nc:run effect:test
+pnpm exec vitest run src/channels/whatsapp-cloud-registration.test.ts
+```
+
+`whatsapp-cloud-registration.test.ts` imports the real channel barrel and asserts
+the registry contains `whatsapp-cloud` — it goes red if the import line is deleted
+or drifts, if the barrel fails to evaluate, or if `@chat-adapter/whatsapp` isn't
+installed (the import throws), so it also covers the dependency from step 3.
 
 End-to-end message delivery against a real WhatsApp Business number is verified
 manually once the service is running — see Next Steps and the webhook setup

@@ -29,6 +29,7 @@ src/channels/telegram-pairing.ts
 src/channels/telegram-pairing.test.ts
 src/channels/telegram-markdown-sanitize.ts
 src/channels/telegram-markdown-sanitize.test.ts
+src/channels/telegram-registration.test.ts
 setup/pair-telegram.ts
 ```
 
@@ -70,6 +71,15 @@ deleted or drifts, if the barrel fails to evaluate, or if
 ```nc:run effect:build
 pnpm run build
 ```
+```nc:run effect:test
+pnpm exec vitest run src/channels/telegram-registration.test.ts
+```
+
+`telegram-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `telegram` — it goes red if the `import './telegram.js';` line
+is deleted or drifts, if the barrel fails to evaluate, or if
+`@chat-adapter/telegram` isn't installed (the import throws), so it also covers
+the dependency from step 4.
 
 End-to-end message delivery against a real Telegram bot is verified manually once
 the service is running — see Next Steps and the pairing flow in Channel Info.

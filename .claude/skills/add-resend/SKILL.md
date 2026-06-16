@@ -23,6 +23,7 @@ Fetch the `channels` branch and copy the Resend adapter into `src/channels/`
 
 ```nc:copy from-branch:channels
 src/channels/resend.ts
+src/channels/resend-registration.test.ts
 ```
 
 ### 2. Register the adapter
@@ -52,6 +53,14 @@ domain is verified manually once the service runs.
 ```nc:run effect:build
 pnpm run build
 ```
+```nc:run effect:test
+pnpm exec vitest run src/channels/resend-registration.test.ts
+```
+
+`resend-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `resend`. It goes red if the import line is deleted or drifts,
+if the barrel fails to evaluate, or if `@resend/chat-sdk-adapter` isn't installed
+(the import throws) — so it also covers the dependency from step 3.
 
 ## Credentials
 

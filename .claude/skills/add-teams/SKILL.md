@@ -23,6 +23,7 @@ Fetch the `channels` branch and copy the Teams adapter into `src/channels/`
 
 ```nc:copy from-branch:channels
 src/channels/teams.ts
+src/channels/teams-registration.test.ts
 ```
 
 ### 2. Register the adapter
@@ -51,9 +52,16 @@ isn't there, so the barrel fails to evaluate and the build goes red.
 ```nc:run effect:build
 pnpm run build
 ```
+```nc:run effect:test
+pnpm exec vitest run src/channels/teams-registration.test.ts
+```
 
-End-to-end message delivery against a real Teams workspace is verified manually
-once the service is running — see Credentials and the webhook setup below.
+`teams-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `teams` — it goes red if the import line is deleted or drifts,
+if the barrel fails to evaluate, or if `@chat-adapter/teams` isn't installed (the
+import throws), so it also covers the dependency from step 3. End-to-end message
+delivery against a real Teams workspace is verified manually once the service is
+running — see Credentials and the webhook setup below.
 
 ## Credentials
 
