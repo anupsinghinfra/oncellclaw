@@ -13,6 +13,10 @@ Install [rtk](https://github.com/rtk-ai/rtk) — a CLI proxy delivering 60–90%
 - `~/.local/bin/rtk` mounted read-only at `/usr/local/bin/rtk` inside the target agent group's containers
 - `PreToolUse` hook in the agent group's `settings.json` so every Bash call is automatically filtered through rtk — no CLAUDE.md instructions needed
 
+## Integration tests
+
+This skill has **no in-tree integration test** by design. Its only functional reach-ins are runtime operator actions — the host-only `ncl groups config add-mount` (Step 3) and the `settings.json` `PreToolUse` hook write (Step 4) — neither of which leaves a line in the source tree whose deletion a test could catch. There are no package dependencies or Dockerfile edits to guard either. Conformance is idempotent apply + `REMOVE.md`; the mount and hook are verified at runtime (see Verify).
+
 ## Step 1 — Install rtk on the host
 
 ```bash

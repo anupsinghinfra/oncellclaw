@@ -117,6 +117,6 @@ If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
 - **type**: `resend`
 - **terminology**: Resend handles email. Each email thread (identified by subject/In-Reply-To headers) is a separate conversation. The "from address" is the bot's identity.
 - **how-to-find-id**: The platform ID is the from email address (e.g. `bot@yourdomain.com`). Each sender's email thread becomes its own conversation.
-- **supports-threads**: yes (via email threading headers -- replies to the same thread stay together)
+- **supports-threads**: no (the adapter sets `supportsThreads: false`; replies still thread via email headers, but the router does not treat threads as the primary conversation unit)
 - **typical-use**: Async communication -- email conversations with longer response expectations
 - **default-isolation**: Same agent group if you want your agent to handle email alongside other channels. Separate agent group if email contains sensitive correspondence that shouldn't be accessible from other channels.

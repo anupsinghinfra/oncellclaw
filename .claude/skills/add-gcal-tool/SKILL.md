@@ -133,6 +133,8 @@ pnpm exec vitest run src/gcal-dockerfile.test.ts
 
 `cp` overwrites in place, so re-running this skill is safe.
 
+**This is the skill's only in-tree integration test.** The Phase 3 `ncl groups config add-mcp-server` and `add-mount` steps are runtime writes to the central DB — they leave no line in the source tree whose deletion a test could catch, so a registration test is structurally inapplicable. They're verified at runtime instead (Phase 5).
+
 ### Rebuild the container image
 
 ```bash

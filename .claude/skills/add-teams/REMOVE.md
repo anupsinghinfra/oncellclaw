@@ -18,14 +18,7 @@ rm -f src/channels/teams.ts src/channels/teams-registration.test.ts
 
 ## 2. Remove credentials
 
-Remove the `TEAMS_*` lines from `.env`, then re-sync to the container:
-
-```bash
-TEAMS_APP_ID
-TEAMS_APP_PASSWORD
-TEAMS_APP_TENANT_ID
-TEAMS_APP_TYPE
-```
+Remove `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_APP_TENANT_ID`, and `TEAMS_APP_TYPE` from `.env`, then re-sync to the container:
 
 ```bash
 mkdir -p data/env && cp .env data/env/env
