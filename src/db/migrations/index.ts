@@ -16,6 +16,7 @@ import { migration015 } from './015-cli-scope.js';
 import { migration016 } from './016-messaging-group-instance.js';
 import { moduleApprovalsPendingApprovals } from './module-approvals-pending-approvals.js';
 import { moduleApprovalsTitleOptions } from './module-approvals-title-options.js';
+import { moduleApprovalsApprover } from './module-approvals-approver.js';
 
 export interface Migration {
   version: number;
@@ -39,6 +40,7 @@ export const migrations: Migration[] = [
   moduleAgentToAgentDestinations,
   moduleAgentMessagePolicies,
   moduleApprovalsTitleOptions,
+  moduleApprovalsApprover,
   migration008,
   migration009,
   migration010,
