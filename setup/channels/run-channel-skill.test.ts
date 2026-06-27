@@ -1,9 +1,21 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runChannelSkill } from './run-channel-skill.js';
+import { BACK_TO_CHANNEL_SELECTION, backGate } from '../lib/back-nav.js';
+
+// Drive the first-prompt back gate (back-nav's brightSelect) from a queue
+// instead of opening a real TTY select. Hoisted so the vi.mock factory — which
+// runs before imports — can close over it. The existing Option-A tests never
+// opt into offerBack (and pass `role` so askOperatorRole's brightSelect isn't
+// reached either), so the mock is inert for them.
+const bs = vi.hoisted(() => ({ answers: [] as string[] }));
+vi.mock('../lib/bright-select.js', async (importActual) => {
+  const actual = await importActual<typeof import('../lib/bright-select.js')>();
+  return { ...actual, brightSelect: vi.fn(async () => bs.answers.shift() ?? 'continue') };
+});
 
 // Drives the real add-slack skill through the adapter with every side effect
 // injected (no real ncl/git/clack/init-first-agent): confirms it runs the skill
@@ -172,5 +184,44 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(failCalls[0].msg).toBe('Register the webhook by hand'); // heading → headline
     expect(failCalls[0].hint).toContain('Open the Faily dashboard'); // prose → hint
     expect(failCalls[0].hint).not.toBe('See logs/setup-steps/ for details, then retry setup.'); // not the generic
+  });
+});
+
+// M5 backGate — the first-prompt "← Back to channel selection" gate. It's a
+// brightSelect (mocked above) wrapped in ensureAnswer; on back it returns the
+// existing BACK_TO_CHANNEL_SELECTION sentinel that setup/auto.ts already catches.
+describe('backGate (first-prompt back-to-channel-selection)', () => {
+  it('returns the sentinel on back and continue otherwise', async () => {
+    bs.answers = ['back'];
+    expect(await backGate('Slack DMs')).toBe(BACK_TO_CHANNEL_SELECTION);
+
+    bs.answers = ['continue'];
+    expect(await backGate('Slack DMs')).toBe('continue');
+  });
+
+  // offerBack runs the gate at the very top — before resolveAgentName/role, the
+  // skill run, and the wire. Picking back returns the sentinel without touching
+  // any side effect (no exec, no wire).
+  it('runChannelSkill with offerBack returns the sentinel before running the skill', async () => {
+    bs.answers = ['back'];
+    const cmds: string[] = [];
+    const wired: unknown[] = [];
+
+    const result = await runChannelSkill('slack', 'Bob Smith', {
+      offerBack: true,
+      exec: (c) => void cmds.push(c),
+      resolveRemote: () => 'origin',
+      agentName: 'Nano',
+      role: 'owner',
+      inputs: { bot_token: 'xoxb-x', signing_secret: 's', owner_handle: 'U1' },
+      wire: (a) => {
+        wired.push(a);
+        return true;
+      },
+    });
+
+    expect(result).toBe(BACK_TO_CHANNEL_SELECTION);
+    expect(cmds).toHaveLength(0); // the skill never ran
+    expect(wired).toHaveLength(0); // the wire was never reached
   });
 });

@@ -557,19 +557,19 @@ async function main(): Promise<void> {
       // defers the wire (its platform_id only exists after the first inbound),
       // so it installs + hands off rather than wiring inline.
       if (channelChoice === 'telegram') {
-        result = await runChannelSkill('telegram', displayName!);
+        result = await runChannelSkill('telegram', displayName!, { offerBack: true });
       } else if (channelChoice === 'discord') {
-        result = await runChannelSkill('discord', displayName!);
+        result = await runChannelSkill('discord', displayName!, { offerBack: true });
       } else if (channelChoice === 'whatsapp') {
-        result = await runChannelSkill('whatsapp', displayName!);
+        result = await runChannelSkill('whatsapp', displayName!, { offerBack: true });
       } else if (channelChoice === 'signal') {
-        result = await runChannelSkill('signal', displayName!);
+        result = await runChannelSkill('signal', displayName!, { offerBack: true });
       } else if (channelChoice === 'teams') {
-        result = await runChannelSkill('teams', displayName!, { deferWire: true });
+        result = await runChannelSkill('teams', displayName!, { deferWire: true, offerBack: true });
       } else if (channelChoice === 'slack') {
-        result = await runChannelSkill('slack', displayName!);
+        result = await runChannelSkill('slack', displayName!, { offerBack: true });
       } else if (channelChoice === 'imessage') {
-        result = await runChannelSkill('imessage', displayName!);
+        result = await runChannelSkill('imessage', displayName!, { offerBack: true });
       } else if (channelChoice === 'other') {
         result = await askOtherChannelName();
       } else {

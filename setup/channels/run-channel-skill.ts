@@ -18,7 +18,7 @@
 import * as p from '@clack/prompts';
 
 import { firstFailureHint, fullyApplied } from '../../scripts/skill-apply.js';
-import { type ChannelFlowResult } from '../lib/back-nav.js';
+import { BACK_TO_CHANNEL_SELECTION, backGate, type ChannelFlowResult } from '../lib/back-nav.js';
 import { askOperatorRole, type OperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
 import { runSkill, type RunSkillOptions } from '../lib/skill-driver.js';
@@ -80,6 +80,16 @@ export interface ChannelSkillOverrides extends Partial<RunSkillOptions> {
    * asked, and init-first-agent is not run.
    */
   deferWire?: boolean;
+  /**
+   * Offer the "← Back to channel selection" gate as the very first prompt,
+   * before any side effect (agent-name/role prompts, the skill run, the wire —
+   * and the deferWire/Teams path too). On back, returns the
+   * `BACK_TO_CHANNEL_SELECTION` sentinel and does nothing else. Opt-in so
+   * headless callers (and the existing tests) never see the extra prompt.
+   */
+  offerBack?: boolean;
+  /** The first-prompt back gate; defaults to back-nav.ts `backGate`. Injectable for tests. */
+  backGate?: (label: string) => Promise<'continue' | typeof BACK_TO_CHANNEL_SELECTION>;
   /** The abort path; defaults to runner.ts `fail` (which exits). Injectable for tests. */
   fail?: (stepName: string, msg: string, hint?: string, rawLogPath?: string) => Promise<never>;
 }
@@ -89,6 +99,15 @@ export async function runChannelSkill(
   displayName: string,
   overrides: ChannelSkillOverrides = {},
 ): Promise<ChannelFlowResult> {
+  // First-prompt back gate — the very first thing, before any side effect
+  // (agent-name/role prompts, the skill run, the wire; covers deferWire too).
+  // Opt-in via offerBack so headless callers + existing tests are unaffected.
+  if (overrides.offerBack) {
+    const label = channel.charAt(0).toUpperCase() + channel.slice(1);
+    const gate = await (overrides.backGate ?? backGate)(label);
+    if (gate === BACK_TO_CHANNEL_SELECTION) return BACK_TO_CHANNEL_SELECTION;
+  }
+
   const projectRoot = overrides.projectRoot ?? process.cwd();
   const failWith = overrides.fail ?? fail;
   // The agent name + role are wire inputs — skip the prompts when the wire is deferred.
