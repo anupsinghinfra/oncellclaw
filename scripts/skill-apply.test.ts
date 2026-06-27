@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applySkill, removeSkill, planSkill, type Prompter } from './skill-apply.js';
+import { applySkill, removeSkill, planSkill, fullyApplied, type Prompter } from './skill-apply.js';
 import { parseDirectives, validate } from './skill-directives.js';
 
 // A synthetic skill exercising the fs handlers for real (no network), plus one
@@ -359,5 +359,74 @@ describe('nc:operator', () => {
     writeFileSync(join(oskill, 'SKILL.md'), '# op demo\n\nTell the user:\n```nc:operator\nDo a manual thing.\n```\n');
     const res = await applySkill(oskill, oroot, { prompter: headless({}), exec: () => {} });
     expect(res.agentTasks).toEqual([]); // operator with no sink is fine, not bounced
+  });
+});
+
+// Programmatic apply: pass every prompt answer via `inputs` and the whole skill
+// runs through with no prompter and no human interaction.
+const PROGRAMMATIC_SKILL = `# programmatic demo
+
+## Collect
+\`\`\`nc:prompt owner
+Your name.
+\`\`\`
+
+## A human step (collected, not blocking)
+Tell the user:
+\`\`\`nc:operator
+Go create the thing, {{owner}}.
+\`\`\`
+
+## Resolve from a command, then wire
+\`\`\`nc:run capture:thing_id effect:fetch
+resolve-thing {{owner}}
+\`\`\`
+\`\`\`nc:run effect:wire
+ncl wire --owner {{owner}} --thing {{thing_id}}
+\`\`\`
+`;
+
+describe('programmatic apply via inputs', () => {
+  let proot: string;
+  let pskill: string;
+  beforeEach(() => {
+    pskill = mkdtempSync(join(tmpdir(), 'nc-skill-'));
+    proot = mkdtempSync(join(tmpdir(), 'nc-proj-'));
+    writeFileSync(join(proot, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(proot, '.env'), '');
+  });
+
+  it('runs the whole skill from inputs alone — no prompter, nothing deferred or bounced', async () => {
+    writeFileSync(join(pskill, 'SKILL.md'), PROGRAMMATIC_SKILL);
+    const cmds: string[] = [];
+    const exec = (c: string): string | void => {
+      cmds.push(c);
+      if (c.startsWith('resolve-thing')) return 'T-42\n';
+    };
+    const res = await applySkill(pskill, proot, { inputs: { owner: 'ada' }, exec });
+    expect(fullyApplied(res)).toBe(true);
+    expect(res.deferred).toEqual([]);
+    expect(res.agentTasks).toEqual([]);
+    expect(cmds).toContain('resolve-thing ada'); // prompt input flowed through
+    expect(cmds).toContain('ncl wire --owner ada --thing T-42'); // captured value flowed through
+    expect(res.operatorMessages).toEqual(['Go create the thing, ada.']); // human step collected for relay
+  });
+
+  it('reports a missing input as deferred — fullyApplied is false, not a crash', async () => {
+    writeFileSync(join(pskill, 'SKILL.md'), PROGRAMMATIC_SKILL);
+    const res = await applySkill(pskill, proot, { inputs: {}, exec: () => {} });
+    expect(fullyApplied(res)).toBe(false);
+    expect(res.deferred).toContain('owner');
+  });
+
+  it('inputs win over the prompter; the prompter only fills the gaps', async () => {
+    writeFileSync(join(pskill, 'SKILL.md'), '# two prompts\n\n```nc:prompt a\nA?\n```\n```nc:prompt b\nB?\n```\n```nc:env-set\nA={{a}}\nB={{b}}\n```\n');
+    const asked: string[] = [];
+    const prompter: Prompter = { async ask(n) { asked.push(n); return 'fromPrompter'; } };
+    await applySkill(pskill, proot, { inputs: { a: 'fromInputs' }, prompter, exec: () => {} });
+    const env = readFileSync(join(proot, '.env'), 'utf8');
+    expect(env).toContain('A=fromInputs'); // input wins
+    expect(env).toContain('B=fromPrompter'); // prompter filled the gap
+    expect(asked).toEqual(['b']); // 'a' was never asked — it came from inputs
   });
 });

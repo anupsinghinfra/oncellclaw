@@ -15,9 +15,10 @@
 //   5. run                — build/test/fetch (+ dep install) via injected exec
 // Remove is derived from the journal — no hand-written REMOVE.md.
 //
-// The Prompter is what makes one engine serve two contexts:
-//   • setup flow      → interactive prompter asks the user inline
-//   • recipe rebuild  → headless prompter returns from a values map, or defers
+// Inputs + the Prompter make one engine serve three contexts:
+//   • programmatic    → pass `inputs` (var→value); no prompter, runs through fully
+//   • setup flow      → interactive prompter asks the user inline for anything left
+//   • recipe rebuild  → headless: no answer for a prompt ⇒ it (and its consumers) defer
 //
 // Usage: pnpm exec tsx scripts/skill-apply.ts <skillDir>     # plan (no writes)
 
@@ -189,11 +190,18 @@ export interface ApplyResult {
   skipped: string[];
   deferred: string[]; // prompt vars / blocked consumers with no value yet
   agentTasks: AgentTask[]; // bounced to an agent — NOT the human
+  operatorMessages: string[]; // `nc:operator` bodies to relay to the human operator
   journal: JournalEntry[];
 }
 
 export interface ApplyOptions {
-  prompter: Prompter;
+  // Pre-supplied answers for `prompt` vars (var name → value). Checked before the
+  // prompter, so a caller that has every answer needs no prompter at all and the
+  // whole skill runs through with no human interaction (fully programmatic apply).
+  inputs?: Record<string, string>;
+  // Interactive prompter for any prompt not covered by `inputs`. Optional — omit
+  // it (with full `inputs`) for a headless run; a prompt with neither defers.
+  prompter?: Prompter;
   // dep/run/branch-fetch; injectable for tests. Returns the command's stdout so
   // a `run capture:<var>` can bind it into a {{var}} (the twin of `prompt`).
   exec?: (cmd: string) => string | void | Promise<string | void>;
@@ -201,6 +209,15 @@ export interface ApplyOptions {
   // generic resolver (env override → first remote that has the branch → origin);
   // setup injects one that reuses setup/lib/channels-remote.sh for exact parity.
   resolveRemote?: (branch: string) => string;
+}
+
+/**
+ * True when a skill applied completely — nothing deferred for a missing input and
+ * nothing bounced to an agent. The check a programmatic caller makes to confirm a
+ * fully-headless run-through succeeded.
+ */
+export function fullyApplied(res: ApplyResult): boolean {
+  return res.deferred.length === 0 && res.agentTasks.length === 0;
 }
 
 // A hardcoded `origin` breaks forks where the registry branch lives on
@@ -367,23 +384,30 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
   const exec = opts.exec ?? (() => { throw new Error('no exec provided'); });
   const resolveRemote = opts.resolveRemote ?? ((b: string) => defaultResolveRemote(b, root));
   const vars = new Map<string, { value: string; secret: boolean }>();
-  const res: ApplyResult = { applied: [], skipped: [], deferred: [], agentTasks: [], journal: [] };
+  const res: ApplyResult = { applied: [], skipped: [], deferred: [], agentTasks: [], operatorMessages: [], journal: [] };
   const bounce = (d: Directive, reason: string) => res.agentTasks.push({ kind: d.kind, line: d.line, reason, prose: proseFor(md, d.line) });
 
   for (const d of directives) {
     try {
       if (d.kind === 'prompt') {
         const v = promptVar(d)!;
-        const val = await opts.prompter.ask(v, d.body.join(' '), d.args.includes('secret'));
+        const secret = d.args.includes('secret');
+        // Pre-supplied inputs win (fully-programmatic apply); fall back to the
+        // interactive prompter; still undefined ⇒ defer (headless, no answer).
+        let val = opts.inputs?.[v];
+        if (val === undefined) val = await opts.prompter?.ask(v, d.body.join(' '), secret);
         if (val === undefined) res.deferred.push(v);
-        else vars.set(v, { value: val, secret: d.args.includes('secret') });
+        else vars.set(v, { value: val, secret });
         continue;
       }
       if (d.kind === 'operator') {
-        // Relay the human-facing instructions. No operator present (headless
-        // rebuild) ⇒ nothing to show. {{vars}} render so a resolved value can be
-        // shown to the operator (throws → deferred if a referenced var is unset).
-        await opts.prompter.tell?.(substitute(d.body.join('\n'), vars));
+        // Always collect the human-facing instructions into the result so a
+        // programmatic caller can relay/output them; also render live when an
+        // interactive prompter is present. {{vars}} render so a resolved value
+        // can be shown (throws → deferred if a referenced var is unset).
+        const text = substitute(d.body.join('\n'), vars);
+        res.operatorMessages.push(text);
+        await opts.prompter?.tell?.(text);
         res.applied.push(`operator: ${(d.body[0] ?? '').slice(0, 50)}`);
         continue;
       }
