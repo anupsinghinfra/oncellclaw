@@ -84,7 +84,17 @@ Signal account is verified manually once the service runs.
 This is the whole credential step. signal-cli opens a device-link handshake,
 prints a `sgnl://linkdevice…` URL, and renders it as a scannable QR. You scan it
 once from the phone that already runs Signal; that phone's number becomes the
-account NanoClaw sends and receives as — no number is registered. Tell the user:
+account NanoClaw sends and receives as — no number is registered.
+
+The device-link runs signal-cli, so it must be reachable first — on `PATH`, or at
+`$SIGNAL_CLI_PATH`. If step 1's install didn't land, the link step has nothing to
+drive; confirm it's present before linking (re-run step 1 if this fails):
+
+```nc:run effect:check
+command -v signal-cli >/dev/null 2>&1 || [ -x "$SIGNAL_CLI_PATH" ]
+```
+
+Tell the user:
 
 ```nc:operator
 Link NanoClaw to your Signal account:

@@ -176,6 +176,14 @@ Enable the Microsoft Teams channel on the bot:
 
 ### Build the Teams app package
 
+The manifest bakes in the Application (client) ID, so the Azure app registration
+above must be done first — building with a blank `app_id` produces a package that
+no bot can claim. Confirm it's set before generating the zip:
+
+```nc:run effect:check
+[ -n "{{app_id}}" ]
+```
+
 Generate the zip you'll sideload into Teams (manifest + icons, written to
 `data/teams/teams-app-package.zip`). Re-running regenerates a fresh zip, so this
 is safe to repeat.

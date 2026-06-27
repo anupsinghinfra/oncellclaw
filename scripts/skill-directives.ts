@@ -20,7 +20,7 @@
 //   copy [from-branch:<b>]  body: `PATH` (src==dst) or `SRC -> DST`   overwrite
 //   append to:<file> [at:<marker>]  body: line(s) to add             skip if present
 //   dep [manager:pnpm]      body: `pkg@<exact-semver>` line(s)        reinstall no-op
-//   run [effect:build|test|fetch|external|wire|restart|step] [capture:<spec>]  re-runnable
+//   run [effect:build|test|fetch|external|wire|restart|step|check] [capture:<spec>]  re-runnable
 //        body: shell command(s). {{vars}} are substituted in. effect:wire runs
 //        `ncl …` to wire collected input (no undo — the rows it creates are user
 //        runtime data, not reversed on skill remove). effect:restart restarts the
@@ -34,6 +34,11 @@
 //        `capture:<var>=<FIELD>[,<var2>=<FIELD2>…]` binds the terminal block's
 //        named fields into {{vars}} (multi-valued, structured twin of stdout
 //        capture). Degrades to an agent when no streaming exec is wired.
+//        effect:check runs the body as a shell PREDICATE (a precondition gate):
+//        it mutates nothing (no journal, no capture). A zero exit passes silently;
+//        a non-zero exit bounces to an agent (degrade, not crash) and, via the
+//        run-health gate, blocks the dangerous side effects that follow it (a
+//        restart, a pairing/QR step, a wire). An unresolved {{var}} defers.
 //   prompt <var> [secret] [validate:<re>]  body: the question → binds {{var}}  skip if satisfied
 //        validate:<re> is a regex the interactive prompter enforces (e.g.
 //        validate:^xoxb- to require a Slack bot token); `inputs` bypass it.

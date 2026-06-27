@@ -418,6 +418,19 @@ async function applyOne(
       // API (e.g. Slack conversations.open → the DM channel id) and feed it to a
       // later directive, so a flow that validates/resolves stays pure directives.
       const capture = typeof d.attrs.capture === 'string' ? d.attrs.capture : undefined;
+      // effect:check runs the body as a shell PREDICATE — a precondition gate
+      // that mutates NOTHING. It pushes no journal entry and binds no capture: a
+      // zero exit is a silent pass; a non-zero exit throws → the outer catch
+      // bounces it to an agent (which reads the prose and decides); an unresolved
+      // {{var}} throws from substitute first → deferred (like any other run, e.g.
+      // a headless rebuild before the value is collected). Because a bounce here
+      // latches `blocked`, a failed precondition gates the dangerous side effects
+      // (a restart, a pairing/QR step, a wire) that follow — a broken local
+      // config or an un-registered app never reaches a doomed restart/QR.
+      if (d.attrs.effect === 'check') {
+        for (const cmd of d.body) await exec(substitute(cmd, vars));
+        break;
+      }
       // effect:step runs a long-running, operator-interactive step (a pairing
       // code, a QR device-link) through the streaming exec and binds the terminal
       // status block's named fields via capture:<var>=<FIELD>[,…] — the structured,

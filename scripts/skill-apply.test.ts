@@ -683,6 +683,100 @@ describe('run-health gate (a bounce blocks later side effects)', () => {
   });
 });
 
+// effect:check runs the body as a shell PREDICATE — a precondition gate that
+// mutates NOTHING (no journal, no capture). A non-zero exit bounces to an agent
+// AND latches `blocked`, so a following dangerous side effect (a restart) is
+// gated. An unresolved {{var}} defers (a headless rebuild before the value is
+// collected). A zero exit is a silent pass.
+const CHECK_GATE_SKILL = `# check gate demo
+
+## Require macOS for local mode
+\`\`\`nc:run effect:check
+[ "$(uname)" = Darwin ]
+\`\`\`
+
+## Restart the service
+\`\`\`nc:run effect:restart
+bash restart.sh
+\`\`\`
+`;
+
+const CHECK_VAR_SKILL = `# check var demo
+
+## Collect the linked number
+\`\`\`nc:prompt bot_phone
+The linked number.
+\`\`\`
+
+## Guard the captured value before using it
+\`\`\`nc:run effect:check
+[ -n "{{bot_phone}}" ]
+\`\`\`
+`;
+
+const CHECK_PASS_SKILL = `# check pass demo
+
+## A precondition that passes
+\`\`\`nc:run effect:check
+true
+\`\`\`
+`;
+
+describe('nc:run effect:check (precondition gate)', () => {
+  let chkSkill: string;
+  let chkRoot: string;
+  beforeEach(() => {
+    chkSkill = mkdtempSync(join(tmpdir(), 'nc-check-skill-'));
+    chkRoot = mkdtempSync(join(tmpdir(), 'nc-check-proj-'));
+    writeFileSync(join(chkRoot, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(chkRoot, '.env'), '');
+  });
+
+  it('a non-zero check bounces to an agent and gates a following effect:restart', async () => {
+    writeFileSync(join(chkSkill, 'SKILL.md'), CHECK_GATE_SKILL);
+    const cmds: string[] = [];
+    const exec = (c: string): string | void => {
+      cmds.push(c);
+      if (c.startsWith('[')) throw new Error('exit 1'); // predicate failed (non-zero)
+    };
+    const res = await applySkill(chkSkill, chkRoot, { inputs: {}, exec });
+
+    expect(cmds).toContain('[ "$(uname)" = Darwin ]'); // the predicate actually ran
+    expect(cmds).not.toContain('bash restart.sh'); // restart never executed — gated by the failed check
+    // two agent tasks: the failed check itself + the gated restart
+    expect(res.agentTasks).toHaveLength(2);
+    expect(res.agentTasks[0].kind).toBe('run');
+    expect(res.agentTasks.some((t) => /an earlier step did not complete/.test(t.reason))).toBe(true);
+    expect(res.journal).toEqual([]); // a check mutates nothing
+  });
+
+  it('an unresolved {{var}} in a check defers (headless rebuild) — not a bounce', async () => {
+    writeFileSync(join(chkSkill, 'SKILL.md'), CHECK_VAR_SKILL);
+    const cmds: string[] = [];
+    const res = await applySkill(chkSkill, chkRoot, { prompter: headless({}), exec: (c) => void cmds.push(c) });
+
+    expect(res.deferred).toContain('bot_phone'); // the prompt deferred (no headless answer)
+    expect(res.deferred.some((d) => /unresolved \{\{bot_phone\}\}/.test(d))).toBe(true); // the check deferred on it
+    expect(res.agentTasks).toEqual([]); // a deferred check is NOT a failure — no bounce
+    expect(cmds.some((c) => c.startsWith('['))).toBe(false); // the predicate never ran (var unresolved)
+  });
+
+  it('a zero-exit check is a no-op — no journal entry, no bounce, no defer', async () => {
+    writeFileSync(join(chkSkill, 'SKILL.md'), CHECK_PASS_SKILL);
+    const cmds: string[] = [];
+    const res = await applySkill(chkSkill, chkRoot, { inputs: {}, exec: (c) => void cmds.push(c) });
+
+    expect(cmds).toContain('true'); // the predicate ran
+    expect(res.journal).toEqual([]); // mutated nothing — no 'ran' entry
+    expect(res.agentTasks).toEqual([]);
+    expect(res.deferred).toEqual([]);
+  });
+
+  it('lint accepts a check that guards an earlier-defined var', () => {
+    expect(validate(parseDirectives(CHECK_VAR_SKILL))).toEqual([]);
+  });
+});
+
 // The apply-lifecycle reporter brackets each real mutation (applyOne) with
 // stepStart/stepEnd so the setup driver can spin on the slow ones. An effectful
 // step (a run, a dep, a branch-fetch copy) carries a human label (the nearest

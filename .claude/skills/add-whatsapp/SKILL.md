@@ -121,6 +121,14 @@ pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --pho
 If the handshake fails (`logged_out` or a timeout), the code expired — clear
 `store/auth/` and run the step again for a fresh one. See Troubleshooting.
 
+A successful link reports the number back as `bot_phone`. If it came back empty,
+the device never confirmed (an expired QR or pairing code), so don't restart or
+wire against a blank number — clear `store/auth/` and re-run the link step first:
+
+```nc:run effect:check
+[ -n "{{bot_phone}}" ]
+```
+
 ## Restart
 
 Restart the service so it loads the WhatsApp adapter and picks up the

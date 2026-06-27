@@ -89,6 +89,15 @@ How should iMessage run — `local` (this Mac, needs Full Disk Access) or `remot
 Requirements: macOS, with Full Disk Access granted to the Node binary. Without
 it the adapter can't read `chat.db` and inbound messages never arrive.
 
+Local mode only works on a Mac — it reads this machine's iMessage `chat.db`
+directly, and there is no such database off macOS. On any other OS, stop here and
+use remote (Photon) mode instead; otherwise you'd write a local config that can
+never receive a message:
+
+```nc:run effect:check when:mode=local
+[ "$(uname)" = Darwin ]
+```
+
 The Node binary path is buried deep (e.g. `~/.nvm/versions/node/v22.x.x/bin/node`),
 so open its folder in Finder to make the drag-and-drop target obvious. Harmless
 off a desktop (SSH/headless) — it just no-ops:
