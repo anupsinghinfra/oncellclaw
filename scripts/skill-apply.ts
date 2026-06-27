@@ -187,7 +187,9 @@ export interface ApplyResult {
 
 export interface ApplyOptions {
   prompter: Prompter;
-  exec?: (cmd: string) => void | Promise<void>; // dep/run/branch-fetch; injectable for tests
+  // dep/run/branch-fetch; injectable for tests. Returns the command's stdout so
+  // a `run capture:<var>` can bind it into a {{var}} (the twin of `prompt`).
+  exec?: (cmd: string) => string | void | Promise<string | void>;
   // Resolve which remote carries a `from-branch` registry branch. Defaults to a
   // generic resolver (env override → first remote that has the branch → origin);
   // setup injects one that reuses setup/lib/channels-remote.sh for exact parity.
@@ -238,7 +240,7 @@ function substitute(value: string, vars: Map<string, { value: string; secret: bo
 // is derivable. Throws on failure → caught and bounced to an agent.
 async function applyOne(
   d: Directive,
-  ctx: { root: string; skillDir: string; exec: (c: string) => void | Promise<void>; resolveRemote: (b: string) => string; vars: Map<string, { value: string; secret: boolean }>; journal: JournalEntry[] },
+  ctx: { root: string; skillDir: string; exec: (c: string) => string | void | Promise<string | void>; resolveRemote: (b: string) => string; vars: Map<string, { value: string; secret: boolean }>; journal: JournalEntry[] },
 ): Promise<void> {
   const { root, skillDir, exec, vars, journal } = ctx;
   switch (d.kind) {
@@ -289,13 +291,20 @@ async function applyOne(
       journal.push({ op: 'ran', cmd: `pnpm add ${d.body.join(' ')}`, undo: `pnpm remove ${names}` });
       break;
     }
-    case 'run':
+    case 'run': {
+      // `capture:<var>` binds the command's stdout into a {{var}} — the twin of
+      // `prompt` (which binds human input). Lets a run resolve a value from an
+      // API (e.g. Slack conversations.open → the DM channel id) and feed it to a
+      // later directive, so a flow that validates/resolves stays pure directives.
+      const capture = typeof d.attrs.capture === 'string' ? d.attrs.capture : undefined;
       for (const cmd of d.body) {
         // Interpolate prompted {{vars}} the same way env-set does, so a run can
         // call `ncl ... {{owner_email}}` to wire from collected input. A command
         // with no {{...}} (build/test) is returned unchanged; an unresolved var
         // throws → caught → deferred (the prompt hasn't been answered yet).
-        await exec(substitute(cmd, vars));
+        const out = await exec(substitute(cmd, vars));
+        // Last command wins for capture (a capture run should be a single command).
+        if (capture) vars.set(capture, { value: typeof out === 'string' ? out.trim() : '', secret: false });
         // Journal the ORIGINAL command (placeholders intact) — never the
         // substituted form — so a secret interpolated into a run never lands in
         // the journal (or a remove replay).
@@ -303,6 +312,7 @@ async function applyOne(
         journal.push({ op: 'ran', cmd, undo });
       }
       break;
+    }
     case 'env-set': {
       const envPath = join(root, '.env');
       for (const entry of d.body) {

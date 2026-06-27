@@ -8,7 +8,7 @@ const slack = readFileSync('.claude/skills/add-slack/SKILL.md', 'utf8');
 const directives = parseDirectives(slack);
 
 describe('skill-directives parser, on the converted add-slack', () => {
-  it('extracts the apply + credential directives in document order', () => {
+  it('extracts every directive in document order — install, credentials, then wire', () => {
     expect(directives.map((d) => d.kind)).toEqual([
       'copy', // step 1: adapter + test from the channels branch
       'append', // step 2: barrel registration
@@ -19,6 +19,11 @@ describe('skill-directives parser, on the converted add-slack', () => {
       'prompt', // credentials: capture signing secret
       'env-set', // credentials: write captured values to .env
       'env-sync', // credentials: sync to container
+      'prompt', // wire: owner member id
+      'prompt', // wire: target agent folder
+      'run', // wire: validate token (auth.test)
+      'run', // wire: resolve DM channel (conversations.open → capture:dm_channel)
+      'run', // wire: ncl users/roles/messaging-groups/wirings/send
     ]);
   });
 
@@ -40,15 +45,33 @@ describe('skill-directives parser, on the converted add-slack', () => {
   });
 
   it('tags the runs with their effects', () => {
-    expect(directives.filter((d) => d.kind === 'run').map((d) => d.attrs.effect)).toEqual(['build', 'test']);
+    expect(directives.filter((d) => d.kind === 'run').map((d) => d.attrs.effect)).toEqual([
+      'build',
+      'test',
+      'fetch', // validate: auth.test
+      'fetch', // resolve: conversations.open
+      'wire', // ncl wiring
+    ]);
   });
 
-  it('captures each prompt into a named, secret variable — no destination baked in', () => {
+  it('captures prompts into named vars — credentials secret, wiring inputs not', () => {
     const prompts = directives.filter((d) => d.kind === 'prompt');
-    expect(prompts.map(promptVar)).toEqual(['bot_token', 'signing_secret']);
-    for (const p of prompts) expect(p.args).toContain('secret');
+    expect(prompts.map(promptVar)).toEqual(['bot_token', 'signing_secret', 'slack_user_id', 'agent_folder']);
+    expect(prompts[0].args).toContain('secret'); // bot_token
+    expect(prompts[1].args).toContain('secret'); // signing_secret
+    expect(prompts[2].args).not.toContain('secret'); // slack_user_id — a plain id, not a secret
+    expect(prompts[3].args).not.toContain('secret'); // agent_folder
     // The prompt body is the question; it does not mention env at all.
     expect(prompts[0].body.join(' ')).toMatch(/Bot User OAuth Token/);
+  });
+
+  it('resolves the DM channel with capture:dm_channel and feeds it into the wiring', () => {
+    const runs = directives.filter((d) => d.kind === 'run');
+    const resolve = runs.find((d) => d.attrs.capture === 'dm_channel')!;
+    expect(resolve).toBeTruthy();
+    expect(resolve.body.join(' ')).toMatch(/conversations\.open/);
+    const wire = runs.find((d) => d.attrs.effect === 'wire')!;
+    expect(wire.body.join('\n')).toMatch(/slack:\{\{dm_channel\}\}/); // captured id flows into ncl
   });
 
   it('wires the captured variables into env-set via {{var}} references', () => {

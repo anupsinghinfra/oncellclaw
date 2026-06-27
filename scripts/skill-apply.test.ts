@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applySkill, removeSkill, planSkill, type Prompter } from './skill-apply.js';
+import { parseDirectives, validate } from './skill-directives.js';
 
 // A synthetic skill exercising the fs handlers for real (no network), plus one
 // directive the engine can't handle — to prove it bounces to an agent, not abort.
@@ -283,5 +284,51 @@ describe('nc:run variable substitution', () => {
     expect(res.deferred.some((d) => /unresolved \{\{owner_email\}\}/.test(d))).toBe(true);
     expect(cmds.some((c) => c.startsWith('ncl'))).toBe(false); // no ncl ran with an unresolved value
     expect(cmds).toContain('pnpm run build'); // the var-free run still executes
+  });
+});
+
+// capture: a run binds its stdout into a {{var}}, the twin of prompt. This is
+// what lets a flow resolve a value from an API (Slack conversations.open) and
+// feed it downstream — so even slack.ts's bespoke steps are pure directives.
+const CAPTURE_SKILL = `# capture demo
+
+## Collect
+\`\`\`nc:prompt user_id
+Your member id.
+\`\`\`
+
+## Resolve an id from a command, then wire with it
+\`\`\`nc:run capture:dm_channel effect:fetch
+resolve-dm {{user_id}}
+\`\`\`
+\`\`\`nc:run effect:wire
+ncl messaging-groups create --channel-type slack --platform-id slack:{{dm_channel}}
+\`\`\`
+`;
+
+describe('nc:run capture', () => {
+  let croot: string;
+  let cskill: string;
+  beforeEach(() => {
+    cskill = mkdtempSync(join(tmpdir(), 'nc-skill-'));
+    croot = mkdtempSync(join(tmpdir(), 'nc-proj-'));
+    writeFileSync(join(cskill, 'SKILL.md'), CAPTURE_SKILL);
+    writeFileSync(join(croot, 'package.json'), '{"name":"scratch"}');
+  });
+
+  it('binds a command stdout (trimmed) into {{var}} and substitutes it downstream', async () => {
+    const cmds: string[] = [];
+    // exec returns stdout for the resolve command (simulating `… | jq -r .channel.id`).
+    const exec = (c: string): string | void => {
+      cmds.push(c);
+      if (c.startsWith('resolve-dm')) return 'D0SLACK123\n';
+    };
+    await applySkill(cskill, croot, { prompter: headless({ user_id: 'U999' }), exec });
+    expect(cmds).toContain('resolve-dm U999'); // resolved with the prompted id
+    expect(cmds).toContain('ncl messaging-groups create --channel-type slack --platform-id slack:D0SLACK123'); // captured value flowed downstream
+  });
+
+  it('lint accepts {{dm_channel}} as defined by the earlier capture', () => {
+    expect(validate(parseDirectives(CAPTURE_SKILL))).toEqual([]);
   });
 });

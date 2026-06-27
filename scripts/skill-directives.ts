@@ -20,10 +20,12 @@
 //   copy [from-branch:<b>]  body: `PATH` (src==dst) or `SRC -> DST`   overwrite
 //   append to:<file> [at:<marker>]  body: line(s) to add             skip if present
 //   dep [manager:pnpm]      body: `pkg@<exact-semver>` line(s)        reinstall no-op
-//   run [effect:build|test|fetch|external|wire]  body: shell command(s) re-runnable
-//        effect:wire runs `ncl …` to wire collected input ({{vars}} substituted
-//        in); like other non-external runs it has no undo — the rows it creates
-//        are user runtime data, not reversed on skill remove.
+//   run [effect:build|test|fetch|external|wire] [capture:<var>]  re-runnable
+//        body: shell command(s). {{vars}} are substituted in. effect:wire runs
+//        `ncl …` to wire collected input (no undo — the rows it creates are user
+//        runtime data, not reversed on skill remove). capture:<var> binds the
+//        command's stdout into {{var}} (twin of prompt) — e.g. resolve an id
+//        from an API and feed it to a later directive.
 //   prompt <var> [secret]   body: the question → binds {{var}}        skip if satisfied
 //   env-set                 body: `KEY=value` ({{var}} allowed)       set-if-absent
 //   env-sync                (no body) `.env` → data/env/env           idempotent copy
@@ -182,14 +184,16 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
         if (d.body.length === 0) flag(d, 'prompt requires a question in its body');
         break;
     }
-    // A consumer can only reference a variable an earlier prompt captured.
+    // A consumer can only reference a variable an earlier prompt captured, or an
+    // earlier `run capture:<var>` bound from a command's output.
     for (const ref of referencedVars(d)) {
-      if (!defined.has(ref)) flag(d, `references {{${ref}}} but no earlier nc:prompt captured it`);
+      if (!defined.has(ref)) flag(d, `references {{${ref}}} but no earlier nc:prompt or nc:run capture defined it`);
     }
     if (d.kind === 'prompt') {
       const v = promptVar(d);
       if (v) defined.add(v);
     }
+    if (d.kind === 'run' && typeof d.attrs.capture === 'string') defined.add(d.attrs.capture);
   }
   return problems;
 }
