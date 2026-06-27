@@ -332,3 +332,32 @@ describe('nc:run capture', () => {
     expect(validate(parseDirectives(CAPTURE_SKILL))).toEqual([]);
   });
 });
+
+// operator: the parts addressed to the human (UI steps), delineated so the agent
+// relays them and the engine renders them — the output twin of prompt.
+describe('nc:operator', () => {
+  let oroot: string;
+  let oskill: string;
+  beforeEach(() => {
+    oskill = mkdtempSync(join(tmpdir(), 'nc-skill-'));
+    oroot = mkdtempSync(join(tmpdir(), 'nc-proj-'));
+    writeFileSync(join(oroot, 'package.json'), '{"name":"scratch"}');
+  });
+
+  it('relays the operator body to prompter.tell, substituting {{vars}}', async () => {
+    writeFileSync(
+      join(oskill, 'SKILL.md'),
+      '# op demo\n\n```nc:prompt who\nName?\n```\nTell the user:\n```nc:operator\nHello {{who}} — go click the button.\n```\n',
+    );
+    const told: string[] = [];
+    const prompter: Prompter = { async ask() { return 'world'; }, tell: (t) => void told.push(t) };
+    await applySkill(oskill, oroot, { prompter, exec: () => {} });
+    expect(told).toEqual(['Hello world — go click the button.']);
+  });
+
+  it('is a no-op when no operator sink is present (headless rebuild) — not a crash, not an agent bounce', async () => {
+    writeFileSync(join(oskill, 'SKILL.md'), '# op demo\n\nTell the user:\n```nc:operator\nDo a manual thing.\n```\n');
+    const res = await applySkill(oskill, oroot, { prompter: headless({}), exec: () => {} });
+    expect(res.agentTasks).toEqual([]); // operator with no sink is fine, not bounced
+  });
+});

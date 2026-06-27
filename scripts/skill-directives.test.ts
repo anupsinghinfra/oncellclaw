@@ -15,16 +15,26 @@ describe('skill-directives parser, on the converted add-slack', () => {
       'dep', // step 3: pinned package
       'run', // step 4: build
       'run', // step 4: test
+      'operator', // credentials: create-app walkthrough (addressed to the operator)
       'prompt', // credentials: capture bot token
       'prompt', // credentials: capture signing secret
       'env-set', // credentials: write captured values to .env
       'env-sync', // credentials: sync to container
+      'operator', // credentials: event-delivery walkthrough
       'prompt', // wire: owner member id
       'prompt', // wire: target agent folder
       'run', // wire: validate token (auth.test)
       'run', // wire: resolve DM channel (conversations.open → capture:dm_channel)
       'run', // wire: ncl users/roles/messaging-groups/wirings/send
     ]);
+  });
+
+  it('delineates the human UI steps as nc:operator (not agent prose or a run)', () => {
+    const ops = directives.filter((d) => d.kind === 'operator');
+    expect(ops).toHaveLength(2);
+    expect(ops[0].body.join('\n')).toMatch(/Create the Slack app/);
+    expect(ops[0].body.join('\n')).toMatch(/Bot Token Scopes/);
+    expect(ops[1].body.join('\n')).toMatch(/Event Subscriptions/);
   });
 
   it('reads copy as a branch fetch with both files', () => {

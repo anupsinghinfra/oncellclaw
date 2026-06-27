@@ -27,6 +27,11 @@
 //        command's stdout into {{var}} (twin of prompt) — e.g. resolve an id
 //        from an API and feed it to a later directive.
 //   prompt <var> [secret]   body: the question → binds {{var}}        skip if satisfied
+//   operator                body: instructions for the human operator  output-only
+//        The SKILL.md is addressed to the coding agent; `operator` delineates the
+//        parts meant for the HUMAN (e.g. clicking through the Slack UI). Lead it
+//        with agent-facing prose like "Tell the user:" so the agent relays it;
+//        the engine renders the body to the operator ({{vars}} substituted in).
 //   env-set                 body: `KEY=value` ({{var}} allowed)       set-if-absent
 //   env-sync                (no body) `.env` → data/env/env           idempotent copy
 //   json-merge into:<file> key:<field>  body: a JSON object          push-if-absent
@@ -58,7 +63,7 @@ export interface Problem {
 const FENCE = /^```(\S.*)?$/;
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const VAR_REF = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
-const KNOWN = new Set(['copy', 'append', 'dep', 'run', 'prompt', 'env-set', 'env-sync', 'json-merge']);
+const KNOWN = new Set(['copy', 'append', 'dep', 'run', 'prompt', 'operator', 'env-set', 'env-sync', 'json-merge']);
 const PROMPT_FLAGS = new Set(['secret']);
 
 export function parseDirectives(markdown: string): Directive[] {
@@ -182,6 +187,9 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
       case 'prompt':
         if (!promptVar(d)) flag(d, 'prompt requires a variable name, e.g. `nc:prompt token`');
         if (d.body.length === 0) flag(d, 'prompt requires a question in its body');
+        break;
+      case 'operator':
+        if (d.body.length === 0) flag(d, 'operator requires instructions for the human in its body');
         break;
     }
     // A consumer can only reference a variable an earlier prompt captured, or an

@@ -4,7 +4,8 @@
 // accelerator it delegates to. Anything the engine can't do bounces back to the
 // AGENT (which reads the same prose and applies it, the way skills work today) —
 // never to the human, and never as a hard abort. The human is in the loop only
-// for `prompt` inputs and inherently-human prose (e.g. clicking through Slack).
+// for `prompt` inputs and `operator` instructions — the parts addressed to the
+// human (e.g. clicking through the Slack UI), which the agent relays.
 //
 // Phases (the F2 runtime contract, minimal form):
 //   1. parse + validate   — lint; a malformed skill never reaches apply
@@ -28,6 +29,10 @@ import { parseDirectives, promptVar, type Directive } from './skill-directives.j
 export interface Prompter {
   // Return the value, or undefined to DEFER (headless rebuild collects these).
   ask(varName: string, question: string, secret: boolean): Promise<string | undefined>;
+  // Show an `nc:operator` block to the human operator (a clack note in setup, a
+  // channel message when a coding agent relays). Absent ⇒ no operator present
+  // (headless rebuild), so the instructions are simply skipped.
+  tell?(text: string): Promise<void> | void;
 }
 
 export type StepStatus = 'skip' | 'apply' | 'needs-input' | 'agent';
@@ -127,6 +132,8 @@ function selfStatus(d: Directive, root: string): { status: StepStatus; detail: s
     }
     case 'prompt':
       return { status: 'needs-input', detail: '' };
+    case 'operator':
+      return { status: 'apply', detail: `show operator: ${(d.body[0] ?? '').slice(0, 50)}…` };
     default:
       return { status: 'agent', detail: `no deterministic handler for nc:${d.kind} — an agent applies it from the prose` };
   }
@@ -370,6 +377,14 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
         const val = await opts.prompter.ask(v, d.body.join(' '), d.args.includes('secret'));
         if (val === undefined) res.deferred.push(v);
         else vars.set(v, { value: val, secret: d.args.includes('secret') });
+        continue;
+      }
+      if (d.kind === 'operator') {
+        // Relay the human-facing instructions. No operator present (headless
+        // rebuild) ⇒ nothing to show. {{vars}} render so a resolved value can be
+        // shown to the operator (throws → deferred if a referenced var is unset).
+        await opts.prompter.tell?.(substitute(d.body.join('\n'), vars));
+        res.applied.push(`operator: ${(d.body[0] ?? '').slice(0, 50)}`);
         continue;
       }
       const st = selfStatus(d, root);

@@ -62,36 +62,20 @@ delivery against a real workspace is verified manually once the service runs.
 
 ## Credentials
 
-Slack app setup is human and interactive — these steps are prose, not directives
-(no parser can click through the Slack UI). A recipe rebuild produces a
-compiling, registered adapter that cannot receive a message until they're done.
+Walk the operator through creating the Slack app, then collect the two secrets it
+hands back. The adapter is already installed and registered — it just can't
+receive a message until this is done. Tell the user:
 
-### Create the Slack app
+```nc:operator
+Create the Slack app:
+1. Go to api.slack.com/apps → Create New App → From scratch. Name it (e.g. "NanoClaw") and pick your workspace.
+2. OAuth & Permissions → add these Bot Token Scopes: chat:write, im:write, channels:history, groups:history, im:history, channels:read, groups:read, users:read, reactions:write, files:read, files:write.
+3. App Home → enable the Messages Tab, and check "Allow users to send Slash commands and messages from the messages tab."
+4. Install to Workspace, then copy the Bot User OAuth Token (starts with xoxb-).
+5. Basic Information → copy the Signing Secret.
+```
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**.
-2. Name it (e.g. "NanoClaw") and select your workspace.
-3. **OAuth & Permissions** → add Bot Token Scopes: `chat:write`, `im:write`, `channels:history`, `groups:history`, `im:history`, `channels:read`, `groups:read`, `users:read`, `reactions:write`, `files:read`, `files:write`.
-4. **Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`).
-5. **Basic Information** → copy the **Signing Secret**.
-
-### Enable DMs
-
-6. **App Home** → enable the **Messages Tab**.
-7. Check **"Allow users to send Slash commands and messages from the messages tab."**
-
-### Event Subscriptions & Interactivity
-
-8. **Event Subscriptions** → **Enable Events**. Set the **Request URL** to your public `https://your-domain/webhook/slack` (see Webhook server); Slack sends a challenge that must pass before you can save.
-9. Under **Subscribe to bot events**, add `message.channels`, `message.groups`, `message.im`, `app_mention`. **Save Changes**.
-10. **Interactivity & Shortcuts** → toggle **Interactivity** on, set the same Request URL, **Save Changes**, then **reinstall** the app when Slack prompts.
-
-### Store the credentials
-
-Capture the two values, then write them. `prompt` only *asks* and binds the
-answer to a name; a separate directive consumes it — so the same prompts could
-feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
-Here they go to `.env` (set-if-absent — a value you've already filled in is
-never overwritten) and sync to the container:
+Collect the two secrets and store them (the bridge reads them from `.env`):
 
 ```nc:prompt bot_token secret
 Paste the Bot User OAuth Token — OAuth & Permissions, starts with `xoxb-`.
@@ -106,13 +90,16 @@ SLACK_SIGNING_SECRET={{signing_secret}}
 ```nc:env-sync
 ```
 
-### Webhook server
+The bridge serves the webhook on port 3000 at `/webhook/slack` automatically; to
+receive replies, that port must be reachable from the internet and registered
+with Slack. Tell the user:
 
-The Chat SDK bridge automatically starts a shared webhook server on port 3000
-(`WEBHOOK_PORT` to change it), handling `/webhook/slack`. This port must be
-publicly reachable for Slack to deliver events. Running locally, expose it with
-ngrok (`ngrok http 3000`), a Cloudflare Tunnel, or a reverse proxy on a VPS —
-the resulting public URL is the base for the Request URL above.
+```nc:operator
+Set up event delivery (needs a public HTTPS URL for port 3000 — ngrok, a Cloudflare Tunnel, or a reverse proxy on a VPS):
+1. Event Subscriptions → Enable Events. Set the Request URL to https://<your-public-host>/webhook/slack and wait for the challenge to pass.
+2. Subscribe to bot events: message.channels, message.groups, message.im, app_mention. Save Changes.
+3. Interactivity & Shortcuts → toggle Interactivity on, set the same Request URL, Save Changes, then reinstall the app when Slack prompts.
+```
 
 ## Connect yourself
 
