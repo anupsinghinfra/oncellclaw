@@ -17,7 +17,7 @@
  */
 import * as p from '@clack/prompts';
 
-import { fullyApplied } from '../../scripts/skill-apply.js';
+import { firstFailureHint, fullyApplied } from '../../scripts/skill-apply.js';
 import { type ChannelFlowResult } from '../lib/back-nav.js';
 import { askOperatorRole, type OperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
@@ -80,6 +80,8 @@ export interface ChannelSkillOverrides extends Partial<RunSkillOptions> {
    * asked, and init-first-agent is not run.
    */
   deferWire?: boolean;
+  /** The abort path; defaults to runner.ts `fail` (which exits). Injectable for tests. */
+  fail?: (stepName: string, msg: string, hint?: string, rawLogPath?: string) => Promise<never>;
 }
 
 export async function runChannelSkill(
@@ -88,6 +90,7 @@ export async function runChannelSkill(
   overrides: ChannelSkillOverrides = {},
 ): Promise<ChannelFlowResult> {
   const projectRoot = overrides.projectRoot ?? process.cwd();
+  const failWith = overrides.fail ?? fail;
   // The agent name + role are wire inputs — skip the prompts when the wire is deferred.
   const agentName = overrides.deferWire ? '' : overrides.agentName ?? (await resolveAgentName());
   const role = overrides.deferWire ? undefined : overrides.role ?? (await askOperatorRole(channel));
@@ -107,7 +110,16 @@ export async function runChannelSkill(
   if (!fullyApplied(res)) {
     if (res.deferred.length) p.log.warn(`Still needs: ${res.deferred.join(', ')}`);
     for (const t of res.agentTasks) p.log.warn(`Needs an agent (${t.kind}): ${t.reason}`);
-    await fail(`${channel}-install`, `Couldn't finish setting up ${channel}.`, 'See logs/setup-steps/ for details, then retry setup.');
+    // Surface the bounced step's OWN prose as the failure hint + Claude-handoff
+    // context (fail() dims the hint and forwards it to offerClaudeOnFailure),
+    // instead of a generic "couldn't finish" message. Only a real bounce yields a
+    // diagnosis; a purely-deferred run (a missing input) falls back to the generic.
+    const diag = firstFailureHint(res);
+    await failWith(
+      `${channel}-install`,
+      diag?.headline ?? `Couldn't finish setting up ${channel}.`,
+      diag?.hint ?? 'See logs/setup-steps/ for details, then retry setup.',
+    );
   }
 
   // Identity confirmation captured by the skill (e.g. add-slack's auth.test).
@@ -119,7 +131,7 @@ export async function runChannelSkill(
   const ownerHandle = res.vars.owner_handle;
   const platformId = res.vars.platform_id;
   if (!ownerHandle || !platformId) {
-    await fail(
+    await failWith(
       `${channel}-resolve`,
       `Couldn't resolve your ${channel} address.`,
       'The skill did not produce owner_handle + platform_id.',
@@ -131,6 +143,6 @@ export async function runChannelSkill(
   const wire = overrides.wire ?? initFirstAgent;
   const ok = await wire({ channel, userId: `${channel}:${ownerHandle}`, platformId, displayName, agentName, role: role! });
   if (!ok) {
-    await fail('init-first-agent', `Couldn't finish connecting ${agentName}.`, 'You can retry later with `/init-first-agent`.');
+    await failWith('init-first-agent', `Couldn't finish connecting ${agentName}.`, 'You can retry later with `/init-first-agent`.');
   }
 }

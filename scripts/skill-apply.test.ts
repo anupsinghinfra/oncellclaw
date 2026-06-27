@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applySkill, removeSkill, planSkill, fullyApplied, stepLabel, type Prompter, type StepReporter } from './skill-apply.js';
+import { applySkill, removeSkill, planSkill, fullyApplied, firstFailureHint, stepLabel, type Prompter, type StepReporter } from './skill-apply.js';
 import { parseDirectives, validate } from './skill-directives.js';
 
 // A synthetic skill exercising the fs handlers for real (no network), plus one
@@ -981,5 +981,97 @@ describe('stepLabel', () => {
   it('falls back to a kind/effect default when there is no heading above the fence', () => {
     const ds = parseDirectives('```nc:run effect:build\npnpm run build\n```\n');
     expect(stepLabel(ds[0], '```nc:run effect:build\npnpm run build\n```\n')).toBe('Building');
+  });
+});
+
+// firstFailureHint surfaces the prose beside the FIRST bounced directive as the
+// operator's failure hint (the setup driver threads it into fail() + the Claude
+// handoff). The hint defaults to the surrounding prose; an `on-fail:<token>` attr
+// on the fence narrows it to the single prose LINE that diagnoses the failure —
+// and because that attr is stripped when a skill degrades to prose, the SAME
+// diagnosis must already live in the prose, so a token with no matching prose
+// line falls back to the full prose (prose-primary, never a leak).
+const FAIL_HINT_SKILL = `# connect demo
+
+## Verify the credential
+The bot token must be valid. If auth.test fails, the token is wrong or the app isn't installed in the workspace.
+\`\`\`nc:hand-verify
+check the token
+\`\`\`
+`;
+
+const ON_FAIL_SKILL = `# connect demo
+
+## Connect to the service
+Install the app, then paste the bot token below.
+If auth.test returns invalid_auth, your token is wrong — regenerate it from the OAuth page.
+\`\`\`nc:hand-verify on-fail:invalid_auth
+check the token
+\`\`\`
+`;
+
+const ON_FAIL_MISS_SKILL = `# connect demo
+
+## Connect
+Do the manual connection step in the dashboard.
+\`\`\`nc:hand-verify on-fail:nonexistent_token
+check
+\`\`\`
+`;
+
+const NO_BOUNCE_SKILL = `# prompt only
+
+## Collect a token
+\`\`\`nc:prompt token secret
+Paste it.
+\`\`\`
+`;
+
+describe('firstFailureHint', () => {
+  let froot: string;
+  let fskill: string;
+  beforeEach(() => {
+    fskill = mkdtempSync(join(tmpdir(), 'nc-fh-skill-'));
+    froot = mkdtempSync(join(tmpdir(), 'nc-fh-proj-'));
+    writeFileSync(join(froot, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(froot, '.env'), '');
+  });
+
+  it('returns the heading as a headline and the bounced step prose as the hint', async () => {
+    writeFileSync(join(fskill, 'SKILL.md'), FAIL_HINT_SKILL);
+    const res = await applySkill(fskill, froot, { inputs: {}, exec: () => {} });
+    expect(res.agentTasks).toHaveLength(1); // the unknown directive bounced
+    const diag = firstFailureHint(res);
+    expect(diag?.headline).toBe('Verify the credential'); // the section heading, # stripped
+    expect(diag?.hint).toContain('the token is wrong'); // the prose beside the step
+    // the AgentTask carries the same hint (default = trimmed prose)
+    expect(res.agentTasks[0].hint).toBe(diag?.hint);
+  });
+
+  it('an on-fail:<token> narrows the hint to the prose line that diagnoses the failure', async () => {
+    writeFileSync(join(fskill, 'SKILL.md'), ON_FAIL_SKILL);
+    const res = await applySkill(fskill, froot, { inputs: {}, exec: () => {} });
+    const diag = firstFailureHint(res);
+    expect(diag?.headline).toBe('Connect to the service');
+    // narrowed to the single diagnosing line — not the whole paragraph
+    expect(diag?.hint).toBe('If auth.test returns invalid_auth, your token is wrong — regenerate it from the OAuth page.');
+    expect(diag?.hint).not.toContain('Install the app');
+  });
+
+  it('falls back to the full prose when the on-fail token has no matching prose line (no leak)', async () => {
+    writeFileSync(join(fskill, 'SKILL.md'), ON_FAIL_MISS_SKILL);
+    const res = await applySkill(fskill, froot, { inputs: {}, exec: () => {} });
+    const diag = firstFailureHint(res);
+    // the bare token never surfaces — the operator sees the prose
+    expect(diag?.hint).toContain('Do the manual connection step in the dashboard.');
+    expect(diag?.hint).not.toContain('nonexistent_token');
+  });
+
+  it('returns undefined when nothing bounced (a deferred prompt is not a failure)', async () => {
+    writeFileSync(join(fskill, 'SKILL.md'), NO_BOUNCE_SKILL);
+    const res = await applySkill(fskill, froot, { prompter: headless({}), exec: () => {} });
+    expect(res.deferred).toContain('token'); // deferred, not bounced
+    expect(res.agentTasks).toEqual([]);
+    expect(firstFailureHint(res)).toBeUndefined();
   });
 });

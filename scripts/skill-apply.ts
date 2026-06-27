@@ -207,6 +207,11 @@ export interface AgentTask {
   line: number;
   reason: string;
   prose: string; // the surrounding prose the agent reads to apply the step
+  // A concise failure hint surfaced to the operator (and the Claude handoff)
+  // when this step bounces. Defaults to the trimmed prose; an optional
+  // `on-fail:<token>` attr on the fence narrows it to the single prose line that
+  // diagnoses the failure. See `failHint`.
+  hint?: string;
 }
 
 export interface ApplyResult {
@@ -262,6 +267,27 @@ export function fullyApplied(res: ApplyResult): boolean {
   return res.deferred.length === 0 && res.agentTasks.length === 0;
 }
 
+/**
+ * The failure diagnosis for the FIRST directive that bounced to an agent, in
+ * document order: a concise headline (the nearest section heading) plus the
+ * bounced step's own prose as the hint. The setup driver surfaces this when a
+ * channel skill doesn't fully apply — the prose beside the step that failed
+ * becomes the operator's failure hint and the Claude-handoff context, instead
+ * of a generic "couldn't finish" message. Returns undefined when nothing
+ * bounced (e.g. a headless rebuild only left prompts deferred — not a failure).
+ */
+export function firstFailureHint(res: ApplyResult): { headline: string; hint: string } | undefined {
+  const first = res.agentTasks[0];
+  if (!first) return undefined;
+  const hint = (first.hint ?? first.prose).trim();
+  // The concise headline: the nearest `#`-heading the prose carries, stripped of
+  // its markers; failing that, the first prose line; failing that, the reason.
+  const lines = first.prose.split('\n').map((l) => l.trim()).filter(Boolean);
+  const heading = lines.find((l) => l.startsWith('#'));
+  const headline = heading ? heading.replace(/^#+\s*/, '').trim() : (lines[0] ?? first.reason);
+  return { headline, hint };
+}
+
 // A hardcoded `origin` breaks forks where the registry branch lives on
 // `upstream`. Generic mirror of channels-remote.sh: explicit override → the
 // first remote that actually has the branch → origin.
@@ -292,6 +318,27 @@ function proseFor(md: string, fenceLine1: number): string {
   let heading = '';
   for (let h = i; h >= 0; h--) if (lines[h].startsWith('#')) { heading = lines[h]; break; }
   return [heading, ...para].filter(Boolean).join('\n').trim();
+}
+
+// The concise failure hint surfaced to the operator when a directive bounces.
+// Defaults to the surrounding prose (so a stripped fence still reads coherently:
+// prose-primary, never a leak). An optional `on-fail:<token>` attr on the fence
+// narrows it to the single prose LINE that diagnoses this failure — but the attr
+// is stripped along with the fence when a skill degrades to prose, so the SAME
+// diagnosis must already live in the prose. We enforce that by falling back to
+// the full prose when no prose line contains the token, never surfacing a bare
+// token the operator would otherwise never see.
+function failHint(d: Directive, prose: string): string {
+  const token = typeof d.attrs['on-fail'] === 'string' ? d.attrs['on-fail'] : undefined;
+  if (token) {
+    const needle = token.toLowerCase();
+    const line = prose
+      .split('\n')
+      .map((l) => l.replace(/^#+\s*/, '').trim())
+      .find((l) => l.length > 0 && l.toLowerCase().includes(needle));
+    if (line) return line;
+  }
+  return prose.trim();
 }
 
 // The nearest `#`-prefixed heading above a fence (the same upward scan proseFor
@@ -578,7 +625,8 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
   const SIDE_EFFECTS = new Set(['restart', 'step', 'wire']);
   const bounce = (d: Directive, reason: string) => {
     blocked = true;
-    res.agentTasks.push({ kind: d.kind, line: d.line, reason, prose: proseFor(md, d.line) });
+    const prose = proseFor(md, d.line);
+    res.agentTasks.push({ kind: d.kind, line: d.line, reason, prose, hint: failHint(d, prose) });
   };
 
   for (const d of directives) {
