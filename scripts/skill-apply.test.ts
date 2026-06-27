@@ -456,6 +456,100 @@ describe('nc:operator', () => {
   });
 });
 
+// nc:operator open:<url> deep-links the operator to the page the steps describe
+// (after rendering, {{vars}} substituted); a bare `gate` flag turns the block into
+// a human BARRIER — a confirm the engine waits on before the following
+// side-effecting directives run. Both are pure polish: a prompter without
+// open/confirm just skips them (headless/programmatic), never a crash.
+const OPEN_SKILL = `# open demo
+
+## Name the bot
+\`\`\`nc:prompt bot
+Bot username?
+\`\`\`
+
+## Open the chat
+Tell the user:
+\`\`\`nc:operator open:https://t.me/{{bot}}
+Open @{{bot}} in Telegram and keep it on screen.
+\`\`\`
+`;
+
+const GATE_BARRIER_SKILL = `# gate barrier demo
+
+## Do the manual portal steps
+Tell the user:
+\`\`\`nc:operator gate open:https://portal.example
+Finish the portal steps, then continue.
+\`\`\`
+
+## Build the package (a side effect that must wait for the human)
+\`\`\`nc:run effect:external
+build-package
+\`\`\`
+`;
+
+describe('nc:operator open + gate', () => {
+  let oroot: string;
+  let oskill: string;
+  beforeEach(() => {
+    oskill = mkdtempSync(join(tmpdir(), 'nc-open-skill-'));
+    oroot = mkdtempSync(join(tmpdir(), 'nc-open-proj-'));
+    writeFileSync(join(oroot, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(oroot, '.env'), '');
+  });
+
+  it('open:<url> calls prompter.open with the substituted URL, after rendering the block', async () => {
+    writeFileSync(join(oskill, 'SKILL.md'), OPEN_SKILL);
+    const order: string[] = [];
+    const prompter: Prompter = {
+      async ask() { return undefined; },
+      tell: () => void order.push('tell'),
+      open: (u) => void order.push(`open:${u}`),
+    };
+    const res = await applySkill(oskill, oroot, { inputs: { bot: 'mybot' }, prompter, exec: () => {} });
+    expect(order).toEqual(['tell', 'open:https://t.me/mybot']); // rendered, THEN opened, {{bot}} substituted
+    expect(res.agentTasks).toEqual([]);
+  });
+
+  it('gate calls prompter.confirm as a barrier BEFORE the next side-effecting directive runs', async () => {
+    writeFileSync(join(oskill, 'SKILL.md'), GATE_BARRIER_SKILL);
+    const events: string[] = [];
+    const prompter: Prompter = {
+      async ask() { return undefined; },
+      tell: () => void events.push('tell'),
+      open: (u) => void events.push(`open:${u}`),
+      async confirm() { events.push('confirm'); return true; },
+    };
+    const exec = (c: string): void => void events.push(`exec:${c}`);
+    await applySkill(oskill, oroot, { inputs: {}, prompter, exec });
+    // the barrier (confirm) fires after the block renders + opens, and BEFORE the build
+    expect(events).toEqual(['tell', 'open:https://portal.example', 'confirm', 'exec:build-package']);
+  });
+
+  it('degrades with a prompter lacking open/confirm — no crash, the block + side effect still run', async () => {
+    writeFileSync(join(oskill, 'SKILL.md'), GATE_BARRIER_SKILL);
+    const cmds: string[] = [];
+    // a minimal prompter: ask only, no tell/open/confirm
+    const prompter: Prompter = { async ask() { return undefined; } };
+    const res = await applySkill(oskill, oroot, { inputs: {}, prompter, exec: (c) => void cmds.push(c) });
+    expect(res.agentTasks).toEqual([]); // gate/open absent ⇒ skipped, not bounced
+    expect(cmds).toContain('build-package'); // the gated side effect still ran (no barrier to wait on)
+  });
+
+  it('an unresolved {{var}} in open:<url> defers the block (degrade, not crash) — nothing opened or rendered', async () => {
+    // open references {{bot}} but no prompt/capture defines it
+    writeFileSync(join(oskill, 'SKILL.md'), '# o\n\nTell the user:\n```nc:operator open:https://t.me/{{bot}}\nOpen the bot.\n```\n');
+    const opened: string[] = [];
+    const told: string[] = [];
+    const prompter: Prompter = { async ask() { return undefined; }, tell: (t) => void told.push(t), open: (u) => void opened.push(u) };
+    const res = await applySkill(oskill, oroot, { inputs: {}, prompter, exec: () => {} });
+    expect(opened).toEqual([]); // never opened — the URL var was unresolved
+    expect(told).toEqual([]); // and never rendered (deferred before the push/tell)
+    expect(res.deferred.some((d) => /unresolved \{\{bot\}\}/.test(d))).toBe(true);
+  });
+});
+
 // Programmatic apply: pass every prompt answer via `inputs` and the whole skill
 // runs through with no prompter and no human interaction.
 const PROGRAMMATIC_SKILL = `# programmatic demo

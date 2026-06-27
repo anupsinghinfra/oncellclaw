@@ -53,8 +53,14 @@ export interface Prompter {
   // (headless rebuild), so the instructions are simply skipped.
   tell?(text: string): Promise<void> | void;
   // Ask the operator a yes/no question (used by the driver's reuse-existing
-  // offer). Absent ⇒ no operator present, so the offer is skipped.
+  // offer and an `nc:operator gate` barrier). Absent ⇒ no operator present, so
+  // the offer / barrier is skipped (headless/programmatic apply proceeds).
   confirm?(message: string): Promise<boolean>;
+  // Open a URL in the operator's browser — an `nc:operator open:<url>` deep-link
+  // (the Azure portal, a Telegram bot chat, a Discord invite). Best-effort and
+  // trailing-optional: absent ⇒ no display (headless/programmatic), so the open
+  // is skipped — the URL is already in the rendered operator text for copy-paste.
+  open?(url: string): Promise<void> | void;
 }
 
 // The result of a streaming `nc:run effect:step`: the spawn's exit success plus
@@ -713,8 +719,21 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
         // interactive prompter is present. {{vars}} render so a resolved value
         // can be shown (throws → deferred if a referenced var is unset).
         const text = substitute(d.body.join('\n'), vars);
+        // open:<url> deep-links the operator to the page the steps describe.
+        // Resolve it up front so an unresolved {{var}} in the URL defers the
+        // whole block (consistent with the body) instead of half-rendering it.
+        const openTarget = typeof d.attrs.open === 'string' ? substitute(d.attrs.open, vars) : undefined;
         res.operatorMessages.push(text);
         await opts.prompter?.tell?.(text);
+        // After rendering, open the deep-link (best-effort; absent method ⇒ the
+        // URL is already in the rendered text for copy-paste — never a crash).
+        if (openTarget !== undefined) await opts.prompter?.open?.(openTarget);
+        // A bare `gate` flag turns the block into a human BARRIER: wait on a
+        // confirm before the following side-effecting directives run (a manifest
+        // build, a restart), so a manual UI step (the Azure app must exist) is
+        // finished first. Pure polish — a stripped fence leaves the same prose,
+        // and a prompter without confirm (headless/programmatic) just proceeds.
+        if (d.args.includes('gate')) await opts.prompter?.confirm?.('Done with the steps above? Continue when you are ready.');
         res.applied.push(`operator: ${(d.body[0] ?? '').slice(0, 50)}`);
         continue;
       }

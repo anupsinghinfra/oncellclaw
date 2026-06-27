@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runSkill, hostExec, hostExecStream, promptValidator, type RunSkillOptions } from './skill-driver.js';
+import { runSkill, hostExec, hostExecStream, promptValidator, clackPrompter, type RunSkillOptions } from './skill-driver.js';
 import { fullyApplied, type Prompter, type StepReporter } from '../../scripts/skill-apply.js';
 
 // A small SKILL.md exercising the three things the driver wires: an operator
@@ -184,6 +184,13 @@ describe('thin skill driver', () => {
     expect(confirmed.some((m) => /IMESSAGE_SERVER_URL/.test(m))).toBe(true); // the reuse: link surfaced the offer
     expect(asked).not.toContain('server_url'); // accepted → never re-prompted
     expect(cmds).toContain('bash configure.sh "https://photon.example.com"'); // reused value flowed downstream
+  });
+
+  it('clackPrompter exposes an open() for nc:operator open:<url> deep-links', () => {
+    // The wiring exists (mapped to setup/lib/browser.ts openUrl); not invoked here
+    // since a real open() would launch the OS browser. Engine-level open/gate
+    // behavior is covered with fake prompters in scripts/skill-apply.test.ts.
+    expect(typeof clackPrompter().open).toBe('function');
   });
 
   it('promptValidator honors flags:i (case-insensitive) and min (rejects short); error overrides the message', () => {

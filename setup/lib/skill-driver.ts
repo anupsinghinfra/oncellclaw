@@ -15,6 +15,8 @@ import * as p from '@clack/prompts';
 
 import { applySkill, fullyApplied, type ApplyResult, type Prompter, type PromptOpts, type StepOutcome, type StepReporter } from '../../scripts/skill-apply.js';
 import { parseDirectives, promptVar } from '../../scripts/skill-directives.js';
+import { isHeadless } from '../platform.js';
+import { openUrl } from './browser.js';
 import { startSpinner } from './runner.js';
 
 /**
@@ -65,6 +67,13 @@ export function clackPrompter(): Prompter {
     async confirm(message) {
       const ans = await p.confirm({ message });
       return ans === true; // cancel ⇒ false
+    },
+    open(url) {
+      // Best-effort browser open for an `nc:operator open:<url>` deep-link.
+      // Headless-safe: on a machine with no display we skip the open entirely —
+      // the URL is already surfaced in the operator note for copy-paste.
+      if (isHeadless()) return;
+      openUrl(url);
     },
   };
 }

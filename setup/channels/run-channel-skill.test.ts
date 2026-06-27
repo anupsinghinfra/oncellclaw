@@ -60,22 +60,32 @@ describe('runChannelSkill adapter (Option A)', () => {
   // Teams' platform_id only exists after the first inbound, so its SKILL.md
   // installs + hands off and runChannelSkill is called with deferWire — it must
   // run the skill but never reach the shared wire.
-  it('deferWire (Teams): runs install + handoff, never reaches the shared wire', async () => {
+  it('deferWire (Teams): runs install + handoff with gate barriers + portal open, never reaches the shared wire', async () => {
     const root = mkdtempSync(join(tmpdir(), 'rcs-teams-'));
     mkdirSync(join(root, 'src/channels'), { recursive: true });
     writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
     writeFileSync(join(root, '.env'), '');
     writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
 
-    const cmds: string[] = [];
+    const log: string[] = [];
+    const opened: string[] = [];
     const wired: unknown[] = [];
 
     await runChannelSkill('teams', 'Acme Corp', {
       projectRoot: root,
-      exec: (c) => void cmds.push(c),
+      exec: (c) => void log.push(`exec:${c}`),
       resolveRemote: () => 'origin',
       reuse: false,
       deferWire: true,
+      // A stub prompter so the `nc:operator gate` barriers don't reach a real clack
+      // confirm (which would hang in CI) and the portal open: doesn't launch a real
+      // browser — while still asserting both fire, and the gate fires first.
+      prompter: {
+        async ask() { return undefined; },
+        tell() {},
+        async confirm() { log.push('gate'); return true; },
+        open: (u) => void opened.push(u),
+      },
       // a MultiTenant app, so the SingleTenant-guarded app_tenant_id prompt is skipped
       inputs: {
         public_url: 'https://acme.example',
@@ -90,7 +100,14 @@ describe('runChannelSkill adapter (Option A)', () => {
     });
 
     // install + manifest ran…
-    expect(cmds.some((c) => c.includes('teams-manifest-build'))).toBe(true);
+    expect(log.some((c) => c.includes('teams-manifest-build'))).toBe(true);
+    // …the Azure portal was opened for the operator…
+    expect(opened.some((u) => /portal\.azure\.com/.test(u))).toBe(true);
+    // …a gate barrier fired BEFORE the manifest build (the manifest-before-the-app hazard fix)…
+    const firstGate = log.indexOf('gate');
+    const manifestAt = log.findIndex((c) => c.includes('teams-manifest-build'));
+    expect(firstGate).toBeGreaterThanOrEqual(0);
+    expect(firstGate).toBeLessThan(manifestAt);
     // …but the shared wire was never reached (no owner_handle/platform_id needed)
     expect(wired).toHaveLength(0);
   });

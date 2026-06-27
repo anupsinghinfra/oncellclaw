@@ -285,3 +285,36 @@ describe('prompt PromptOpts attrs (flags/min/normalize/error/reuse)', () => {
     expect(validate(parseDirectives(md)).some((p) => /is not a valid regex/.test(p.message))).toBe(true);
   });
 });
+
+describe('operator open: + gate attrs', () => {
+  it('parses open:<url> into attrs and the bare gate flag into args', () => {
+    const md = ['```nc:prompt bot', 'Bot?', '```', '```nc:operator gate open:https://t.me/{{bot}}', 'Open @{{bot}}.', '```'].join('\n');
+    const ds = parseDirectives(md);
+    const op = ds.find((d) => d.kind === 'operator')!;
+    expect(op.attrs.open).toBe('https://t.me/{{bot}}'); // the full URL (first colon splits the key, not the scheme)
+    expect(op.args).toContain('gate'); // bare flag → args, not attrs
+    expect(validate(ds)).toEqual([]); // {{bot}} defined by the earlier prompt → lints clean
+  });
+
+  it('lints clean when an open: URL interpolates an earlier-captured var (the Discord invite case)', () => {
+    const md = [
+      '```nc:run capture:application_id=.id effect:fetch',
+      'curl -sf https://example/app',
+      '```',
+      '```nc:operator open:https://discord.com/oauth2/authorize?client_id={{application_id}}&scope=bot',
+      'Open the invite link.',
+      '```',
+    ].join('\n');
+    expect(validate(parseDirectives(md))).toEqual([]);
+  });
+
+  it('flags an operator open: URL referencing an undefined var', () => {
+    const md = ['```nc:operator open:https://x/{{nope}}', 'Open it.', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /open:.*references \{\{nope\}\}/.test(p.message))).toBe(true);
+  });
+
+  it('flags an empty operator open:', () => {
+    const md = ['```nc:operator open:', 'Do a thing.', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /operator open: requires a URL/.test(p.message))).toBe(true);
+  });
+});

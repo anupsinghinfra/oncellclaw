@@ -58,11 +58,19 @@
 //        reuse:<ENV_KEY> lets a re-run offer an existing .env value for a credential
 //        a HELPER SCRIPT owns (written by effect:external, not nc:env-set) — the
 //        masked reuse offer the env-set→ENV_KEY inference can't otherwise see.
-//   operator                body: instructions for the human operator  output-only
+//   operator [gate] [open:<url>]  body: instructions for the human operator  output-only
 //        The SKILL.md is addressed to the coding agent; `operator` delineates the
 //        parts meant for the HUMAN (e.g. clicking through the Slack UI). Lead it
 //        with agent-facing prose like "Tell the user:" so the agent relays it;
 //        the engine renders the body to the operator ({{vars}} substituted in).
+//        open:<url> additionally opens that URL in the operator's browser after
+//        rendering — a deep-link to the page the steps describe ({{vars}} render,
+//        e.g. a captured application_id in a Discord invite). gate turns the block
+//        into a human BARRIER: after rendering, the engine waits on a confirm
+//        before the following side-effecting directives run (a manifest build, a
+//        restart), so a manual UI step is finished first. Both are pure polish —
+//        a stripped fence leaves the same prose, and a prompter without
+//        open/confirm (headless/programmatic) simply skips them.
 //   env-set                 body: `KEY=value` ({{var}} allowed)       set-if-absent
 //   env-sync                (no body) `.env` → data/env/env           idempotent copy
 //   json-merge into:<file> key:<field>  body: a JSON object          push-if-absent
@@ -266,12 +274,20 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
       }
       case 'operator':
         if (d.body.length === 0) flag(d, 'operator requires instructions for the human in its body');
+        if (typeof d.attrs.open === 'string' && d.attrs.open.trim() === '') flag(d, 'operator open: requires a URL');
         break;
     }
     // A consumer can only reference a variable an earlier prompt captured, or an
     // earlier `run capture:<var>` bound from a command's output.
     for (const ref of referencedVars(d)) {
       if (!defined.has(ref)) flag(d, `references {{${ref}}} but no earlier nc:prompt or nc:run capture defined it`);
+    }
+    // An operator's open:<url> may interpolate earlier-defined {{vars}} (e.g. a
+    // captured application_id in a Discord invite link); validate them like body refs.
+    if (d.kind === 'operator' && typeof d.attrs.open === 'string') {
+      for (const m of d.attrs.open.matchAll(VAR_REF)) {
+        if (!defined.has(m[1])) flag(d, `open:${d.attrs.open} references {{${m[1]}}} but no earlier nc:prompt or nc:run capture defined it`);
+      }
     }
     // A `when:<var>=<value>` guard references an earlier-defined var by bare name.
     if (typeof d.attrs.when === 'string') {
