@@ -13,8 +13,9 @@ import { join } from 'node:path';
 
 import * as p from '@clack/prompts';
 
-import { applySkill, fullyApplied, type ApplyResult, type Prompter, type StepOutcome } from '../../scripts/skill-apply.js';
+import { applySkill, fullyApplied, type ApplyResult, type Prompter, type StepOutcome, type StepReporter } from '../../scripts/skill-apply.js';
 import { parseDirectives } from '../../scripts/skill-directives.js';
+import { startSpinner } from './runner.js';
 
 /**
  * Clack-backed human I/O: `ask` collects an `nc:prompt` (password for secrets,
@@ -164,6 +165,31 @@ export function hostExecStream(projectRoot: string): (cmd: string) => Promise<St
     });
 }
 
+/**
+ * The setup driver's per-step spinner, built from runner.ts's `startSpinner`
+ * primitive. The apply engine fires `stepStart`/`stepEnd` around each mutation;
+ * a labelled (non-null) step gets a live clack spinner with elapsed time, and
+ * stepEnd renders it done or failed. Instant/cheap steps carry a null label and
+ * stay silent. Gated on a TTY so piped/CI/test runs stay quiet and unchanged —
+ * matching the engine's "no reporter ⇒ silent" default for non-interactive use.
+ */
+export function spinnerReporter(): StepReporter {
+  if (!process.stdout.isTTY) return { stepStart() {}, stepEnd() {} };
+  let active: ReturnType<typeof startSpinner> | null = null;
+  return {
+    stepStart({ label }) {
+      if (label === null) return; // instant/cheap step — no spinner
+      const base = label.replace(/…+$/, '');
+      active = startSpinner({ running: `${base}…`, done: base, failed: `${base} failed` });
+    },
+    stepEnd({ label, ok }) {
+      if (label === null || !active) return; // never started a spinner for this one
+      active.stop({ ok });
+      active = null;
+    },
+  };
+}
+
 /** Fork-aware registry-branch remote (same resolver setup/channels/slack.ts uses). */
 function channelsRemote(projectRoot: string): () => string {
   return () =>
@@ -190,6 +216,11 @@ export interface RunSkillOptions {
   skipEffects?: string[];
   /** Offer to reuse credentials already in `.env` instead of re-prompting. */
   reuse?: boolean;
+  /**
+   * Per-step spinner reporter. Defaults to a TTY-gated clack spinner
+   * (`spinnerReporter`); pass a fake in tests or a no-op to silence.
+   */
+  reporter?: StepReporter;
 }
 
 /**
@@ -213,6 +244,7 @@ export async function runSkill(skillDir: string, opts: RunSkillOptions = {}): Pr
     execStream: opts.execStream ?? hostExecStream(projectRoot),
     resolveRemote: opts.resolveRemote ?? channelsRemote(projectRoot),
     skipEffects: opts.skipEffects,
+    reporter: opts.reporter ?? spinnerReporter(),
   });
 }
 

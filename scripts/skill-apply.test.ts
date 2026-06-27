@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applySkill, removeSkill, planSkill, fullyApplied, type Prompter } from './skill-apply.js';
+import { applySkill, removeSkill, planSkill, fullyApplied, stepLabel, type Prompter, type StepReporter } from './skill-apply.js';
 import { parseDirectives, validate } from './skill-directives.js';
 
 // A synthetic skill exercising the fs handlers for real (no network), plus one
@@ -680,5 +680,118 @@ describe('run-health gate (a bounce blocks later side effects)', () => {
     // the restart still runs, and nothing bounced
     expect(cmds).toContain('bash restart.sh');
     expect(res.agentTasks).toEqual([]);
+  });
+});
+
+// The apply-lifecycle reporter brackets each real mutation (applyOne) with
+// stepStart/stepEnd so the setup driver can spin on the slow ones. An effectful
+// step (a run, a dep, a branch-fetch copy) carries a human label (the nearest
+// heading); an instant step (a local copy, an env write) carries null so the
+// driver stays silent. The engine fires the events; this asserts shape + order +
+// timing + the failure path, all with no real clack involved.
+const REPORTER_SKILL = `# reporter demo
+
+## Verify the credential
+\`\`\`nc:run effect:fetch
+verify-cred
+\`\`\`
+
+## Store it
+\`\`\`nc:env-set
+DEMO=ok
+\`\`\`
+`;
+
+type RecordedEvent =
+  | { ev: 'start'; kind: string; label: string | null }
+  | { ev: 'end'; kind: string; label: string | null; ok: boolean; durationMs: number; error?: string };
+
+function recordingReporter(): { events: RecordedEvent[]; reporter: StepReporter } {
+  const events: RecordedEvent[] = [];
+  return {
+    events,
+    reporter: {
+      stepStart: (e) => void events.push({ ev: 'start', kind: e.kind, label: e.label }),
+      stepEnd: (e) =>
+        void events.push({ ev: 'end', kind: e.kind, label: e.label, ok: e.ok, durationMs: e.durationMs, error: e.error }),
+    },
+  };
+}
+
+describe('apply-lifecycle reporter (driver spinners)', () => {
+  let rroot: string;
+  let rskill: string;
+  beforeEach(() => {
+    rskill = mkdtempSync(join(tmpdir(), 'nc-rep-skill-'));
+    rroot = mkdtempSync(join(tmpdir(), 'nc-rep-proj-'));
+    writeFileSync(join(rskill, 'SKILL.md'), REPORTER_SKILL);
+    writeFileSync(join(rroot, '.env'), '');
+    writeFileSync(join(rroot, 'package.json'), '{"name":"scratch"}');
+  });
+
+  it('fires stepStart/stepEnd in order; effectful step carries a heading label, instant step null', async () => {
+    const { events, reporter } = recordingReporter();
+    await applySkill(rskill, rroot, { exec: () => {}, reporter });
+
+    // bracketed in document order: the run, then the env-set
+    expect(events.map((e) => `${e.ev}:${e.kind}`)).toEqual([
+      'start:run', 'end:run', 'start:env-set', 'end:env-set',
+    ]);
+
+    // the effectful run: the nearest heading is its spinner label, ok + numeric ms
+    expect(events.find((e) => e.ev === 'start' && e.kind === 'run')?.label).toBe('Verify the credential');
+    const runEnd = events.find((e): e is Extract<RecordedEvent, { ev: 'end' }> => e.ev === 'end' && e.kind === 'run')!;
+    expect(runEnd.ok).toBe(true);
+    expect(typeof runEnd.durationMs).toBe('number');
+    expect(runEnd.durationMs).toBeGreaterThanOrEqual(0);
+
+    // the instant env-set: null label ⇒ no spin
+    expect(events.find((e) => e.ev === 'start' && e.kind === 'env-set')?.label).toBe(null);
+  });
+
+  it('on a failed step, fires stepEnd ok=false with the error — balanced with its start', async () => {
+    const { events, reporter } = recordingReporter();
+    const exec = (c: string): string | void => {
+      if (c === 'verify-cred') throw new Error('401 bad credential');
+    };
+    const res = await applySkill(rskill, rroot, { exec, reporter });
+
+    const runEnd = events.find((e): e is Extract<RecordedEvent, { ev: 'end' }> => e.ev === 'end' && e.kind === 'run')!;
+    expect(runEnd.ok).toBe(false);
+    expect(runEnd.error).toMatch(/401 bad credential/);
+    // every stepStart has a matching stepEnd (the spinner is never left hanging)
+    expect(events.filter((e) => e.ev === 'start')).toHaveLength(events.filter((e) => e.ev === 'end').length);
+    // and the failure still degraded to an agent, not a crash
+    expect(res.agentTasks).toHaveLength(1);
+  });
+
+  it('no reporter ⇒ silent (unchanged) — apply still completes', async () => {
+    const res = await applySkill(rskill, rroot, { exec: () => {} });
+    expect(fullyApplied(res)).toBe(true);
+  });
+});
+
+describe('stepLabel', () => {
+  it('labels effectful kinds from the nearest heading, instant kinds null; label: attr overrides; step is silent', () => {
+    const md = [
+      '# s', '',
+      '## Install deps', '```nc:dep', 'pkg@1.0.0', '```', '',
+      '## Copy a file', '```nc:copy', 'a -> b', '```', '',
+      '## Pull from the branch', '```nc:copy from-branch:channels', 'x -> y', '```', '',
+      '## Link the device', '```nc:run effect:step capture:platform_id=PLATFORM_ID', 'pair', '```', '',
+      '## Wire it', '```nc:run effect:wire label:Connecting', 'ncl wire', '```',
+    ].join('\n');
+    const ds = parseDirectives(md);
+    const nth = (k: string, i = 0) => ds.filter((d) => d.kind === k)[i];
+    expect(stepLabel(nth('dep'), md)).toBe('Install deps');               // heading-derived
+    expect(stepLabel(nth('copy', 0), md)).toBe(null);                     // local copy = instant
+    expect(stepLabel(nth('copy', 1), md)).toBe('Pull from the branch');   // from-branch fetch spins
+    expect(stepLabel(nth('run', 0), md)).toBe(null);                      // effect:step renders its own live output
+    expect(stepLabel(nth('run', 1), md)).toBe('Connecting');             // label: attr overrides the heading
+  });
+
+  it('falls back to a kind/effect default when there is no heading above the fence', () => {
+    const ds = parseDirectives('```nc:run effect:build\npnpm run build\n```\n');
+    expect(stepLabel(ds[0], '```nc:run effect:build\npnpm run build\n```\n')).toBe('Building');
   });
 });

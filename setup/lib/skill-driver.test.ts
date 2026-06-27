@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runSkill, hostExec, hostExecStream, type RunSkillOptions } from './skill-driver.js';
-import { fullyApplied, type Prompter } from '../../scripts/skill-apply.js';
+import { fullyApplied, type Prompter, type StepReporter } from '../../scripts/skill-apply.js';
 
 // A small SKILL.md exercising the three things the driver wires: an operator
 // block (relayed via tell), a secret prompt (asked via ask), and a wire run
@@ -63,6 +63,18 @@ describe('thin skill driver', () => {
     const res = await runSkill(skill, { projectRoot: root, inputs: { token: 'FROM-INPUTS' }, exec: (c) => void ran.push(c) });
     expect(fullyApplied(res)).toBe(true);
     expect(ran).toContain('ncl wire --token FROM-INPUTS');
+  });
+
+  it('threads a step reporter through to the engine — the wire run spins under its heading', async () => {
+    const { root, skill } = scratch();
+    const starts: Array<{ kind: string; label: string | null }> = [];
+    const reporter: StepReporter = {
+      stepStart: (e) => void starts.push({ kind: e.kind, label: e.label }),
+      stepEnd: () => {},
+    };
+    await runSkill(skill, { projectRoot: root, inputs: { token: 'T' }, exec: () => {}, reporter });
+    // the demo SKILL's only mutating step is `nc:run effect:wire` under `## Wire`
+    expect(starts).toEqual([{ kind: 'run', label: 'Wire' }]);
   });
 
   it('hostExec puts the project bin/ on PATH so a bare command resolves to it', () => {

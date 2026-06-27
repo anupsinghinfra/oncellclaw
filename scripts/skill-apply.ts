@@ -48,6 +48,18 @@ export interface StepOutcome {
   fields: Record<string, string>;
 }
 
+// The apply-lifecycle hook the setup driver uses to render a per-step spinner.
+// The engine fires `stepStart` immediately before it mutates (applyOne) and
+// `stepEnd` immediately after — every start has a matching end (including the
+// failure path), so a driver-side spinner is never left hanging. `label` is the
+// human spinner caption from `stepLabel` — null for an instant/cheap step the
+// driver should NOT spin on. Optional everywhere: no reporter ⇒ silent, the
+// headless/programmatic apply is unchanged.
+export interface StepReporter {
+  stepStart(e: { kind: string; line: number; label: string | null }): void;
+  stepEnd(e: { kind: string; line: number; label: string | null; ok: boolean; durationMs: number; error?: string }): void;
+}
+
 export type StepStatus = 'skip' | 'apply' | 'needs-input' | 'agent';
 export interface PlanStep {
   n: number;
@@ -235,6 +247,10 @@ export interface ApplyOptions {
   // generic resolver (env override → first remote that has the branch → origin);
   // setup injects one that reuses setup/lib/channels-remote.sh for exact parity.
   resolveRemote?: (branch: string) => string;
+  // Lifecycle hook the setup driver uses to spin on each slow apply step
+  // (stepStart/stepEnd bracket every applyOne). Absent ⇒ no reporting; the
+  // headless/programmatic apply runs identically. See `stepLabel`.
+  reporter?: StepReporter;
 }
 
 /**
@@ -276,6 +292,50 @@ function proseFor(md: string, fenceLine1: number): string {
   let heading = '';
   for (let h = i; h >= 0; h--) if (lines[h].startsWith('#')) { heading = lines[h]; break; }
   return [heading, ...para].filter(Boolean).join('\n').trim();
+}
+
+// The nearest `#`-prefixed heading above a fence (the same upward scan proseFor
+// uses), stripped of its leading `#`s — a concise caption for a step spinner.
+function headingAbove(md: string, fenceLine1: number): string {
+  const lines = md.split('\n');
+  for (let h = fenceLine1 - 2; h >= 0; h--) {
+    if (lines[h].startsWith('#')) return lines[h].replace(/^#+\s*/, '').trim();
+  }
+  return '';
+}
+
+// The run effects worth a spinner — the slow, operator-waits-on-it ones.
+// `effect:step` is deliberately absent: it renders its own live operator output
+// (a QR card, a pairing code) that a concurrent spinner would clobber, so it
+// stays unlabelled (null) like the instant kinds.
+const SPIN_EFFECTS = new Set(['build', 'test', 'fetch', 'wire', 'restart', 'external']);
+
+/**
+ * The human caption the driver shows on a per-step spinner — or `null` for an
+ * instant/cheap step (a local file copy, an env write, a json-merge) the driver
+ * must NOT spin on. An explicit `label:<word>` attr on the fence wins; otherwise
+ * the caption is the nearest heading above the directive (so the spinner reads
+ * like the section it's in), falling back to a kind/effect default. The attr
+ * lives on the directive fence, so it's stripped along with the fence when a
+ * skill degrades to prose — invisible to the agent, never narrated.
+ */
+export function stepLabel(d: Directive, md: string): string | null {
+  if (typeof d.attrs.label === 'string') return d.attrs.label;
+  const effect = typeof d.attrs.effect === 'string' ? d.attrs.effect : undefined;
+  const spins =
+    d.kind === 'dep' ||
+    (d.kind === 'copy' && typeof d.attrs['from-branch'] === 'string') ||
+    (d.kind === 'run' && (effect === undefined || SPIN_EFFECTS.has(effect)));
+  if (!spins) return null;
+  const heading = headingAbove(md, d.line);
+  if (heading) return heading;
+  if (d.kind === 'dep') return 'Installing dependencies';
+  if (d.kind === 'copy') return 'Fetching files';
+  const byEffect: Record<string, string> = {
+    build: 'Building', test: 'Testing', fetch: 'Fetching',
+    wire: 'Wiring', restart: 'Restarting', external: 'Running',
+  };
+  return (effect && byEffect[effect]) || 'Running';
 }
 
 function substitute(value: string, vars: Map<string, { value: string; secret: boolean }>): string {
@@ -458,6 +518,10 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
   };
 
   for (const d of directives) {
+    // Tracks an in-flight reported step so the catch can always close a matching
+    // stepEnd (start/end stay balanced even when applyOne throws — the driver's
+    // spinner is never orphaned). Set only after stepStart fires.
+    let inFlight: { label: string | null; at: number } | null = null;
     try {
       // A `when:<var>=<value>` guard that isn't met skips the directive entirely —
       // before prompt (so a guarded prompt is skipped, never deferred), operator,
@@ -507,10 +571,24 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
       const st = selfStatus(d, root);
       if (st.status === 'agent') { bounce(d, 'no deterministic handler'); continue; }
       if (st.status === 'skip') { res.skipped.push(`${d.kind}: ${st.detail}`); continue; }
+      // Bracket the real mutation with the lifecycle reporter so the driver can
+      // spin on the slow ones. `label` is null for instant kinds (the driver
+      // stays silent on those). `inFlight` is set only after stepStart fires.
+      const label = stepLabel(d, md);
+      opts.reporter?.stepStart({ kind: d.kind, line: d.line, label });
+      inFlight = { label, at: Date.now() };
       await applyOne(d, { root, skillDir, exec, execStream: opts.execStream, resolveRemote, vars, journal: res.journal });
+      opts.reporter?.stepEnd({ kind: d.kind, line: d.line, label, ok: true, durationMs: Date.now() - inFlight.at });
+      inFlight = null;
       res.applied.push(`${d.kind}: ${st.detail}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      // Close the step as failed before classifying — keeps stepStart/stepEnd
+      // balanced whether the throw becomes a deferred (unresolved input) or a
+      // bounce (a real failure, handled below).
+      if (inFlight) {
+        opts.reporter?.stepEnd({ kind: d.kind, line: d.line, label: inFlight.label, ok: false, durationMs: Date.now() - inFlight.at, error: msg });
+      }
       if (/unresolved \{\{/.test(msg)) res.deferred.push(msg); // blocked on a prompt input
       else bounce(d, `engine could not apply (${msg}) — an agent applies it from the prose`);
     }

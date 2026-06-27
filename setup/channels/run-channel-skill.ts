@@ -101,6 +101,7 @@ export async function runChannelSkill(
     resolveRemote: overrides.resolveRemote,
     inputs: overrides.inputs,
     skipEffects: overrides.skipEffects,
+    reporter: overrides.reporter, // undefined ⇒ runSkill's TTY-gated spinner
     reuse: overrides.reuse ?? true, // offer to reuse credentials already in .env
   });
   if (!fullyApplied(res)) {
