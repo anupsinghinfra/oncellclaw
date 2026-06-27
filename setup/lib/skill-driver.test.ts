@@ -78,4 +78,53 @@ describe('thin skill driver', () => {
     const root = mkdtempSync(join(tmpdir(), 'driver-cap-'));
     expect(String(hostExec(root)('echo D0CHANNEL')).trim()).toBe('D0CHANNEL');
   });
+
+  function reuseScratch(): { root: string; skill: string } {
+    const root = mkdtempSync(join(tmpdir(), 'reuse-'));
+    const skill = mkdtempSync(join(tmpdir(), 'reuse-skill-'));
+    writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(root, '.env'), 'SLACK_BOT_TOKEN=xoxb-existing-token\n');
+    // a skill whose env-set maps bot_token → SLACK_BOT_TOKEN (the reuse linkage)
+    writeFileSync(
+      join(skill, 'SKILL.md'),
+      '# reuse demo\n\n```nc:prompt bot_token secret\nPaste the token.\n```\n```nc:env-set\nSLACK_BOT_TOKEN={{bot_token}}\n```\n```nc:run effect:wire\nuse {{bot_token}}\n```\n',
+    );
+    return { root, skill };
+  }
+
+  it('reuse:true offers an existing .env credential and skips the prompt when accepted', async () => {
+    const { root, skill } = reuseScratch();
+    const asked: string[] = [];
+    const cmds: string[] = [];
+    const prompter: Prompter = {
+      async ask(n) {
+        asked.push(n);
+        return 'NEWLY-PASTED';
+      },
+      async confirm() {
+        return true; // yes, reuse the existing value
+      },
+    };
+    await runSkill(skill, { projectRoot: root, prompter, reuse: true, exec: (c) => void cmds.push(c) });
+    expect(asked).not.toContain('bot_token'); // reused from .env → never prompted
+    expect(cmds).toContain('use xoxb-existing-token'); // the reused value flowed downstream
+  });
+
+  it('reuse: declining keeps the prompt', async () => {
+    const { root, skill } = reuseScratch();
+    const asked: string[] = [];
+    const cmds: string[] = [];
+    const prompter: Prompter = {
+      async ask(n) {
+        asked.push(n);
+        return 'NEWLY-PASTED';
+      },
+      async confirm() {
+        return false; // no, ask me
+      },
+    };
+    await runSkill(skill, { projectRoot: root, prompter, reuse: true, exec: (c) => void cmds.push(c) });
+    expect(asked).toContain('bot_token'); // declined → prompted
+    expect(cmds).toContain('use NEWLY-PASTED');
+  });
 });

@@ -20,6 +20,7 @@ describe('runChannelSkill adapter (Option A)', () => {
     const cmds: string[] = [];
     const exec = (c: string): string | void => {
       cmds.push(c);
+      if (c.includes('auth.test')) return '@bot in Acme\n'; // identity capture
       // the resolve run: conversations.open piped through jq → "slack:<channel>"
       if (c.includes('conversations.open')) return 'slack:D0SLACK\n';
     };

@@ -36,6 +36,9 @@ export interface Prompter {
   // channel message when a coding agent relays). Absent ⇒ no operator present
   // (headless rebuild), so the instructions are simply skipped.
   tell?(text: string): Promise<void> | void;
+  // Ask the operator a yes/no question (used by the driver's reuse-existing
+  // offer). Absent ⇒ no operator present, so the offer is skipped.
+  confirm?(message: string): Promise<boolean>;
 }
 
 export type StepStatus = 'skip' | 'apply' | 'needs-input' | 'agent';

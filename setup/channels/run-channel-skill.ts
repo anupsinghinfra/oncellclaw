@@ -92,12 +92,16 @@ export async function runChannelSkill(
     resolveRemote: overrides.resolveRemote,
     inputs: overrides.inputs,
     skipEffects: overrides.skipEffects,
+    reuse: overrides.reuse ?? true, // offer to reuse credentials already in .env
   });
   if (!fullyApplied(res)) {
     if (res.deferred.length) p.log.warn(`Still needs: ${res.deferred.join(', ')}`);
     for (const t of res.agentTasks) p.log.warn(`Needs an agent (${t.kind}): ${t.reason}`);
     await fail(`${channel}-install`, `Couldn't finish setting up ${channel}.`, 'See logs/setup-steps/ for details, then retry setup.');
   }
+
+  // Identity confirmation captured by the skill (e.g. add-slack's auth.test).
+  if (res.vars.connected_as) p.log.success(`Connected to ${channel} as ${res.vars.connected_as}.`);
 
   const ownerHandle = res.vars.owner_handle;
   const platformId = res.vars.platform_id;

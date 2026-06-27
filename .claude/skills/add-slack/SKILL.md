@@ -121,10 +121,11 @@ starts with `U`.
 Your Slack member ID (Profile → ⋮ → "Copy member ID"; starts with U).
 ```
 
-Confirm the bot token works — `auth.test` should come back `ok`:
+Confirm the bot token works and capture the bot identity — `auth.test` returns the
+bot user and workspace, and fails here if the token is bad:
 
-```nc:run effect:fetch
-curl -sf -X POST https://slack.com/api/auth.test -H "Authorization: Bearer {{bot_token}}" | jq -e .ok >/dev/null
+```nc:run capture:connected_as effect:fetch
+curl -sf -X POST https://slack.com/api/auth.test -H "Authorization: Bearer {{bot_token}}" | jq -er '"@" + .user + " in " + .team'
 ```
 
 Open the DM with `conversations.open` and take the channel id it returns as the
