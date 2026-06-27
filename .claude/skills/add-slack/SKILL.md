@@ -110,18 +110,15 @@ stored, and wait for its CLI socket before wiring:
 bash setup/lib/restart.sh
 ```
 
-## Connect yourself
+## Resolve your DM channel
 
-Wire your own Slack account as the owner so you can talk to the assistant, and
-have it send you a hello. You'll need your Slack member ID: open your profile
-(your avatar, bottom-left), then **⋮** → **Copy member ID** — it starts with `U`.
-Pick which agent should answer you, too (`ncl groups list` shows their folders).
+The agent talks to you in your direct-message channel with the bot. Resolve its
+address so the owner-wiring step can target it. You'll need your Slack member ID:
+open your profile (your avatar, bottom-left), then **⋮** → **Copy member ID** — it
+starts with `U`.
 
-```nc:prompt slack_user_id
+```nc:prompt owner_handle
 Your Slack member ID (Profile → ⋮ → "Copy member ID"; starts with U).
-```
-```nc:prompt agent_folder
-Which agent should answer your Slack DMs? Enter its folder (run `ncl groups list`).
 ```
 
 Confirm the bot token works — `auth.test` should come back `ok`:
@@ -130,33 +127,22 @@ Confirm the bot token works — `auth.test` should come back `ok`:
 curl -sf -X POST https://slack.com/api/auth.test -H "Authorization: Bearer {{bot_token}}" | jq -e .ok >/dev/null
 ```
 
-The conversation address is your direct-message channel with the bot —
-`slack:<channelId>`. Open the DM with `conversations.open` and take the channel
-id it returns (if Slack returns no channel, the bot is missing the `im:write`
-scope — add it and reinstall):
+Open the DM with `conversations.open` and take the channel id it returns as the
+conversation address `slack:<channelId>` (if Slack returns no channel, the bot is
+missing the `im:write` scope — add it and reinstall):
 
-```nc:run capture:dm_channel effect:fetch
-curl -s -X POST https://slack.com/api/conversations.open -H "Authorization: Bearer {{bot_token}}" -H "Content-Type: application/json" -d '{"users":"{{slack_user_id}}"}' | jq -er .channel.id
+```nc:run capture:platform_id effect:fetch
+curl -s -X POST https://slack.com/api/conversations.open -H "Authorization: Bearer {{bot_token}}" -H "Content-Type: application/json" -d '{"users":"{{owner_handle}}"}' | jq -er '"slack:" + .channel.id'
 ```
 
-Register yourself as the owner, wire your DM to the agent so it answers every
-message, and send a greeting:
-
-```nc:run effect:wire
-ncl users create --id slack:{{slack_user_id}} --kind slack --display-name Owner
-ncl roles grant --user slack:{{slack_user_id}} --role owner
-ncl messaging-groups create --channel-type slack --platform-id slack:{{dm_channel}} --is-group 0
-ncl wirings create --channel-type slack --platform-id slack:{{dm_channel}} --agent-group {{agent_folder}} --engage-mode pattern --engage-pattern .
-ncl messaging-groups send --channel-type slack --platform-id slack:{{dm_channel}} --sender-id slack:{{slack_user_id}} --sender Owner --text "Hi — I'm your NanoClaw assistant. Say anything to get started."
-```
-
-The greeting goes out over `chat.postMessage`, which works right away. To receive
-replies, finish the Event Subscriptions and Interactivity steps above so Slack
-can reach the webhook.
+`owner_handle` and `platform_id` are what the owner-wiring step needs. The
+greeting goes out over `chat.postMessage`, which works right away; to receive
+replies, finish the Event Subscriptions and Interactivity steps above.
 
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise wire
+this channel with `/init-first-agent` (or `/manage-channels`).
 
 ## Channel Info
 

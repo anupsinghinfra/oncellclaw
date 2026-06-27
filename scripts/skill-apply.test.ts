@@ -442,4 +442,15 @@ describe('programmatic apply via inputs', () => {
     expect(cmds).not.toContain('bash setup/lib/restart.sh'); // restart owned by the caller → skipped
     expect(res.skipped.some((s) => /run restart: owned by the caller/.test(s))).toBe(true);
   });
+
+  it('exposes resolved non-secret vars (prompt answers + captures) but never secrets', async () => {
+    writeFileSync(
+      join(pskill, 'SKILL.md'),
+      '# vars demo\n\n```nc:prompt token secret\nT?\n```\n```nc:prompt handle\nH?\n```\n```nc:run capture:addr\nresolve {{handle}}\n```\n',
+    );
+    const res = await applySkill(pskill, proot, { inputs: { token: 'SEKRET', handle: 'U9' }, exec: () => 'x:U9\n' });
+    expect(res.vars.handle).toBe('U9'); // plain prompt answer exposed
+    expect(res.vars.addr).toBe('x:U9'); // capture output exposed (a caller reads this)
+    expect(res.vars.token).toBeUndefined(); // secret prompt NOT exposed
+  });
 });

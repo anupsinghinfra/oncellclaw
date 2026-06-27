@@ -191,6 +191,10 @@ export interface ApplyResult {
   deferred: string[]; // prompt vars / blocked consumers with no value yet
   agentTasks: AgentTask[]; // bounced to an agent — NOT the human
   operatorMessages: string[]; // `nc:operator` bodies to relay to the human operator
+  // Non-secret resolved values (prompt answers + `run capture:<var>` outputs) so
+  // a caller can read what the skill produced — e.g. a channel skill resolves
+  // `owner_handle` + `platform_id`, the setup flow reads them to wire the agent.
+  vars: Record<string, string>;
   journal: JournalEntry[];
 }
 
@@ -388,7 +392,7 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
   const exec = opts.exec ?? (() => { throw new Error('no exec provided'); });
   const resolveRemote = opts.resolveRemote ?? ((b: string) => defaultResolveRemote(b, root));
   const vars = new Map<string, { value: string; secret: boolean }>();
-  const res: ApplyResult = { applied: [], skipped: [], deferred: [], agentTasks: [], operatorMessages: [], journal: [] };
+  const res: ApplyResult = { applied: [], skipped: [], deferred: [], agentTasks: [], operatorMessages: [], vars: {}, journal: [] };
   const bounce = (d: Directive, reason: string) => res.agentTasks.push({ kind: d.kind, line: d.line, reason, prose: proseFor(md, d.line) });
 
   for (const d of directives) {
@@ -431,6 +435,8 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
       else bounce(d, `engine could not apply (${msg}) — an agent applies it from the prose`);
     }
   }
+  // Surface the non-secret resolved values for a caller to consume.
+  for (const [k, v] of vars) if (!v.secret) res.vars[k] = v.value;
   return res;
 }
 
