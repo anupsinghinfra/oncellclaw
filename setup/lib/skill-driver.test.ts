@@ -1,10 +1,39 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runSkill, hostExec, hostExecStream, promptValidator, clackPrompter, type RunSkillOptions } from './skill-driver.js';
 import { fullyApplied, type Prompter, type StepReporter } from '../../scripts/skill-apply.js';
+
+// Shared test state for the clack + claude-handoff mocks (hoisted so the vi.mock
+// factories — which run before imports — can close over it). `answers` is the
+// queue each mocked text/password prompt pops from; `handoffSpy` stands in for
+// the interactive Claude handoff; `lastValidate` captures the validate callback
+// the prompter handed clack so we can prove the `?` help-escape is wired in.
+const ce = vi.hoisted(() => ({
+  handoffSpy: vi.fn(async (_ctx: { channel: string; step: string; stepDescription: string }) => true),
+  answers: [] as string[],
+  lastValidate: { fn: undefined as undefined | ((v: string) => string | Error | void | undefined) },
+}));
+
+// Keep isHelpEscape + validateWithHelpEscape real (clackPrompter uses them); only
+// the interactive handoff is replaced with a spy so the test never spawns Claude.
+vi.mock('./claude-handoff.js', async (importActual) => {
+  const actual = await importActual<typeof import('./claude-handoff.js')>();
+  return { ...actual, offerClaudeHandoff: ce.handoffSpy };
+});
+
+// Drive clackPrompter's prompts from the `answers` queue and record the validate
+// callback it passes through, instead of opening a real TTY prompt.
+vi.mock('@clack/prompts', async (importActual) => {
+  const actual = await importActual<typeof import('@clack/prompts')>();
+  const fromQueue = async (o: { validate?: (v: string) => string | Error | void | undefined }): Promise<string> => {
+    ce.lastValidate.fn = o?.validate;
+    return ce.answers.shift() ?? '';
+  };
+  return { ...actual, text: vi.fn(fromQueue), password: vi.fn(fromQueue) };
+});
 
 // A small SKILL.md exercising the three things the driver wires: an operator
 // block (relayed via tell), a secret prompt (asked via ask), and a wire run
@@ -191,6 +220,42 @@ describe('thin skill driver', () => {
     // since a real open() would launch the OS browser. Engine-level open/gate
     // behavior is covered with fake prompters in scripts/skill-apply.test.ts.
     expect(typeof clackPrompter().open).toBe('function');
+  });
+
+  it('clackPrompter intercepts a lone "?" → hands off to Claude with context, then re-asks', async () => {
+    const prevTTY = process.stdout.isTTY;
+    process.stdout.isTTY = true; // the `?` help-escape only fires at a real terminal
+    try {
+      ce.handoffSpy.mockClear();
+      ce.answers = ['?', 'real-token']; // first answer is the help-escape, second is the real value
+      const ans = await clackPrompter({ channel: 'telegram', step: 'paste-token' }).ask(
+        'token',
+        'Paste your token.',
+        false,
+        '^[0-9a-zA-Z-]+$',
+      );
+      expect(ans).toBe('real-token'); // re-asked after the handoff, returns the second answer
+      expect(ce.handoffSpy).toHaveBeenCalledTimes(1);
+      expect(ce.handoffSpy.mock.calls[0][0]).toEqual({
+        channel: 'telegram',
+        step: 'paste-token',
+        stepDescription: 'Paste your token.',
+      });
+      // The validate handed to clack lets `?` through (so the escape reaches us)
+      // but still rejects a value that fails the prompt's own regex.
+      expect(ce.lastValidate.fn?.('?')).toBeUndefined();
+      expect(ce.lastValidate.fn?.('has space')).toBeTruthy();
+    } finally {
+      process.stdout.isTTY = prevTTY;
+    }
+  });
+
+  it('clackPrompter passes a normal answer straight through — no handoff', async () => {
+    ce.handoffSpy.mockClear();
+    ce.answers = ['just-a-token'];
+    const ans = await clackPrompter({ channel: 'telegram', step: 'paste-token' }).ask('token', 'Paste your token.', false);
+    expect(ans).toBe('just-a-token');
+    expect(ce.handoffSpy).not.toHaveBeenCalled();
   });
 
   it('promptValidator honors flags:i (case-insensitive) and min (rejects short); error overrides the message', () => {

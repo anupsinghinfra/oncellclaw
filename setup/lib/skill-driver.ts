@@ -17,6 +17,7 @@ import { applySkill, fullyApplied, type ApplyResult, type Prompter, type PromptO
 import { parseDirectives, promptVar } from '../../scripts/skill-directives.js';
 import { isHeadless } from '../platform.js';
 import { openUrl } from './browser.js';
+import { isHelpEscape, offerClaudeHandoff, validateWithHelpEscape } from './claude-handoff.js';
 import { startSpinner } from './runner.js';
 
 /**
@@ -48,19 +49,59 @@ export function promptValidator(
   };
 }
 
-export function clackPrompter(): Prompter {
+/**
+ * Handoff context for the `?` help-escape (Step 8 / mechanism M3). A lone `?` at
+ * any prompt hands the operator to interactive Claude with this context, then
+ * re-asks the same prompt. Both fields are optional so a bare `clackPrompter()`
+ * (e.g. the standalone CLI below) still works — it just hands off with a generic
+ * `setup` channel and the prompt's own var name as the step.
+ */
+export interface PrompterContext {
+  /** Channel this run is wiring (e.g. 'telegram') — surfaced to the handoff. */
+  channel?: string;
+  /** Short label for the current setup step — surfaced to the handoff. */
+  step?: string;
+}
+
+export function clackPrompter(ctx: PrompterContext = {}): Prompter {
+  // The `?` help-escape is only meaningful at a real terminal: it hands the
+  // operator off to an interactive Claude session (stdio inherited). In a
+  // headless / non-TTY run nobody can type `?` into a clack prompt anyway, and
+  // we must never spawn an interactive child without a TTY — so it's a no-op
+  // there (read at ask-time so a re-run picks up a terminal that appears later).
+  async function ask(
+    varName: string,
+    question: string,
+    secret: boolean,
+    validate?: string,
+    opts?: PromptOpts,
+  ): Promise<string | undefined> {
+    const check = promptValidator(validate, opts);
+    // Wrap the validator so a lone `?` short-circuits format checks and comes
+    // back as a literal "?" instead of being rejected — we intercept it below.
+    const guarded = validateWithHelpEscape(check);
+    // clearOnError wipes a rejected secret so the operator re-pastes cleanly
+    // (a half-pasted token isn't left masked in the field).
+    const ans = secret
+      ? await p.password({ message: question, validate: guarded, clearOnError: true })
+      : await p.text({ message: question, validate: guarded });
+    if (p.isCancel(ans)) return undefined; // cancelled ⇒ defer
+    if (isHelpEscape(ans) && process.stdout.isTTY) {
+      // Operator asked for help: hand off to interactive Claude with this
+      // prompt's context, then re-ask the same prompt. Recursion is operator-
+      // bounded — they decide when to stop typing `?`.
+      await offerClaudeHandoff({
+        channel: ctx.channel ?? 'setup',
+        step: ctx.step ?? varName,
+        stepDescription: question,
+      });
+      return ask(varName, question, secret, validate, opts);
+    }
+    const v = String(ans).trim();
+    return v.length ? v : undefined;
+  }
   return {
-    async ask(_varName, question, secret, validate, opts) {
-      const check = promptValidator(validate, opts);
-      // clearOnError wipes a rejected secret so the operator re-pastes cleanly
-      // (a half-pasted token isn't left masked in the field).
-      const ans = secret
-        ? await p.password({ message: question, validate: check, clearOnError: true })
-        : await p.text({ message: question, validate: check });
-      if (p.isCancel(ans)) return undefined; // cancelled ⇒ defer
-      const v = String(ans).trim();
-      return v.length ? v : undefined;
-    },
+    ask,
     tell(text) {
       p.note(text, 'Do this');
     },
@@ -263,6 +304,14 @@ export interface RunSkillOptions {
    * (`spinnerReporter`); pass a fake in tests or a no-op to silence.
    */
   reporter?: StepReporter;
+  /**
+   * Handoff context for the `?` help-escape (Step 8 / mechanism M3), threaded
+   * into the default `clackPrompter`. A lone `?` at any prompt hands the operator
+   * off to interactive Claude with this `channel` + `step` label, then re-asks.
+   * Ignored when an explicit `prompter` is injected (the injector owns its I/O).
+   */
+  channel?: string;
+  step?: string;
 }
 
 /**
@@ -272,7 +321,7 @@ export interface RunSkillOptions {
  */
 export async function runSkill(skillDir: string, opts: RunSkillOptions = {}): Promise<ApplyResult> {
   const projectRoot = opts.projectRoot ?? process.cwd();
-  const prompter = opts.prompter ?? clackPrompter();
+  const prompter = opts.prompter ?? clackPrompter({ channel: opts.channel, step: opts.step });
   let inputs = opts.inputs;
   // Offer to reuse credentials already in .env before the engine prompts for them.
   if (opts.reuse && prompter.confirm) {

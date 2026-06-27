@@ -106,6 +106,10 @@ export async function runChannelSkill(
     skipEffects: overrides.skipEffects,
     reporter: overrides.reporter, // undefined ⇒ runSkill's TTY-gated spinner
     reuse: overrides.reuse ?? true, // offer to reuse credentials already in .env
+    // Handoff context for the `?` help-escape: a lone `?` at any of this skill's
+    // prompts hands the operator off to interactive Claude scoped to this channel.
+    channel: overrides.channel ?? channel,
+    step: overrides.step ?? `${channel}-install`,
   });
   if (!fullyApplied(res)) {
     if (res.deferred.length) p.log.warn(`Still needs: ${res.deferred.join(', ')}`);
