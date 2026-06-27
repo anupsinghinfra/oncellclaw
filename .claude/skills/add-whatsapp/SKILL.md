@@ -5,216 +5,197 @@ description: Add WhatsApp channel via native Baileys adapter. Direct connection 
 
 # Add WhatsApp Channel
 
-Adds WhatsApp support via the native Baileys adapter (no Chat SDK bridge).
+Adds WhatsApp support via the native Baileys adapter — a direct WhatsApp Web
+connection, no Chat SDK bridge. NanoClaw doesn't ship channels in trunk — this
+skill copies the WhatsApp adapter in from the `channels` branch.
 
-## Install
+The mechanical steps under **Apply** carry `nc:` directive fences: an agent
+reads the prose and applies them, and a parser can apply them deterministically
+from the same document. Every directive is idempotent, so the whole skill is
+safe to re-run; anything a parser can't apply falls back to the prose beside it.
 
-NanoClaw doesn't ship channels in trunk. This skill copies the native WhatsApp (Baileys) adapter and its `whatsapp-auth` setup step in from the `channels` branch. No Chat SDK bridge.
+## Apply
 
-### Pre-flight (idempotent)
+### 1. Copy the adapter and its registration test
 
-Skip to **Credentials** if all of these are already in place:
+Fetch the `channels` branch and copy the WhatsApp adapter and its registration
+test into `src/channels/` (overwrite — the branch is canonical). The
+`whatsapp-auth` setup step is maintained in trunk, so it is not copied here:
 
-- `src/channels/whatsapp.ts` exists
-- `src/channels/whatsapp-registration.test.ts` exists
-- `src/channels/whatsapp.test.ts` exists
-- `src/channels/index.ts` contains `import './whatsapp.js';`
-- `setup/whatsapp-auth.ts` and `setup/groups.ts` both exist
-- `setup/index.ts`'s `STEPS` map contains both `'whatsapp-auth':` and `groups:`
-- `@whiskeysockets/baileys`, `qrcode`, `pino` are listed in `package.json` dependencies
-- `.claude/skills/add-whatsapp/scripts/wa-qr-browser.ts` exists (ships with this skill)
-
-Otherwise continue. Every step below is safe to re-run.
-
-### 1. Fetch the channels branch
-
-```bash
-git fetch origin channels
+```nc:copy from-branch:channels
+src/channels/whatsapp.ts
+src/channels/whatsapp-registration.test.ts
 ```
 
-### 2. Copy the adapter and setup steps
+### 2. Register the adapter
 
-```bash
-git show origin/channels:src/channels/whatsapp.ts                      > src/channels/whatsapp.ts
-git show origin/channels:src/channels/whatsapp-registration.test.ts    > src/channels/whatsapp-registration.test.ts
-git show origin/channels:src/channels/whatsapp.test.ts                 > src/channels/whatsapp.test.ts
-git show origin/channels:setup/whatsapp-auth.ts                        > setup/whatsapp-auth.ts
-git show origin/channels:setup/groups.ts                               > setup/groups.ts
-```
+Append the self-registration import to the channel barrel (skipped if the line
+is already present). This one line is the skill's only reach-in into core:
 
-### 3. Append the self-registration import
-
-Append to `src/channels/index.ts` (skip if already present):
-
-```typescript
+```nc:append to:src/channels/index.ts
 import './whatsapp.js';
 ```
 
-### 4. Register the setup steps
+### 3. Install the adapter packages
 
-In `setup/index.ts`, add these entries to the `STEPS` map (skip lines already present):
+Pinned to exact versions — the supply-chain policy rejects ranges and `latest`.
+Baileys is the WhatsApp Web client; `qrcode` renders the device-link QR in the
+terminal; `pino` is Baileys' logger:
 
-```typescript
-groups: () => import('./groups.js'),
-'whatsapp-auth': () => import('./whatsapp-auth.js'),
+```nc:dep
+@whiskeysockets/baileys@7.0.0-rc.9
+qrcode@1.5.4
+@types/qrcode@1.5.6
+pino@9.6.0
 ```
 
-### 5. Install the adapter packages (pinned)
+### 4. Build and validate
 
-```bash
-pnpm install @whiskeysockets/baileys@7.0.0-rc.9 qrcode@1.5.4 @types/qrcode@1.5.6 pino@9.6.0
-```
+Build first: it typechecks the adapter against core and proves the dependencies
+are installed. Then run the one integration test.
 
-### 6. Build and validate
-
-```bash
+```nc:run effect:build
 pnpm run build
+```
+```nc:run effect:test
 pnpm exec vitest run src/channels/whatsapp-registration.test.ts
 ```
 
-Both must be clean before proceeding. `whatsapp-registration.test.ts` is the one integration test: it imports the real channel barrel and asserts the registry contains `whatsapp`. It goes red if the `import './whatsapp.js';` line is deleted or drifts, if the barrel fails to evaluate (so the channel genuinely would not register), or if `@whiskeysockets/baileys` isn't installed (the import throws) — so it also implicitly verifies the dependency from step 5.
+`whatsapp-registration.test.ts` imports the real channel barrel and asserts the
+registry contains `whatsapp`. It goes red if the `import './whatsapp.js';` line
+is deleted or drifts, if the barrel fails to evaluate, or if
+`@whiskeysockets/baileys` isn't installed (the import throws) — so it also covers
+the dependency from step 3. End-to-end delivery against a real WhatsApp number is
+verified manually once the service runs.
 
-End-to-end message delivery against a real WhatsApp number is verified manually once the service is running — see Credentials, Wiring, and Troubleshooting.
+## Authenticate
 
-## Credentials
+WhatsApp uses linked-device authentication — no API key, just a one-time pairing
+from your phone. The adapter is installed and registered, but its factory returns
+`null` (and the channel stays dark) until `store/auth/creds.json` exists.
 
-WhatsApp uses linked-device authentication — no API key, just a one-time pairing from your phone.
+Pick how to link the device. `qr` shows a rotating QR you scan with your phone's
+camera; `pairing-code` shows an 8-character code you type into WhatsApp (no camera
+needed, but it needs your phone number):
 
-### Check current state
-
-Check if WhatsApp is already authenticated. If `store/auth/creds.json` exists, skip to "Shared vs dedicated number".
-
-```bash
-test -f store/auth/creds.json && echo "WhatsApp auth exists" || echo "No WhatsApp auth"
+```nc:prompt auth_method validate:^(qr|pairing-code)$
+How do you want to link WhatsApp? Type `qr` to scan a QR code in this terminal, or `pairing-code` to enter a code on your phone (no camera needed).
 ```
 
-### Detect environment
+The pairing-code method needs the number you're linking, the way WhatsApp expects
+it — digits only, country code first, no `+`, spaces, or dashes (the QR method
+skips this entirely):
 
-Check whether the environment is headless (no display server):
-
-```bash
-[[ -z "$DISPLAY" && -z "$WAYLAND_DISPLAY" && "$OSTYPE" != darwin* ]] && echo "IS_HEADLESS=true" || echo "IS_HEADLESS=false"
+```nc:prompt phone validate:^\d{8,15}$ when:auth_method=pairing-code
+Your WhatsApp phone number — digits only, country code first (e.g. 14155551234 for +1 415-555-1234).
 ```
 
-### Ask the user
+Point the user at the right screen before the code appears. For the QR method,
+tell the user:
 
-Use `AskUserQuestion` to collect configuration. **Adapt auth options based on environment:**
-
-If IS_HEADLESS=true AND not WSL → AskUserQuestion: How do you want to authenticate WhatsApp?
-- **Pairing code** (Recommended) - Enter a numeric code on your phone (no camera needed, requires phone number)
-- **QR code in terminal** - Displays QR code in the terminal (can be too small on some displays)
-
-Otherwise (macOS, desktop Linux, or WSL) → AskUserQuestion: How do you want to authenticate WhatsApp?
-- **QR code in browser** (Recommended) - Runs a small local HTTP server that renders the rotating QR as a PNG and auto-opens your default browser
-- **Pairing code** - Enter a numeric code on your phone (no camera needed, requires phone number)
-- **QR code in terminal** - Displays QR code in the terminal (can be too small on some displays)
-
-If they chose pairing code:
-
-AskUserQuestion: What is your phone number? (Digits only — country code followed by your 10-digit number, no + prefix, spaces, or dashes. Example: 14155551234 where 1 is the US country code and 4155551234 is the phone number.)
-
-### Clean previous auth state (if re-authenticating)
-
-```bash
-rm -rf store/auth/
+```nc:operator when:auth_method=qr
+Link WhatsApp by QR:
+1. On your phone, open WhatsApp → Settings → Linked Devices → Link a Device.
+2. A QR code will appear in this terminal below and refresh every ~20 seconds. Point your phone's camera at it to scan.
 ```
 
-### Run WhatsApp authentication
+For the pairing-code method, tell the user:
 
-For QR code in browser (recommended):
-
-```bash
-pnpm exec tsx .claude/skills/add-whatsapp/scripts/wa-qr-browser.ts
+```nc:operator when:auth_method=pairing-code
+Link WhatsApp by pairing code:
+1. On your phone, open WhatsApp → Settings → Linked Devices → Link a Device → tap "Link with phone number instead".
+2. An 8-character code will appear in this terminal below. Enter it on your phone immediately — it expires in about 60 seconds.
 ```
 
-(Bash timeout: 150000ms)
+Now run the linked-device handshake. It streams the live QR (or the pairing-code
+card) to this terminal and, on success, reports the linked WhatsApp number. Run
+the command for the method chosen above — `qr` or `pairing-code`:
 
-The wrapper spawns `setup/index.ts --step whatsapp-auth -- --method qr`, parses each rotating QR from its `WHATSAPP_AUTH_QR` status blocks, and serves the current QR as a PNG on a local HTTP server (default port `8765`, falls back to a free port). Flags: `--clean` (wipes `store/auth/` before spawning) and `--port N`.
-
-Tell the user:
-
-> A browser window will open with a QR code.
->
-> 1. Open WhatsApp > **Settings** > **Linked Devices** > **Link a Device**
-> 2. Scan the QR code in the browser
-> 3. The page will show "Authenticated!" when done
-
-For QR code in terminal:
-
-```bash
+```nc:run effect:step capture:bot_phone=PHONE when:auth_method=qr
 pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr
 ```
-
-(Bash timeout: 150000ms)
-
-The setup driver emits each rotating QR as a `WHATSAPP_AUTH_QR` status block; when run directly (not through `setup:auto`) the raw QR string is printed and your terminal must render it as ASCII. If your terminal can't render it readably, use the browser method above.
-
-Tell the user:
-
-> 1. Open WhatsApp > **Settings** > **Linked Devices** > **Link a Device**
-> 2. Scan the QR code displayed in the terminal
-
-For pairing code:
-
-Tell the user to have WhatsApp open on **Settings > Linked Devices > Link a Device**, ready to tap **"Link with phone number instead"** — the code expires in ~60 seconds and must be entered immediately.
-
-Run the auth process in the background and poll `store/pairing-code.txt` for the code:
-
-```bash
-rm -f store/pairing-code.txt && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone <their-phone-number> > /tmp/wa-auth.log 2>&1 &
+```nc:run effect:step capture:bot_phone=PHONE when:auth_method=pairing-code
+pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone {{phone}}
 ```
 
-Then immediately poll for the code (do NOT wait for the background command to finish):
+If the handshake fails (`logged_out` or a timeout), the code expired — clear
+`store/auth/` and run the step again for a fresh one. See Troubleshooting.
 
-```bash
-for i in $(seq 1 20); do [ -f store/pairing-code.txt ] && cat store/pairing-code.txt && break; sleep 1; done
+## Restart
+
+Restart the service so it loads the WhatsApp adapter and picks up the
+credentials you just linked, and wait for its CLI socket before resolving:
+
+```nc:run effect:restart
+bash setup/lib/restart.sh
 ```
 
-Display the code to the user the moment it appears. Tell them:
+## Resolve your DM channel
 
-> **Enter this code now** — it expires in ~60 seconds.
->
-> 1. Open WhatsApp > **Settings** > **Linked Devices** > **Link a Device**
-> 2. Tap **Link with phone number instead**
-> 3. Enter the code immediately
+The agent talks to you in your WhatsApp chat. Tell the user which number that
+chat happens on — usually the same one they just linked:
 
-After the user enters the code, poll for authentication to complete:
+```nc:operator
+You're linked to WhatsApp as +{{bot_phone}}.
 
-```bash
-for i in $(seq 1 60); do grep -q 'STATUS: authenticated' /tmp/wa-auth.log 2>/dev/null && echo "authenticated" && break; grep -q 'STATUS: failed' /tmp/wa-auth.log 2>/dev/null && echo "failed" && break; sleep 2; done
+- "shared" — you'll message the assistant from this same (personal) WhatsApp number. Replies land in your own "You" / self-chat.
+- "dedicated" — the assistant has its own separate phone/SIM, and you'll message it from a different number.
 ```
 
-**If failed:** logged_out → delete `store/auth/` and re-run. timeout → ask user, offer retry.
+Pick which it is. Most people use `shared`:
 
-### Verify authentication succeeded
-
-```bash
-test -f store/auth/creds.json && echo "Authentication successful" || echo "Authentication failed"
+```nc:prompt number_kind validate:^(shared|dedicated)$
+Is the assistant on a `shared` number (your personal WhatsApp) or a `dedicated` number (a separate line for the assistant)?
 ```
 
-### Shared vs dedicated number
+For a dedicated number, collect the number you'll actually chat from (skipped
+entirely for a shared number):
 
-AskUserQuestion: Is this a shared phone number (personal WhatsApp) or a dedicated number?
-- **Shared number** — your personal WhatsApp (bot prefixes messages with its name)
-- **Dedicated number** — a separate phone/SIM for the assistant
+```nc:prompt chat_phone validate:^\d{8,15}$ when:number_kind=dedicated
+The phone number you'll message the assistant from — digits only, country code first (e.g. 14155551234).
+```
 
-If dedicated, add to `.env`:
+A dedicated number means the assistant owns its own line, so outbound replies
+shouldn't be prefixed with its name. Record that (skipped for a shared number):
 
-```bash
+```nc:env-set when:number_kind=dedicated
 ASSISTANT_HAS_OWN_NUMBER=true
 ```
+```nc:env-sync when:number_kind=dedicated
+```
+
+Resolve the conversation address as the WhatsApp JID for the number you chat
+from — the linked number for a shared account, or the dedicated number you just
+gave. Run the one matching the choice above:
+
+```nc:run capture:platform_id effect:fetch when:number_kind=shared
+echo "{{bot_phone}}@s.whatsapp.net"
+```
+```nc:run capture:platform_id effect:fetch when:number_kind=dedicated
+echo "{{chat_phone}}@s.whatsapp.net"
+```
+
+For WhatsApp, your owner handle is that same JID:
+
+```nc:run capture:owner_handle effect:fetch
+echo "{{platform_id}}"
+```
+
+`owner_handle` and `platform_id` are what the owner-wiring step needs. The
+greeting goes out over your WhatsApp chat as soon as the service reconnects with
+the linked credentials.
 
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now.
-
-Otherwise, run `/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise wire
+this channel with `/init-first-agent` (or `/manage-channels`).
 
 ## Channel Info
 
 - **type**: `whatsapp`
 - **terminology**: WhatsApp calls them "groups" and "chats." A "chat" is a 1:1 DM; a "group" has multiple members.
-- **how-to-find-id**: DMs use `<phone>@s.whatsapp.net` (e.g. `14155551234@s.whatsapp.net`). Groups use `<id>@g.us`. To find your number: `node -e "const c=JSON.parse(require('fs').readFileSync('store/auth/creds.json','utf-8'));console.log(c.me?.id?.split(':')[0]+'@s.whatsapp.net')"`. Groups are auto-discovered — check `pnpm exec tsx scripts/q.ts data/v2.db "SELECT platform_id, name FROM messaging_groups WHERE channel_type='whatsapp' AND is_group=1"`.
+- **platform-id-format**: DMs use `<phone>@s.whatsapp.net` (e.g. `14155551234@s.whatsapp.net`). Groups use `<id>@g.us`. Native adapter — the JID is the platform ID as-is, no `whatsapp:` prefix.
+- **how-to-find-id**: To find your linked number after auth: `node -e "const c=JSON.parse(require('fs').readFileSync('store/auth/creds.json','utf-8'));console.log(c.me?.id?.split(':')[0].split('@')[0]+'@s.whatsapp.net')"`. Groups are auto-discovered — check `pnpm exec tsx scripts/q.ts data/v2.db "SELECT platform_id, name FROM messaging_groups WHERE channel_type='whatsapp' AND is_group=1"`.
 - **supports-threads**: no
 - **typical-use**: Interactive chat — direct messages or small groups
 - **default-isolation**: Same agent group if you're the only participant across multiple chats. Separate agent group if different people are in different groups.
@@ -228,39 +209,35 @@ Otherwise, run `/manage-channels` to wire this channel to an agent group.
 - Typing indicators — composing presence updates
 - Credential requests — text fallback (WhatsApp has no modal support)
 
-Not supported (WhatsApp linked device limitation): edit messages, delete messages.
+Not supported (WhatsApp linked-device limitation): edit messages, delete messages.
 
 ## Troubleshooting
 
-### QR code expired
+### QR code or pairing code expired
 
-QR codes expire after ~60 seconds. The browser wrapper rotates automatically as long as it's running; if it was stopped, re-run with `--clean`:
+Codes expire after ~60 seconds. The QR rotates automatically while the auth step
+is running; if the step exited, clear the auth state and re-run it:
 
 ```bash
-pnpm exec tsx .claude/skills/add-whatsapp/scripts/wa-qr-browser.ts --clean
+rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr
 ```
 
-### Pairing code not working
-
-Codes expire in ~60 seconds. Delete auth and retry:
+For pairing code, ensure digits only (no `+`), the phone has internet, and
+WhatsApp is updated:
 
 ```bash
 rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone <phone>
 ```
 
-Ensure: digits only (no `+`), phone has internet, WhatsApp is updated.
-
-WhatsApp's pairing-code flow occasionally rejects valid codes with "Couldn't link device — An error happened. Please try again." This is a server-side rejection unrelated to the code itself; we've seen it happen twice in a row on fresh dedicated numbers. If you hit it more than once, switch to QR-browser auth — it has a noticeably higher success rate:
-
-```bash
-pnpm exec tsx .claude/skills/add-whatsapp/scripts/wa-qr-browser.ts --clean
-```
+WhatsApp's pairing-code flow occasionally rejects valid codes with "Couldn't link
+device." This is a server-side rejection unrelated to the code itself. If you hit
+it more than once, switch to the QR method — it has a noticeably higher success
+rate.
 
 ### "waiting for this message" on reactions
 
-Signal sessions corrupted from rapid restarts. Clear sessions.
-
-Run from your NanoClaw project root:
+WhatsApp sessions corrupted from rapid restarts. Clear sessions, then restart the
+service. Run from your NanoClaw project root:
 
 ```bash
 source setup/lib/install-slug.sh
@@ -278,4 +255,5 @@ systemctl --user start $(systemd_unit)
 
 ### "conflict" disconnection
 
-Two instances connected with same credentials. Ensure only one NanoClaw process is running.
+Two instances connected with the same credentials. Ensure only one NanoClaw
+process is running.

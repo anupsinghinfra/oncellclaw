@@ -55,6 +55,37 @@ function intentToString(intent: PairingIntent): string {
   return `${intent.kind}:${intent.folder}`;
 }
 
+/**
+ * Render the pairing code and live feedback as PLAIN stdout lines.
+ *
+ * The Option A driver's streaming exec (setup/lib/skill-driver.ts
+ * `hostExecStream`) CONSUMES the `=== NANOCLAW SETUP: … ===` status blocks (it
+ * does not show them) and tees every OTHER stdout line straight to the
+ * operator's terminal. So the human-facing code card has to be printed as plain
+ * lines here — the bespoke setup/channels/telegram.ts used to render these from
+ * the blocks, and that rendering now lives in the step itself. The structured
+ * blocks are still emitted alongside for the agent-driven callers
+ * (/manage-channels, /init-first-agent) that parse them.
+ */
+function printCodeCard(code: string, reason: 'initial' | 'regenerated'): void {
+  const spaced = code.split('').join('   ');
+  console.log('');
+  console.log(
+    reason === 'initial'
+      ? 'Your pairing code is ready.'
+      : 'That code was used up — here is a fresh one.',
+  );
+  console.log('');
+  console.log(`    ${spaced}`);
+  console.log('');
+  console.log('Send these 4 digits to your bot from Telegram.');
+  console.log('Waiting for you to send the code…');
+}
+
+function printAttempt(candidate: string): void {
+  console.log(`Got "${candidate}", which doesn't match — waiting for the correct code…`);
+}
+
 export async function run(args: string[]): Promise<void> {
   const intent = parseArgs(args);
 
@@ -67,6 +98,7 @@ export async function run(args: string[]): Promise<void> {
 
   const MAX_REGENERATIONS = 5;
   let record = await createPairing(intent);
+  printCodeCard(record.code, 'initial');
   emitStatus('PAIR_TELEGRAM_CODE', {
     CODE: record.code,
     REASON: 'initial',
@@ -76,18 +108,25 @@ export async function run(args: string[]): Promise<void> {
     try {
       const consumed = await waitForPairing(record.code, {
         onAttempt: (a) => {
+          printAttempt(a.candidate);
           emitStatus('PAIR_TELEGRAM_ATTEMPT', {
             CANDIDATE: a.candidate,
           });
         },
       });
 
+      console.log('\nTelegram paired.');
       emitStatus('PAIR_TELEGRAM', {
         STATUS: 'success',
         CODE: record.code,
         INTENT: intentToString(consumed.intent),
         PLATFORM_ID: consumed.consumed!.platformId,
         IS_GROUP: consumed.consumed!.isGroup,
+        // Bare Telegram user id (no prefix). The Option A driver captures this as
+        // `owner_handle`, and run-channel-skill composes `telegram:<owner_handle>`
+        // — byte-identical to the legacy PAIRED_USER_ID below. PAIRED_USER_ID
+        // stays for the agent-driven callers that read it directly.
+        ADMIN_USER_ID: consumed.consumed!.adminUserId ?? '',
         PAIRED_USER_ID: consumed.consumed!.adminUserId
           ? `telegram:${consumed.consumed!.adminUserId}`
           : '',
@@ -98,6 +137,7 @@ export async function run(args: string[]): Promise<void> {
       const invalidated = /invalidated by wrong code/.test(message);
       if (invalidated && regen < MAX_REGENERATIONS) {
         record = await createPairing(intent);
+        printCodeCard(record.code, 'regenerated');
         emitStatus('PAIR_TELEGRAM_CODE', {
           CODE: record.code,
           REASON: 'regenerated',

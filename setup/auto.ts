@@ -30,12 +30,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import { BACK_TO_CHANNEL_SELECTION } from './lib/back-nav.js';
-import { runIMessageChannel } from './channels/imessage.js';
-import { runSignalChannel } from './channels/signal.js';
 import { runChannelSkill } from './channels/run-channel-skill.js';
-import { runTeamsChannel } from './channels/teams.js';
-import { runTelegramChannel } from './channels/telegram.js';
-import { runWhatsAppChannel } from './channels/whatsapp.js';
 import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
 import { getSetupProvider, listSetupProviders } from './providers/registry.js';
 import { applyProviderSkill } from './providers/install.js';
@@ -557,23 +552,24 @@ async function main(): Promise<void> {
         await resolveDisplayName();
       }
       let result: void | typeof BACK_TO_CHANNEL_SELECTION;
+      // Every channel now runs through the SKILL.md-driven flow — the whole
+      // connect+wire procedure lives in each add-<channel>/SKILL.md. Teams
+      // defers the wire (its platform_id only exists after the first inbound),
+      // so it installs + hands off rather than wiring inline.
       if (channelChoice === 'telegram') {
-        result = await runTelegramChannel(displayName!);
+        result = await runChannelSkill('telegram', displayName!);
       } else if (channelChoice === 'discord') {
         result = await runChannelSkill('discord', displayName!);
       } else if (channelChoice === 'whatsapp') {
-        result = await runWhatsAppChannel(displayName!);
+        result = await runChannelSkill('whatsapp', displayName!);
       } else if (channelChoice === 'signal') {
-        result = await runSignalChannel(displayName!);
+        result = await runChannelSkill('signal', displayName!);
       } else if (channelChoice === 'teams') {
-        result = await runTeamsChannel(displayName!);
+        result = await runChannelSkill('teams', displayName!, { deferWire: true });
       } else if (channelChoice === 'slack') {
-        // First channel migrated to the SKILL.md-driven flow (the whole
-        // connect+wire procedure lives in add-slack/SKILL.md). The other
-        // channels still use their bespoke run<Channel>Channel until converted.
         result = await runChannelSkill('slack', displayName!);
       } else if (channelChoice === 'imessage') {
-        result = await runIMessageChannel(displayName!);
+        result = await runChannelSkill('imessage', displayName!);
       } else if (channelChoice === 'other') {
         result = await askOtherChannelName();
       } else {

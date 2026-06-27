@@ -66,53 +66,88 @@ once the service is running — see Next Steps.
 
 ## Credentials
 
-iMessage runs in one of two modes. Mode choice and the Full Disk Access /
-Photon walkthrough are human and interactive — these steps stay prose, not
-directives.
+iMessage runs in one of two modes:
+
+- **Local (macOS)** — the bot runs on this Mac and talks via the signed-in
+  iMessage account. Reading `chat.db` needs Full Disk Access granted to the
+  Node binary the host runs under.
+- **Remote (Photon API)** — the bot talks to a separate Photon server that owns
+  an iMessage account on another Mac. Use this off macOS, or to keep this Mac's
+  chat history out of the loop.
+
+Mode choice and the Full Disk Access / Photon walkthroughs are human and
+interactive. Pick the mode first (local is the macOS default; remote is the only
+option off macOS), then walk only that mode's setup — the other mode's steps are
+skipped:
+
+```nc:prompt mode validate:^(local|remote)$
+How should iMessage run — `local` (this Mac, needs Full Disk Access) or `remote` (a Photon server)?
+```
 
 ### Local Mode (macOS)
 
-Requirements: macOS with Full Disk Access granted to the Node.js binary.
+Requirements: macOS, with Full Disk Access granted to the Node binary. Without
+it the adapter can't read `chat.db` and inbound messages never arrive.
 
-The Node binary path is buried deep (e.g. `~/.nvm/versions/node/v22.x.x/bin/node`). To make it easy, open the folder in Finder so the user can drag the file into System Settings:
+The Node binary path is buried deep (e.g. `~/.nvm/versions/node/v22.x.x/bin/node`),
+so open its folder in Finder to make the drag-and-drop target obvious. Harmless
+off a desktop (SSH/headless) — it just no-ops:
 
-```bash
-open "$(dirname "$(which node)")"
+```nc:run effect:external when:mode=local
+open "$(dirname "$(which node)")" 2>/dev/null || true
 ```
 
 Then tell the user:
 
-1. Open **System Settings** > **Privacy & Security** > **Full Disk Access**
-2. Click **+**, then drag the `node` file from the Finder window that just opened
-3. Toggle it on
+```nc:operator when:mode=local
+Grant Full Disk Access to Node so iMessage can read your chat history:
+1. Open System Settings > Privacy & Security > Full Disk Access.
+2. Click +, then drag the "node" file from the Finder window that just opened.
+3. Toggle it on, then come back here.
+```
 
-Stop and wait for the user to confirm before continuing.
+Stop and wait for the user to confirm Full Disk Access is granted before
+continuing.
 
 ### Remote Mode (Photon API)
 
-1. Set up a [Photon](https://photon.codes) account
-2. Get your server URL and API key
+Photon is a separate service that owns an iMessage account and exposes it over
+HTTP; NanoClaw talks to it via its API. Tell the user:
+
+```nc:operator when:mode=remote
+Set up remote iMessage via Photon:
+1. Create a Photon server: https://photon.codes
+2. Copy the server URL and API key from your Photon dashboard.
+```
+
+Then collect the two values:
+
+```nc:prompt server_url when:mode=remote validate:^https?://
+Your Photon server URL — starts with http:// or https:// (e.g. https://photon.example.com).
+```
+```nc:prompt api_key secret when:mode=remote
+Your Photon API key — from the Photon dashboard.
+```
 
 ### Configure environment
 
 The two modes use different `.env` keys. Write only the keys for the chosen
-mode, and remove the opposite mode's keys so a stale value can't confuse the
-adapter's factory.
+mode, and strip the opposite mode's keys so a stale value can't confuse the
+adapter's factory. The configure script owns this upsert-and-remove (a plain
+set-if-absent env write can neither replace a stale value nor delete a key):
 
-**Local mode** — add to `.env` (and remove `IMESSAGE_SERVER_URL` /
-`IMESSAGE_API_KEY` if present):
+**Local mode** — writes `IMESSAGE_LOCAL=true` and `IMESSAGE_ENABLED=true`, and
+removes `IMESSAGE_SERVER_URL` / `IMESSAGE_API_KEY` if present:
 
-```bash
-IMESSAGE_ENABLED=true
-IMESSAGE_LOCAL=true
+```nc:run effect:external when:mode=local
+bash setup/channels/imessage-configure.sh local
 ```
 
-**Remote mode** — add to `.env` (and remove `IMESSAGE_ENABLED` if present):
+**Remote mode** — writes `IMESSAGE_LOCAL=false`, `IMESSAGE_SERVER_URL`, and
+`IMESSAGE_API_KEY`, and removes `IMESSAGE_ENABLED` if present:
 
-```bash
-IMESSAGE_LOCAL=false
-IMESSAGE_SERVER_URL=https://your-photon-server.com
-IMESSAGE_API_KEY=your-api-key
+```nc:run effect:external when:mode=remote
+bash setup/channels/imessage-configure.sh remote "{{server_url}}" "{{api_key}}"
 ```
 
 Once the keys for your mode are written, sync `.env` to the container (the host

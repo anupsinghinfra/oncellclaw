@@ -56,4 +56,42 @@ describe('runChannelSkill adapter (Option A)', () => {
     // the adapter no longer emits any ncl wiring itself — that's init-first-agent's job
     expect(cmds.some((c) => c.startsWith('ncl '))).toBe(false);
   });
+
+  // Teams' platform_id only exists after the first inbound, so its SKILL.md
+  // installs + hands off and runChannelSkill is called with deferWire — it must
+  // run the skill but never reach the shared wire.
+  it('deferWire (Teams): runs install + handoff, never reaches the shared wire', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rcs-teams-'));
+    mkdirSync(join(root, 'src/channels'), { recursive: true });
+    writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
+    writeFileSync(join(root, '.env'), '');
+    writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
+
+    const cmds: string[] = [];
+    const wired: unknown[] = [];
+
+    await runChannelSkill('teams', 'Acme Corp', {
+      projectRoot: root,
+      exec: (c) => void cmds.push(c),
+      resolveRemote: () => 'origin',
+      reuse: false,
+      deferWire: true,
+      // a MultiTenant app, so the SingleTenant-guarded app_tenant_id prompt is skipped
+      inputs: {
+        public_url: 'https://acme.example',
+        app_id: '12345678-1234-1234-1234-123456789abc',
+        app_type: 'MultiTenant',
+        app_password: 'sekret',
+      },
+      wire: (a) => {
+        wired.push(a);
+        return true;
+      },
+    });
+
+    // install + manifest ran…
+    expect(cmds.some((c) => c.includes('teams-manifest-build'))).toBe(true);
+    // …but the shared wire was never reached (no owner_handle/platform_id needed)
+    expect(wired).toHaveLength(0);
+  });
 });

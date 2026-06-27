@@ -24,12 +24,9 @@ const CREATION_FILES = [
   'scripts/init-cli-agent.ts',
   'setup/register.ts',
   'setup/cli-agent.ts',
-  'setup/channels/telegram.ts',
-  'setup/channels/run-channel-skill.ts', // slack + discord (and future) now go through the SKILL.md driver
-  'setup/channels/whatsapp.ts',
-  'setup/channels/signal.ts',
-  'setup/channels/imessage.ts',
-  'setup/channels/teams.ts',
+  // Every channel now goes through the SKILL.md driver — the bespoke
+  // setup/channels/<channel>.ts flows have been deleted.
+  'setup/channels/run-channel-skill.ts',
 ];
 
 describe('creation is provider-agnostic', () => {

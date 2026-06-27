@@ -72,6 +72,14 @@ export interface ChannelSkillOverrides extends Partial<RunSkillOptions> {
   role?: OperatorRole;
   /** The shared wire; defaults to init-first-agent. Injectable for tests. */
   wire?: (args: WireArgs) => Promise<boolean> | boolean;
+  /**
+   * Skip the resolve+wire half. For a channel whose platform_id only exists
+   * after the first inbound (Teams): the SKILL.md installs the adapter and ends
+   * with an `nc:operator` handoff telling the operator to DM the bot and finish
+   * wiring later. No owner_handle/platform_id is expected, no agent name/role is
+   * asked, and init-first-agent is not run.
+   */
+  deferWire?: boolean;
 }
 
 export async function runChannelSkill(
@@ -80,8 +88,9 @@ export async function runChannelSkill(
   overrides: ChannelSkillOverrides = {},
 ): Promise<ChannelFlowResult> {
   const projectRoot = overrides.projectRoot ?? process.cwd();
-  const agentName = overrides.agentName ?? (await resolveAgentName());
-  const role = overrides.role ?? (await askOperatorRole(channel));
+  // The agent name + role are wire inputs — skip the prompts when the wire is deferred.
+  const agentName = overrides.deferWire ? '' : overrides.agentName ?? (await resolveAgentName());
+  const role = overrides.deferWire ? undefined : overrides.role ?? (await askOperatorRole(channel));
 
   // Channel-specific: install adapter, collect credentials, resolve the wire
   // inputs. The whole channel-specific procedure lives in the SKILL.md.
@@ -103,6 +112,9 @@ export async function runChannelSkill(
   // Identity confirmation captured by the skill (e.g. add-slack's auth.test).
   if (res.vars.connected_as) p.log.success(`Connected to ${channel} as ${res.vars.connected_as}.`);
 
+  // Deferred wire (Teams): the SKILL's operator handoff owns the rest. Done here.
+  if (overrides.deferWire) return;
+
   const ownerHandle = res.vars.owner_handle;
   const platformId = res.vars.platform_id;
   if (!ownerHandle || !platformId) {
@@ -113,9 +125,10 @@ export async function runChannelSkill(
     );
   }
 
-  // Shared wire — the same procedure for every channel.
+  // Shared wire — the same procedure for every channel. role is defined here:
+  // it's only undefined in deferWire mode, which returned above.
   const wire = overrides.wire ?? initFirstAgent;
-  const ok = await wire({ channel, userId: `${channel}:${ownerHandle}`, platformId, displayName, agentName, role });
+  const ok = await wire({ channel, userId: `${channel}:${ownerHandle}`, platformId, displayName, agentName, role: role! });
   if (!ok) {
     await fail('init-first-agent', `Couldn't finish connecting ${agentName}.`, 'You can retry later with `/init-first-agent`.');
   }
