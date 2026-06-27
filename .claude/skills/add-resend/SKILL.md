@@ -107,16 +107,48 @@ RESEND_WEBHOOK_SECRET={{webhook_secret}}
 ```nc:env-sync
 ```
 
+## Wire
+
+Email is direct-addressable — outbound works with no prior inbound (the bot can
+email first) — so the wiring is the **owner bootstrap**: collect your address,
+wire you as owner of an existing agent group, and have the bot email you a hello.
+It is just collected input fed to `ncl`; a parser runs the same calls a person
+would. These run once the service is up (in `/setup`, after the restart; for a
+standalone `/add-resend`, the service is already running).
+
+```nc:prompt owner_email
+Your email address — I'll wire you as owner and email you a hello.
+```
+```nc:prompt agent_folder
+Which agent should answer your email? Enter its folder (run `ncl groups list`).
+```
+```nc:run effect:wire
+ncl users create --id resend:{{owner_email}} --kind resend --display-name Owner
+ncl roles grant --user resend:{{owner_email}} --role owner
+ncl messaging-groups create --channel-type resend --platform-id resend:{{owner_email}} --is-group 0
+ncl wirings create --channel-type resend --platform-id resend:{{owner_email}} --agent-group {{agent_folder}} --engage-mode pattern --engage-pattern .
+ncl messaging-groups send --channel-type resend --platform-id resend:{{owner_email}} --sender-id resend:{{owner_email}} --sender Owner --text "Hi — I'm your NanoClaw assistant, reachable by email now. Reply to this thread anytime."
+```
+
+Every `ncl … create` is idempotent, so re-running this skill is safe. The
+platform_id is `resend:<your-address>`, prefix included — a bare `you@example.com`
+is stored unprefixed (it contains `@`) and inbound, which arrives as
+`resend:you@example.com`, would never match. The bot's hello lands as a fresh
+email thread; reply to keep the conversation going.
+
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
-`/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. (Answering an
+*open* inbox — anyone who emails in, not just you — is a separate, not-yet-wired
+case: email is plain-message, so the router never auto-creates a group for an
+unknown sender; each correspondent's `resend:<their-address>` must be wired
+explicitly.)
 
 ## Channel Info
 
 - **type**: `resend`
-- **terminology**: Resend handles email. Each email thread (identified by subject/In-Reply-To headers) is a separate conversation. The "from address" is the bot's identity.
-- **how-to-find-id**: The platform ID is the from email address (e.g. `bot@yourdomain.com`). Each sender's email thread becomes its own conversation.
+- **terminology**: Resend handles email. The bot has one fixed sending identity (`RESEND_FROM_ADDRESS`, e.g. `bot@yourdomain.com`); every *external correspondent* the bot emails with is a separate conversation, keyed by *their* address.
+- **how-to-find-id**: The platform ID is the **correspondent's** email address, prefixed — `resend:<their-address>` (e.g. `resend:you@example.com`) — **not** the bot's from-address. The adapter derives it from the reply-to party (`channelIdFromThreadId` returns `resend:<address>`); each distinct email thread from that person (by root `Message-ID`) is a sub-conversation under it.
 - **supports-threads**: no (the adapter sets `supportsThreads: false`; replies still thread via email headers, but the router does not treat threads as the primary conversation unit)
 - **typical-use**: Async communication -- email conversations with longer response expectations
 - **default-isolation**: Same agent group if you want your agent to handle email alongside other channels. Separate agent group if email contains sensitive correspondence that shouldn't be accessible from other channels.

@@ -20,7 +20,10 @@
 //   copy [from-branch:<b>]  body: `PATH` (src==dst) or `SRC -> DST`   overwrite
 //   append to:<file> [at:<marker>]  body: line(s) to add             skip if present
 //   dep [manager:pnpm]      body: `pkg@<exact-semver>` line(s)        reinstall no-op
-//   run [effect:build|test|fetch|external]  body: shell command(s)    re-runnable
+//   run [effect:build|test|fetch|external|wire]  body: shell command(s) re-runnable
+//        effect:wire runs `ncl …` to wire collected input ({{vars}} substituted
+//        in); like other non-external runs it has no undo — the rows it creates
+//        are user runtime data, not reversed on skill remove.
 //   prompt <var> [secret]   body: the question → binds {{var}}        skip if satisfied
 //   env-set                 body: `KEY=value` ({{var}} allowed)       set-if-absent
 //   env-sync                (no body) `.env` → data/env/env           idempotent copy

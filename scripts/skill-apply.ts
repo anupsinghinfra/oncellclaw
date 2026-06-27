@@ -291,7 +291,14 @@ async function applyOne(
     }
     case 'run':
       for (const cmd of d.body) {
-        await exec(cmd);
+        // Interpolate prompted {{vars}} the same way env-set does, so a run can
+        // call `ncl ... {{owner_email}}` to wire from collected input. A command
+        // with no {{...}} (build/test) is returned unchanged; an unresolved var
+        // throws → caught → deferred (the prompt hasn't been answered yet).
+        await exec(substitute(cmd, vars));
+        // Journal the ORIGINAL command (placeholders intact) — never the
+        // substituted form — so a secret interpolated into a run never lands in
+        // the journal (or a remove replay).
         const undo = d.attrs.effect === 'external' && typeof d.attrs.remove === 'string' ? d.attrs.remove : undefined;
         journal.push({ op: 'ran', cmd, undo });
       }

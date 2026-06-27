@@ -61,6 +61,13 @@ export interface ResourceDef {
    */
   scopeField?: string;
   columns: ColumnDef[];
+  /**
+   * Columns forming a natural unique key. When set, generic `create` is
+   * idempotent: if a row already matches on these columns it is returned
+   * instead of re-inserted (so a skill that wires via `ncl ... create` is
+   * safe to re-apply). Omit for resources where every create is distinct.
+   */
+  naturalKey?: string[];
   /** Which standard CRUD operations are enabled. */
   operations: {
     list?: Access;
@@ -153,6 +160,17 @@ function genericCreate(def: ResourceDef) {
       } else if (col.default !== undefined) {
         values[col.name] = col.default;
       }
+    }
+
+    // Idempotent create: if a row already matches the natural key, return it
+    // rather than hitting a UNIQUE violation. Lets a skill re-run `ncl … create`.
+    if (def.naturalKey && def.naturalKey.length > 0) {
+      const where = def.naturalKey.map((c) => `${c} = ?`).join(' AND ');
+      const params = def.naturalKey.map((c) => values[c]);
+      const existing = getDb()
+        .prepare(`SELECT ${visibleColumns(def).join(', ')} FROM ${def.table} WHERE ${where}`)
+        .get(...params);
+      if (existing) return existing;
     }
 
     const colNames = Object.keys(values);

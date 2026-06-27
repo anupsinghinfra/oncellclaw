@@ -1,3 +1,12 @@
+import { randomUUID } from 'crypto';
+
+import { getAgentGroup, getAgentGroupByFolder } from '../../db/agent-groups.js';
+import {
+  createMessagingGroupAgent,
+  getMessagingGroupAgentByPair,
+  getMessagingGroupByPlatform,
+} from '../../db/messaging-groups.js';
+import type { MessagingGroupAgent } from '../../types.js';
 import { registerResource } from '../crud.js';
 
 registerResource({
@@ -66,5 +75,58 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
-  operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
+  // Generic create is replaced by the custom `create` below — it resolves
+  // natural keys (so a skill can wire by channel/platform + agent-group folder
+  // without first looking up synthetic ids) and is idempotent on the pair.
+  operations: { list: 'open', get: 'open', update: 'approval', delete: 'approval' },
+  customOperations: {
+    create: {
+      access: 'approval',
+      description:
+        'Wire a messaging group to an agent group. Identify the messaging group by --messaging-group-id OR --channel-type + --platform-id (+ --instance); identify the agent by --agent-group-id OR --agent-group <folder>. Idempotent on (messaging group, agent group). Engagement flags: --engage-mode, --engage-pattern, --session-mode, --sender-scope, --ignored-message-policy.',
+      handler: async (args) => {
+        // Resolve the messaging group.
+        let mgId = args.messaging_group_id as string | undefined;
+        if (!mgId) {
+          const channelType = args.channel_type as string;
+          const platformId = args.platform_id as string;
+          if (!channelType || !platformId) {
+            throw new Error('provide --messaging-group-id, or --channel-type and --platform-id to resolve it');
+          }
+          const mg = getMessagingGroupByPlatform(channelType, platformId, (args.instance as string) ?? channelType);
+          if (!mg) throw new Error(`no messaging group for ${channelType} ${platformId} — create it first`);
+          mgId = mg.id;
+        }
+
+        // Resolve the agent group (by id or by folder).
+        let agId = args.agent_group_id as string | undefined;
+        if (!agId) {
+          const ref = args.agent_group as string;
+          if (!ref) throw new Error('provide --agent-group-id or --agent-group <folder>');
+          const ag = getAgentGroup(ref) ?? getAgentGroupByFolder(ref);
+          if (!ag) throw new Error(`no agent group "${ref}" (by id or folder)`);
+          agId = ag.id;
+        }
+
+        // Idempotent: a wiring for this pair already exists → return it.
+        const existing = getMessagingGroupAgentByPair(mgId, agId);
+        if (existing) return existing;
+
+        const mga = {
+          id: randomUUID(),
+          messaging_group_id: mgId,
+          agent_group_id: agId,
+          engage_mode: (args.engage_mode as string) ?? 'mention',
+          engage_pattern: (args.engage_pattern as string) ?? null,
+          sender_scope: (args.sender_scope as string) ?? 'all',
+          ignored_message_policy: (args.ignored_message_policy as string) ?? 'drop',
+          session_mode: (args.session_mode as string) ?? 'shared',
+          priority: Number(args.priority ?? 0),
+          created_at: new Date().toISOString(),
+        } as MessagingGroupAgent;
+        createMessagingGroupAgent(mga);
+        return mga;
+      },
+    },
+  },
 });

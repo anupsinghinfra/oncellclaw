@@ -147,24 +147,25 @@ LINEAR_API_KEY=lin_api_...
 
 ## Wiring
 
-Ask the user: **Is this a private or public Linear workspace?**
+Linear is team-routed: one messaging group per team (`linear:<TEAM_KEY>`), and the
+agent answers *every* comment on that team's issues (it can't be @-mentioned). This
+is pre-wired — collect the target agent and wire it with `ncl`, reusing the team key
+you entered above. It is just collected input fed to `ncl`; a parser runs the same
+calls a person would. Runs once the service is up.
 
-- **Private workspace** — use `unknown_sender_policy: 'public'`. Only workspace members can comment.
-- **Public workspace** — use `unknown_sender_policy: 'strict'` and add trusted members (see GitHub skill for member registration example).
-
-Run `/manage-channels` to wire the Linear channel to an agent group, or insert manually:
-
-```sql
--- Create messaging group (one per team)
-INSERT INTO messaging_groups (id, channel_type, platform_id, instance, name, is_group, unknown_sender_policy, created_at)
-VALUES ('mg-linear-eng', 'linear', 'linear:ENG', 'linear', 'Engineering', 1, 'public', datetime('now'));
-
--- Wire to agent group
-INSERT INTO messaging_group_agents (id, messaging_group_id, agent_group_id, trigger_rules, response_scope, session_mode, priority, created_at)
-VALUES ('mga-linear-eng', 'mg-linear-eng', '<your-agent-group-id>', '', 'all', 'per-thread', 10, datetime('now'));
+```nc:prompt agent_folder
+Which agent should answer Linear comments? Enter its folder (run `ncl groups list`).
+```
+```nc:run effect:wire
+ncl messaging-groups create --channel-type linear --platform-id linear:{{linear_team_key}} --is-group 1 --unknown-sender-policy public --name {{linear_team_key}}
+ncl wirings create --channel-type linear --platform-id linear:{{linear_team_key}} --agent-group {{agent_folder}} --engage-mode pattern --engage-pattern . --session-mode per-thread
 ```
 
-The `platform_id` must be `linear:<TEAM_KEY>` matching the `LINEAR_TEAM_KEY` env var. Use `per-thread` session mode so each issue comment thread gets its own agent session.
+Both `create`s are idempotent, so re-running this skill is safe. The `platform_id`
+is `linear:<TEAM_KEY>` — it must match what the adapter emits inbound. There's no
+welcome (Linear has no DM); the agent greets users when it first answers a comment.
+For a public-internet workspace use `--unknown-sender-policy strict` and register
+trusted members (see the GitHub skill). Each issue thread gets its own session.
 
 ## Next Steps
 

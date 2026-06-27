@@ -224,3 +224,64 @@ describe('append at:<marker>', () => {
     expect(lines[lines.length - 1]).toBe('// trailing line'); // at EOF, not before the marker
   });
 });
+
+// nc:run substitutes prompted {{vars}} — this is what lets wiring be "collect
+// input + call ncl", with no nc:wire directive.
+const RUN_WIRE_SKILL = `# run-substitute demo
+
+## Collect input
+\`\`\`nc:prompt owner_email
+Your email.
+\`\`\`
+
+## Wire via ncl
+\`\`\`nc:run effect:wire
+ncl messaging-groups create --channel-type resend --platform-id resend:{{owner_email}} --is-group 0
+ncl messaging-groups send --channel-type resend --platform-id resend:{{owner_email}} --text "hello"
+\`\`\`
+
+## A var-free build run
+\`\`\`nc:run effect:build
+pnpm run build
+\`\`\`
+`;
+
+describe('nc:run variable substitution', () => {
+  let rroot: string;
+  let rskill: string;
+  beforeEach(() => {
+    rskill = mkdtempSync(join(tmpdir(), 'nc-skill-'));
+    rroot = mkdtempSync(join(tmpdir(), 'nc-proj-'));
+    writeFileSync(join(rskill, 'SKILL.md'), RUN_WIRE_SKILL);
+    writeFileSync(join(rroot, 'package.json'), '{"name":"scratch"}');
+  });
+
+  it('interpolates a prompted {{var}} into run commands; var-free runs pass through unchanged', async () => {
+    const { cmds, exec } = recordingExec();
+    await applySkill(rskill, rroot, { prompter: headless({ owner_email: 'you@example.com' }), exec });
+    expect(cmds).toContain(
+      'ncl messaging-groups create --channel-type resend --platform-id resend:you@example.com --is-group 0',
+    );
+    expect(cmds).toContain(
+      'ncl messaging-groups send --channel-type resend --platform-id resend:you@example.com --text "hello"',
+    );
+    expect(cmds).toContain('pnpm run build');
+  });
+
+  it('journals the ORIGINAL command (placeholders intact) — a substituted value never lands in the journal', async () => {
+    const res = await applySkill(rskill, rroot, { prompter: headless({ owner_email: 'you@example.com' }), exec: () => {} });
+    const ran = res.journal.filter((e) => e.op === 'ran').map((e) => 'cmd' in e ? e.cmd : '');
+    expect(ran).toContain(
+      'ncl messaging-groups create --channel-type resend --platform-id resend:{{owner_email}} --is-group 0',
+    );
+    expect(JSON.stringify(res.journal)).not.toContain('you@example.com');
+  });
+
+  it('defers a wiring run when its {{var}} prompt is unanswered (degrade, not crash)', async () => {
+    const { cmds, exec } = recordingExec();
+    const res = await applySkill(rskill, rroot, { prompter: headless({}), exec });
+    expect(res.deferred.some((d) => /unresolved \{\{owner_email\}\}/.test(d))).toBe(true);
+    expect(cmds.some((c) => c.startsWith('ncl'))).toBe(false); // no ncl ran with an unresolved value
+    expect(cmds).toContain('pnpm run build'); // the var-free run still executes
+  });
+});
