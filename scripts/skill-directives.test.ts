@@ -186,3 +186,36 @@ describe('append at:<marker> attribute', () => {
     expect(validate(parseDirectives(md))).toEqual([]);
   });
 });
+
+describe('when: guard + multi-field capture', () => {
+  it('parses when: into attrs and lints a guard whose var an earlier prompt defined', () => {
+    const md = ['```nc:prompt mode', 'local or remote', '```', '```nc:prompt server_url when:mode=remote', 'url', '```'].join('\n');
+    const ds = parseDirectives(md);
+    expect(ds[1].attrs.when).toBe('mode=remote');
+    expect(validate(ds)).toEqual([]);
+  });
+
+  it('flags a when: guard whose var no earlier prompt/capture defined', () => {
+    const probs = validate(parseDirectives(['```nc:env-set when:mode=remote', 'X=1', '```'].join('\n')));
+    expect(probs.some((p) => /when:mode=remote references \{\{mode\}\}/.test(p.message))).toBe(true);
+  });
+
+  it('flags a malformed when: with no =', () => {
+    const md = ['```nc:prompt mode', 'm', '```', '```nc:env-set when:mode', 'X=1', '```'].join('\n');
+    const probs = validate(parseDirectives(md));
+    expect(probs.some((p) => /when:mode must be <var>=<value>/.test(p.message))).toBe(true);
+  });
+
+  it('registers each capture:<var>=<FIELD> as defined so downstream {{vars}} pass lint', () => {
+    const md = [
+      '```nc:run effect:step capture:platform_id=PLATFORM_ID,owner_handle=ADMIN_ID',
+      'run the step',
+      '```',
+      '```nc:env-set',
+      'P={{platform_id}}',
+      'O={{owner_handle}}',
+      '```',
+    ].join('\n');
+    expect(validate(parseDirectives(md))).toEqual([]);
+  });
+});

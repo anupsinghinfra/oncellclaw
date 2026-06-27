@@ -41,6 +41,13 @@ export interface Prompter {
   confirm?(message: string): Promise<boolean>;
 }
 
+// The result of a streaming `nc:run effect:step`: the spawn's exit success plus
+// the terminal status block's fields, which `capture:<var>=<FIELD>` binds.
+export interface StepOutcome {
+  ok: boolean;
+  fields: Record<string, string>;
+}
+
 export type StepStatus = 'skip' | 'apply' | 'needs-input' | 'agent';
 export interface PlanStep {
   n: number;
@@ -214,6 +221,12 @@ export interface ApplyOptions {
   // dep/run/branch-fetch; injectable for tests. Returns the command's stdout so
   // a `run capture:<var>` can bind it into a {{var}} (the twin of `prompt`).
   exec?: (cmd: string) => string | void | Promise<string | void>;
+  // Streaming exec for `nc:run effect:step`: spawns a long-running, operator-
+  // interactive step (a pairing code, a QR device-link) that emits
+  // `=== NANOCLAW SETUP: … ===` status blocks, renders them to the operator live,
+  // and resolves with the terminal block's fields (bound via capture:<var>=<FIELD>).
+  // Absent ⇒ a step directive degrades to an agent (runs the step from the prose).
+  execStream?: (cmd: string) => Promise<StepOutcome>;
   // Run effects the CALLER owns and will perform itself — those runs are skipped
   // (not executed). e.g. a headless rebuild or a setup that restarts once at the
   // end passes ['restart']; applyProviderSkill passes ['build','test'].
@@ -273,11 +286,22 @@ function substitute(value: string, vars: Map<string, { value: string; secret: bo
   });
 }
 
+// A `when:<var>=<value>` guard: the directive applies only when an earlier
+// prompt/capture bound <var> to exactly <value>. Unmet — including the var still
+// unresolved (a deferred prompt) — skips the directive, so a guarded prompt is
+// skipped, never deferred. This is how a skill expresses mutually-exclusive
+// branches (e.g. local vs remote install mode) in plain document order.
+function whenMet(when: string, vars: Map<string, { value: string; secret: boolean }>): boolean {
+  const eq = when.indexOf('=');
+  if (eq < 1) return true; // malformed → don't block (lint is the gate)
+  return vars.get(when.slice(0, eq).trim())?.value === when.slice(eq + 1).trim();
+}
+
 // The mutating twin of selfStatus. Records what it did to the journal so remove
 // is derivable. Throws on failure → caught and bounced to an agent.
 async function applyOne(
   d: Directive,
-  ctx: { root: string; skillDir: string; exec: (c: string) => string | void | Promise<string | void>; resolveRemote: (b: string) => string; vars: Map<string, { value: string; secret: boolean }>; journal: JournalEntry[] },
+  ctx: { root: string; skillDir: string; exec: (c: string) => string | void | Promise<string | void>; execStream?: (c: string) => Promise<StepOutcome>; resolveRemote: (b: string) => string; vars: Map<string, { value: string; secret: boolean }>; journal: JournalEntry[] },
 ): Promise<void> {
   const { root, skillDir, exec, vars, journal } = ctx;
   switch (d.kind) {
@@ -334,6 +358,25 @@ async function applyOne(
       // API (e.g. Slack conversations.open → the DM channel id) and feed it to a
       // later directive, so a flow that validates/resolves stays pure directives.
       const capture = typeof d.attrs.capture === 'string' ? d.attrs.capture : undefined;
+      // effect:step runs a long-running, operator-interactive step (a pairing
+      // code, a QR device-link) through the streaming exec and binds the terminal
+      // status block's named fields via capture:<var>=<FIELD>[,…] — the structured,
+      // multi-valued twin of stdout capture. No streaming exec ⇒ throw → an agent
+      // runs the step from the prose (degrade, not crash).
+      if (d.attrs.effect === 'step') {
+        if (!ctx.execStream) throw new Error('effect:step needs a streaming exec — an agent runs the step from the prose');
+        const { ok, fields } = await ctx.execStream(substitute(d.body.join('\n'), vars));
+        if (!ok) throw new Error('the step did not complete');
+        if (capture) {
+          for (const pair of capture.split(',')) {
+            const eq = pair.indexOf('=');
+            if (eq < 1) continue;
+            vars.set(pair.slice(0, eq).trim(), { value: (fields[pair.slice(eq + 1).trim()] ?? '').trim(), secret: false });
+          }
+        }
+        journal.push({ op: 'ran', cmd: d.body.join('\n') });
+        break;
+      }
       for (const cmd of d.body) {
         // Interpolate prompted {{vars}} the same way env-set does, so a run can
         // call `ncl ... {{owner_email}}` to wire from collected input. A command
@@ -402,6 +445,14 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
 
   for (const d of directives) {
     try {
+      // A `when:<var>=<value>` guard that isn't met skips the directive entirely —
+      // before prompt (so a guarded prompt is skipped, never deferred), operator,
+      // and run handling. This is how mutually-exclusive branches coexist in one
+      // skill while a fully-programmatic apply still completes.
+      if (typeof d.attrs.when === 'string' && !whenMet(d.attrs.when, vars)) {
+        res.skipped.push(`${d.kind}: when ${d.attrs.when} not met`);
+        continue;
+      }
       if (d.kind === 'prompt') {
         const v = promptVar(d)!;
         const secret = d.args.includes('secret');
@@ -433,7 +484,7 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
       const st = selfStatus(d, root);
       if (st.status === 'agent') { bounce(d, 'no deterministic handler'); continue; }
       if (st.status === 'skip') { res.skipped.push(`${d.kind}: ${st.detail}`); continue; }
-      await applyOne(d, { root, skillDir, exec, resolveRemote, vars, journal: res.journal });
+      await applyOne(d, { root, skillDir, exec, execStream: opts.execStream, resolveRemote, vars, journal: res.journal });
       res.applied.push(`${d.kind}: ${st.detail}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -7,13 +7,13 @@
  * blocks, ask the prompts, run the engine in document order. It replaces the
  * bespoke per-channel `setup/channels/<channel>.ts` flows with one function.
  */
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import * as p from '@clack/prompts';
 
-import { applySkill, fullyApplied, type ApplyResult, type Prompter } from '../../scripts/skill-apply.js';
+import { applySkill, fullyApplied, type ApplyResult, type Prompter, type StepOutcome } from '../../scripts/skill-apply.js';
 import { parseDirectives } from '../../scripts/skill-directives.js';
 
 /**
@@ -119,6 +119,51 @@ export function hostExec(projectRoot: string): (cmd: string) => string {
     });
 }
 
+/**
+ * Streaming host exec for `nc:run effect:step`. Spawns the step through a shell,
+ * tees its human-facing output to the operator's terminal live (so a pairing code
+ * card or a QR rendered by the step shows), parses the `=== NANOCLAW SETUP: TYPE
+ * ===` status blocks, and resolves with the terminal (last STATUS-bearing) block's
+ * fields so the engine can `capture:<var>=<FIELD>` them. The block protocol mirrors
+ * setup/lib/runner.ts's StatusStream — a step is just a command that emits blocks.
+ */
+export function hostExecStream(projectRoot: string): (cmd: string) => Promise<StepOutcome> {
+  return (cmd) =>
+    new Promise((resolve) => {
+      const child = spawn('bash', ['-c', cmd], {
+        cwd: projectRoot,
+        env: { ...process.env, PATH: `${join(projectRoot, 'bin')}:${process.env.PATH ?? ''}` },
+        stdio: ['inherit', 'pipe', 'pipe'],
+      });
+      const blocks: Array<{ fields: Record<string, string> }> = [];
+      let current: { fields: Record<string, string> } | null = null;
+      let buf = '';
+      const onChunk = (chunk: Buffer): void => {
+        buf += chunk.toString('utf8');
+        let idx: number;
+        while ((idx = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, idx);
+          buf = buf.slice(idx + 1);
+          if (/^=== NANOCLAW SETUP: \S+ ===/.test(line)) { current = { fields: {} }; continue; }
+          if (line.startsWith('=== END ===')) { if (current) blocks.push(current); current = null; continue; }
+          if (current) {
+            const c = line.indexOf(':');
+            if (c > 0) current.fields[line.slice(0, c).trim()] = line.slice(c + 1).trim();
+            continue;
+          }
+          process.stdout.write(line + '\n'); // operator-facing line (a QR, a code) — show it live
+        }
+      };
+      child.stdout.on('data', onChunk);
+      child.stderr.on('data', onChunk);
+      child.on('close', (code) => {
+        const terminal = [...blocks].reverse().find((b) => b.fields.STATUS) ?? null;
+        const status = terminal?.fields.STATUS;
+        resolve({ ok: code === 0 && (status === 'success' || status === 'skipped'), fields: terminal?.fields ?? {} });
+      });
+    });
+}
+
 /** Fork-aware registry-branch remote (same resolver setup/channels/slack.ts uses). */
 function channelsRemote(projectRoot: string): () => string {
   return () =>
@@ -137,6 +182,8 @@ export interface RunSkillOptions {
   prompter?: Prompter;
   /** Defaults to `hostExec`. */
   exec?: (cmd: string) => string | void;
+  /** Defaults to `hostExecStream`. Streaming exec for `nc:run effect:step`. */
+  execStream?: (cmd: string) => Promise<StepOutcome>;
   /** Defaults to the fork-aware channels-branch resolver. */
   resolveRemote?: (branch: string) => string;
   /** Run effects the caller owns (e.g. `['restart']` when it restarts once). */
@@ -163,6 +210,7 @@ export async function runSkill(skillDir: string, opts: RunSkillOptions = {}): Pr
     inputs,
     prompter,
     exec: opts.exec ?? hostExec(projectRoot),
+    execStream: opts.execStream ?? hostExecStream(projectRoot),
     resolveRemote: opts.resolveRemote ?? channelsRemote(projectRoot),
     skipEffects: opts.skipEffects,
   });

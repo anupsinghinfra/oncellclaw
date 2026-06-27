@@ -467,3 +467,124 @@ describe('programmatic apply via inputs', () => {
     expect(res.vars.token).toBeUndefined(); // secret prompt NOT exposed
   });
 });
+
+// when: guards let one skill carry mutually-exclusive branches (a local vs
+// remote install mode) in document order — the unmet branch is skipped, and a
+// guarded prompt is skipped (not deferred) so the programmatic run still completes.
+const MODE_SKILL = `# mode demo
+
+## Pick a mode
+\`\`\`nc:prompt mode
+Pick local or remote.
+\`\`\`
+
+## Remote needs a server
+\`\`\`nc:prompt server_url when:mode=remote
+Photon server URL.
+\`\`\`
+\`\`\`nc:env-set when:mode=remote
+IMESSAGE_SERVER_URL={{server_url}}
+\`\`\`
+
+## Local needs nothing extra
+\`\`\`nc:env-set when:mode=local
+IMESSAGE_LOCAL=true
+\`\`\`
+`;
+
+function modeScratch(): { sdir: string; rdir: string } {
+  const sdir = mkdtempSync(join(tmpdir(), 'nc-when-skill-'));
+  const rdir = mkdtempSync(join(tmpdir(), 'nc-when-proj-'));
+  writeFileSync(join(sdir, 'SKILL.md'), MODE_SKILL);
+  writeFileSync(join(rdir, '.env'), '');
+  writeFileSync(join(rdir, 'package.json'), '{"name":"scratch"}');
+  return { sdir, rdir };
+}
+
+describe('when: guard', () => {
+  it('local mode: the remote-guarded prompt + env-set are skipped, not deferred — fully programmatic', async () => {
+    const { sdir, rdir } = modeScratch();
+    const res = await applySkill(sdir, rdir, { inputs: { mode: 'local' }, exec: () => {} });
+    expect(fullyApplied(res)).toBe(true);
+    expect(res.deferred).toEqual([]); // server_url was skipped by the guard, NOT deferred
+    const env = readFileSync(join(rdir, '.env'), 'utf8');
+    expect(env).toContain('IMESSAGE_LOCAL=true');
+    expect(env).not.toContain('IMESSAGE_SERVER_URL');
+    expect(res.skipped.some((s) => /when mode=remote/.test(s))).toBe(true);
+  });
+
+  it('remote mode: the remote branch applies, the local-only env-set is skipped', async () => {
+    const { sdir, rdir } = modeScratch();
+    const res = await applySkill(sdir, rdir, { inputs: { mode: 'remote', server_url: 'https://photon.example' }, exec: () => {} });
+    expect(fullyApplied(res)).toBe(true);
+    const env = readFileSync(join(rdir, '.env'), 'utf8');
+    expect(env).toContain('IMESSAGE_SERVER_URL=https://photon.example');
+    expect(env).not.toContain('IMESSAGE_LOCAL');
+  });
+
+  it('a guarded prompt with no input does not defer when its guard is unmet (the programmatic-run contract)', async () => {
+    const { sdir, rdir } = modeScratch();
+    // local mode, server_url neither supplied nor answerable — must still complete.
+    const res = await applySkill(sdir, rdir, { inputs: { mode: 'local' }, prompter: headless({}), exec: () => {} });
+    expect(res.deferred).toEqual([]);
+    expect(fullyApplied(res)).toBe(true);
+  });
+});
+
+// effect:step runs a long-running, operator-interactive step (a pairing code, a
+// QR device-link) through the injected streaming exec and binds the terminal
+// block's named fields via capture:<var>=<FIELD>,… — the structured twin of
+// stdout capture. With no streaming exec it degrades to an agent.
+const STEP_SKILL = `# step demo
+
+## Link the device
+\`\`\`nc:run effect:step capture:platform_id=PLATFORM_ID,owner_handle=ADMIN_ID
+pnpm exec tsx setup/index.ts --step pair-demo
+\`\`\`
+
+## Use what the step resolved
+\`\`\`nc:env-set
+DEMO_PLATFORM={{platform_id}}
+\`\`\`
+`;
+
+function stepScratch(): { sdir: string; rdir: string } {
+  const sdir = mkdtempSync(join(tmpdir(), 'nc-step-skill-'));
+  const rdir = mkdtempSync(join(tmpdir(), 'nc-step-proj-'));
+  writeFileSync(join(sdir, 'SKILL.md'), STEP_SKILL);
+  writeFileSync(join(rdir, '.env'), '');
+  writeFileSync(join(rdir, 'package.json'), '{"name":"scratch"}');
+  return { sdir, rdir };
+}
+
+describe('nc:run effect:step (streaming, multi-field capture)', () => {
+  it('binds the terminal block fields into vars and substitutes them downstream', async () => {
+    const { sdir, rdir } = stepScratch();
+    const seen: string[] = [];
+    const execStream = async (cmd: string) => {
+      seen.push(cmd);
+      return { ok: true, fields: { STATUS: 'success', PLATFORM_ID: 'telegram:12345', ADMIN_ID: '67890' } };
+    };
+    const res = await applySkill(sdir, rdir, { exec: () => {}, execStream });
+    expect(fullyApplied(res)).toBe(true);
+    expect(seen).toEqual(['pnpm exec tsx setup/index.ts --step pair-demo']);
+    expect(res.vars.platform_id).toBe('telegram:12345'); // both fields captured…
+    expect(res.vars.owner_handle).toBe('67890');
+    expect(readFileSync(join(rdir, '.env'), 'utf8')).toContain('DEMO_PLATFORM=telegram:12345'); // …and consumed downstream
+  });
+
+  it('degrades to an agent when no streaming exec is wired (not a crash)', async () => {
+    const { sdir, rdir } = stepScratch();
+    const res = await applySkill(sdir, rdir, { exec: () => {} }); // no execStream
+    expect(res.agentTasks).toHaveLength(1);
+    expect(res.agentTasks[0].kind).toBe('run');
+    expect(res.deferred.some((d) => /platform_id/.test(d))).toBe(true); // downstream env-set then defers
+  });
+
+  it('a failed step bounces to an agent rather than capturing empty values', async () => {
+    const { sdir, rdir } = stepScratch();
+    const res = await applySkill(sdir, rdir, { exec: () => {}, execStream: async () => ({ ok: false, fields: {} }) });
+    expect(res.agentTasks).toHaveLength(1);
+    expect(res.vars.platform_id).toBeUndefined();
+  });
+});

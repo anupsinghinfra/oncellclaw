@@ -20,7 +20,7 @@
 //   copy [from-branch:<b>]  body: `PATH` (src==dst) or `SRC -> DST`   overwrite
 //   append to:<file> [at:<marker>]  body: line(s) to add             skip if present
 //   dep [manager:pnpm]      body: `pkg@<exact-semver>` line(s)        reinstall no-op
-//   run [effect:build|test|fetch|external|wire|restart] [capture:<var>]  re-runnable
+//   run [effect:build|test|fetch|external|wire|restart|step] [capture:<spec>]  re-runnable
 //        body: shell command(s). {{vars}} are substituted in. effect:wire runs
 //        `ncl …` to wire collected input (no undo — the rows it creates are user
 //        runtime data, not reversed on skill remove). effect:restart restarts the
@@ -28,6 +28,12 @@
 //        (rebuild, or a setup that restarts once) skips it via ApplyOptions.
 //        skipEffects. capture:<var> binds the command's stdout into {{var}} (twin
 //        of prompt) — e.g. resolve an id from an API and feed it to a later step.
+//        effect:step runs a long-running, operator-interactive step (a pairing
+//        code, a QR device-link) through the streaming exec: its
+//        `=== NANOCLAW SETUP: … ===` status blocks render to the operator live and
+//        `capture:<var>=<FIELD>[,<var2>=<FIELD2>…]` binds the terminal block's
+//        named fields into {{vars}} (multi-valued, structured twin of stdout
+//        capture). Degrades to an agent when no streaming exec is wired.
 //   prompt <var> [secret] [validate:<re>]  body: the question → binds {{var}}  skip if satisfied
 //        validate:<re> is a regex the interactive prompter enforces (e.g.
 //        validate:^xoxb- to require a Slack bot token); `inputs` bypass it.
@@ -44,6 +50,13 @@
 // `// <<< <marker>` closing line of a dormant marker region (see setup/index.ts).
 // `json-merge` reads an array-of-objects JSON file and pushes the body object
 // unless an element already has body[key]===element[key] (idempotent by key).
+//
+// Any directive may carry `when:<var>=<value>` — a guard evaluated against an
+// earlier prompt/capture var. If it doesn't match (including the var being
+// unresolved), the directive is skipped — a guarded prompt is skipped, never
+// deferred — so one skill can express mutually-exclusive branches (e.g. a local
+// vs remote install mode) in document order while still running fully
+// programmatically from `inputs`.
 //
 // Usage: pnpm exec tsx scripts/skill-directives.ts <SKILL.md>
 
@@ -112,6 +125,19 @@ export function parseDirectives(markdown: string): Directive[] {
 /** The variable a `prompt` binds (the first positional that isn't a flag). */
 export function promptVar(d: Directive): string | undefined {
   return d.args.find((a) => !PROMPT_FLAGS.has(a));
+}
+
+/**
+ * The variable name(s) a `run capture:<spec>` binds. `capture:dm_channel` →
+ * `['dm_channel']` (stdout form); `capture:platform_id=PLATFORM_ID,owner=ACCOUNT`
+ * → `['platform_id','owner']` (effect:step field form).
+ */
+export function captureVars(spec: string): string[] {
+  if (!spec.includes('=')) return [spec];
+  return spec
+    .split(',')
+    .map((pair) => pair.slice(0, pair.indexOf('=')).trim())
+    .filter(Boolean);
 }
 
 /** `{{var}}` names referenced anywhere in a directive's body. */
@@ -208,11 +234,24 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
     for (const ref of referencedVars(d)) {
       if (!defined.has(ref)) flag(d, `references {{${ref}}} but no earlier nc:prompt or nc:run capture defined it`);
     }
+    // A `when:<var>=<value>` guard references an earlier-defined var by bare name.
+    if (typeof d.attrs.when === 'string') {
+      const eq = d.attrs.when.indexOf('=');
+      if (eq < 1) {
+        flag(d, `when:${d.attrs.when} must be <var>=<value>`);
+      } else {
+        const wvar = d.attrs.when.slice(0, eq).trim();
+        if (!defined.has(wvar)) flag(d, `when:${d.attrs.when} references {{${wvar}}} but no earlier nc:prompt or nc:run capture defined it`);
+      }
+    }
     if (d.kind === 'prompt') {
       const v = promptVar(d);
       if (v) defined.add(v);
     }
-    if (d.kind === 'run' && typeof d.attrs.capture === 'string') defined.add(d.attrs.capture);
+    // capture:<var> binds stdout; capture:<var>=<FIELD>,… binds step block fields.
+    if (d.kind === 'run' && typeof d.attrs.capture === 'string') {
+      for (const v of captureVars(d.attrs.capture)) defined.add(v);
+    }
   }
   return problems;
 }

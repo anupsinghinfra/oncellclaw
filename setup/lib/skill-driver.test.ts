@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runSkill, hostExec, type RunSkillOptions } from './skill-driver.js';
+import { runSkill, hostExec, hostExecStream, type RunSkillOptions } from './skill-driver.js';
 import { fullyApplied, type Prompter } from '../../scripts/skill-apply.js';
 
 // A small SKILL.md exercising the three things the driver wires: an operator
@@ -77,6 +77,15 @@ describe('thin skill driver', () => {
   it('hostExec returns stdout so a capture run can bind it', () => {
     const root = mkdtempSync(join(tmpdir(), 'driver-cap-'));
     expect(String(hostExec(root)('echo D0CHANNEL')).trim()).toBe('D0CHANNEL');
+  });
+
+  it('hostExecStream runs a step and captures the terminal status block fields (for effect:step)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'driver-step-'));
+    const out = await hostExecStream(root)(
+      'echo show-this-to-the-operator; echo "=== NANOCLAW SETUP: PAIR ==="; echo "STATUS: success"; echo "PLATFORM_ID: telegram:42"; echo "=== END ==="',
+    );
+    expect(out.ok).toBe(true);
+    expect(out.fields.PLATFORM_ID).toBe('telegram:42');
   });
 
   function reuseScratch(): { root: string; skill: string } {
