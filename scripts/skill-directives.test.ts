@@ -21,6 +21,7 @@ describe('skill-directives parser, on the converted add-slack', () => {
       'env-set', // credentials: write captured values to .env
       'env-sync', // credentials: sync to container
       'operator', // credentials: event-delivery walkthrough
+      'run', // restart: load the adapter + creds, wait for the CLI socket
       'prompt', // wire: owner member id
       'prompt', // wire: target agent folder
       'run', // wire: validate token (auth.test)
@@ -58,6 +59,7 @@ describe('skill-directives parser, on the converted add-slack', () => {
     expect(directives.filter((d) => d.kind === 'run').map((d) => d.attrs.effect)).toEqual([
       'build',
       'test',
+      'restart', // load adapter + creds before wiring
       'fetch', // validate: auth.test
       'fetch', // resolve: conversations.open
       'wire', // ncl wiring

@@ -205,6 +205,10 @@ export interface ApplyOptions {
   // dep/run/branch-fetch; injectable for tests. Returns the command's stdout so
   // a `run capture:<var>` can bind it into a {{var}} (the twin of `prompt`).
   exec?: (cmd: string) => string | void | Promise<string | void>;
+  // Run effects the CALLER owns and will perform itself — those runs are skipped
+  // (not executed). e.g. a headless rebuild or a setup that restarts once at the
+  // end passes ['restart']; applyProviderSkill passes ['build','test'].
+  skipEffects?: string[];
   // Resolve which remote carries a `from-branch` registry branch. Defaults to a
   // generic resolver (env override → first remote that has the branch → origin);
   // setup injects one that reuses setup/lib/channels-remote.sh for exact parity.
@@ -409,6 +413,11 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
         res.operatorMessages.push(text);
         await opts.prompter?.tell?.(text);
         res.applied.push(`operator: ${(d.body[0] ?? '').slice(0, 50)}`);
+        continue;
+      }
+      // A run whose effect the caller owns (e.g. restart) is skipped here.
+      if (d.kind === 'run' && typeof d.attrs.effect === 'string' && opts.skipEffects?.includes(d.attrs.effect)) {
+        res.skipped.push(`run ${d.attrs.effect}: owned by the caller`);
         continue;
       }
       const st = selfStatus(d, root);

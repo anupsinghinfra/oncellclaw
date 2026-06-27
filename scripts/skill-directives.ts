@@ -20,12 +20,14 @@
 //   copy [from-branch:<b>]  body: `PATH` (src==dst) or `SRC -> DST`   overwrite
 //   append to:<file> [at:<marker>]  body: line(s) to add             skip if present
 //   dep [manager:pnpm]      body: `pkg@<exact-semver>` line(s)        reinstall no-op
-//   run [effect:build|test|fetch|external|wire] [capture:<var>]  re-runnable
+//   run [effect:build|test|fetch|external|wire|restart] [capture:<var>]  re-runnable
 //        body: shell command(s). {{vars}} are substituted in. effect:wire runs
 //        `ncl …` to wire collected input (no undo — the rows it creates are user
-//        runtime data, not reversed on skill remove). capture:<var> binds the
-//        command's stdout into {{var}} (twin of prompt) — e.g. resolve an id
-//        from an API and feed it to a later directive.
+//        runtime data, not reversed on skill remove). effect:restart restarts the
+//        service so following `ncl` runs reach it; a caller that owns the restart
+//        (rebuild, or a setup that restarts once) skips it via ApplyOptions.
+//        skipEffects. capture:<var> binds the command's stdout into {{var}} (twin
+//        of prompt) — e.g. resolve an id from an API and feed it to a later step.
 //   prompt <var> [secret]   body: the question → binds {{var}}        skip if satisfied
 //   operator                body: instructions for the human operator  output-only
 //        The SKILL.md is addressed to the coding agent; `operator` delineates the

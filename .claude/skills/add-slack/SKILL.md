@@ -101,6 +101,15 @@ Set up event delivery (needs a public HTTPS URL for port 3000 — ngrok, a Cloud
 3. Interactivity & Shortcuts → toggle Interactivity on, set the same Request URL, Save Changes, then reinstall the app when Slack prompts.
 ```
 
+## Restart
+
+Restart the service so it loads the Slack adapter and the credentials you just
+stored, and wait for its CLI socket before wiring:
+
+```nc:run effect:restart
+bash setup/lib/restart.sh
+```
+
 ## Connect yourself
 
 Wire your own Slack account as the owner so you can talk to the assistant, and

@@ -429,4 +429,17 @@ describe('programmatic apply via inputs', () => {
     expect(env).toContain('B=fromPrompter'); // prompter filled the gap
     expect(asked).toEqual(['b']); // 'a' was never asked — it came from inputs
   });
+
+  it('skipEffects skips a run the caller owns (effect:restart) but runs the rest', async () => {
+    writeFileSync(
+      join(pskill, 'SKILL.md'),
+      '# restart demo\n\n```nc:run effect:build\npnpm run build\n```\n```nc:run effect:restart\nbash setup/lib/restart.sh\n```\n```nc:run effect:wire\nncl wire\n```\n',
+    );
+    const cmds: string[] = [];
+    const res = await applySkill(pskill, proot, { inputs: {}, skipEffects: ['restart'], exec: (c) => void cmds.push(c) });
+    expect(cmds).toContain('pnpm run build');
+    expect(cmds).toContain('ncl wire');
+    expect(cmds).not.toContain('bash setup/lib/restart.sh'); // restart owned by the caller → skipped
+    expect(res.skipped.some((s) => /run restart: owned by the caller/.test(s))).toBe(true);
+  });
 });
