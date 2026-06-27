@@ -68,6 +68,8 @@ export interface RunSkillOptions {
   prompter?: Prompter;
   /** Defaults to `hostExec`. */
   exec?: (cmd: string) => string | void;
+  /** Defaults to the fork-aware channels-branch resolver. */
+  resolveRemote?: (branch: string) => string;
   /** Run effects the caller owns (e.g. `['restart']` when it restarts once). */
   skipEffects?: string[];
 }
@@ -83,7 +85,7 @@ export function runSkill(skillDir: string, opts: RunSkillOptions = {}): Promise<
     inputs: opts.inputs,
     prompter: opts.prompter ?? clackPrompter(),
     exec: opts.exec ?? hostExec(projectRoot),
-    resolveRemote: channelsRemote(projectRoot),
+    resolveRemote: opts.resolveRemote ?? channelsRemote(projectRoot),
     skipEffects: opts.skipEffects,
   });
 }

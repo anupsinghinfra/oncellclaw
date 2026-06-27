@@ -26,7 +26,7 @@ const CREATION_FILES = [
   'setup/cli-agent.ts',
   'setup/channels/telegram.ts',
   'setup/channels/discord.ts',
-  'setup/channels/slack.ts',
+  'setup/channels/run-channel-skill.ts', // slack (and future channels) now go through the SKILL.md driver
   'setup/channels/whatsapp.ts',
   'setup/channels/signal.ts',
   'setup/channels/imessage.ts',

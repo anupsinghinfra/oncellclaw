@@ -33,7 +33,7 @@ import { BACK_TO_CHANNEL_SELECTION } from './lib/back-nav.js';
 import { runDiscordChannel } from './channels/discord.js';
 import { runIMessageChannel } from './channels/imessage.js';
 import { runSignalChannel } from './channels/signal.js';
-import { runSlackChannel } from './channels/slack.js';
+import { runChannelSkill } from './channels/run-channel-skill.js';
 import { runTeamsChannel } from './channels/teams.js';
 import { runTelegramChannel } from './channels/telegram.js';
 import { runWhatsAppChannel } from './channels/whatsapp.js';
@@ -569,7 +569,10 @@ async function main(): Promise<void> {
       } else if (channelChoice === 'teams') {
         result = await runTeamsChannel(displayName!);
       } else if (channelChoice === 'slack') {
-        result = await runSlackChannel(displayName!);
+        // First channel migrated to the SKILL.md-driven flow (the whole
+        // connect+wire procedure lives in add-slack/SKILL.md). The other
+        // channels still use their bespoke run<Channel>Channel until converted.
+        result = await runChannelSkill('slack', displayName!);
       } else if (channelChoice === 'imessage') {
         result = await runIMessageChannel(displayName!);
       } else if (channelChoice === 'other') {

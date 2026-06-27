@@ -1,10 +1,14 @@
+import { randomUUID } from 'crypto';
+
 import type { AdditionalMountConfig, McpServerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
+import { createAgentGroup, getAgentGroupByFolder } from '../../db/agent-groups.js';
 import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
+  ensureContainerConfig,
   getContainerConfig,
   updateContainerConfigScalars,
   updateContainerConfigJson,
@@ -58,11 +62,31 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
-  // `delete` is intentionally not in `operations` — the generic single-table
-  // DELETE violates FK constraints (see #2525). The cascading handler is
-  // provided as `customOperations.delete` below.
-  operations: { list: 'open', get: 'open', create: 'approval', update: 'approval' },
+  // `create` and `delete` are custom (below): generic `create` inserts a bare
+  // agent_groups row but never the container_config a working group needs, and
+  // the generic single-table DELETE violates FK constraints (#2525).
+  operations: { list: 'open', get: 'open', update: 'approval' },
   customOperations: {
+    create: {
+      access: 'approval',
+      description:
+        'Create (or return the existing) agent group with its container config. Idempotent on --folder. ' +
+        'Use --folder <slug> and --name <display name>. Workspace files are scaffolded on first spawn.',
+      handler: async (args) => {
+        const folder = args.folder as string;
+        if (!folder) throw new Error('--folder is required');
+        const name = (args.name as string) ?? folder;
+        const existing = getAgentGroupByFolder(folder);
+        if (existing) {
+          ensureContainerConfig(existing.id); // ensure a reused group is fully configured too
+          return existing;
+        }
+        const id = `ag-${randomUUID()}`;
+        createAgentGroup({ id, name, folder, agent_provider: null, created_at: new Date().toISOString() });
+        ensureContainerConfig(id);
+        return getAgentGroupByFolder(folder);
+      },
+    },
     delete: {
       access: 'approval',
       description:
