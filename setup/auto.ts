@@ -30,7 +30,6 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import { BACK_TO_CHANNEL_SELECTION } from './lib/back-nav.js';
-import { runDiscordChannel } from './channels/discord.js';
 import { runIMessageChannel } from './channels/imessage.js';
 import { runSignalChannel } from './channels/signal.js';
 import { runChannelSkill } from './channels/run-channel-skill.js';
@@ -561,7 +560,7 @@ async function main(): Promise<void> {
       if (channelChoice === 'telegram') {
         result = await runTelegramChannel(displayName!);
       } else if (channelChoice === 'discord') {
-        result = await runDiscordChannel(displayName!);
+        result = await runChannelSkill('discord', displayName!);
       } else if (channelChoice === 'whatsapp') {
         result = await runWhatsAppChannel(displayName!);
       } else if (channelChoice === 'signal') {

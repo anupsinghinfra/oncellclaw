@@ -121,11 +121,42 @@ mounts `data/env/env`):
 ```nc:env-sync
 ```
 
+## Restart
+
+Restart the service so it loads the iMessage adapter and the credentials you
+just stored, and wait for its CLI socket before wiring:
+
+```nc:run effect:restart
+bash setup/lib/restart.sh
+```
+
+## Resolve your iMessage handle
+
+The agent greets you in the iMessage conversation tied to the phone number or
+Apple ID email you message from — that handle is both your identity and the
+conversation address. Resolve it so the owner-wiring step can target it.
+
+```nc:prompt owner_handle validate:^(\+\d{8,15}|[^\s@]+@[^\s@]+\.[^\s@]+)$
+The phone number or email you iMessage from — a +E.164 number (e.g. +14155551234) or an email / Apple ID (e.g. you@icloud.com).
+```
+
+iMessage is a native adapter: it sends the raw handle as the conversation
+address, with no channel prefix — so the messaging-group platform id is that
+handle as-is.
+
+```nc:run capture:platform_id
+echo "{{owner_handle}}"
+```
+
+`owner_handle` and `platform_id` are what the owner-wiring step needs. The
+welcome iMessage goes out through the adapter once the service is running — in
+local mode that needs Full Disk Access granted (above); in remote mode it goes
+via your Photon server.
+
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now.
-
-Otherwise, run `/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise wire
+this channel with `/init-first-agent` (or `/manage-channels`).
 
 ## Channel Info
 

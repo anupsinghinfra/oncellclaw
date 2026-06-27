@@ -62,40 +62,33 @@ delivery against a real server is verified manually once the service runs.
 
 ## Credentials
 
-Discord app setup is human and interactive — these steps are prose, not
-directives (no parser can click through the Discord Developer Portal). A recipe
-rebuild produces a compiling, registered adapter that cannot receive a message
-until they're done.
+Discord app setup is human and interactive — no parser can click through the
+Discord Developer Portal. The adapter is installed and registered, but it can't
+receive a message until the bot exists, has Message Content Intent, and shares a
+server with you. Tell the user:
 
-### Create Discord Bot
+```nc:operator
+Create the Discord bot:
+1. Go to https://discord.com/developers/applications → New Application. Name it (e.g. "NanoClaw Assistant").
+2. General Information → copy the Application ID and the Public Key.
+3. Bot tab → Add Bot if needed → Reset Token, then copy the Bot Token (it's shown only once).
+4. Bot tab → Privileged Gateway Intents → enable Message Content Intent.
+5. OAuth2 → URL Generator → Scopes: bot; Bot Permissions: Send Messages, Read Message History, Add Reactions, Attach Files, Use Slash Commands.
+6. Open the generated URL and invite the bot to a server you're also in (a personal server is fine) — the bot can only DM you once you share a server.
+```
 
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click **New Application** and give it a name (e.g., "NanoClaw Assistant")
-3. From the **General Information** tab, copy the **Application ID** and **Public Key**
-4. Go to the **Bot** tab and click **Add Bot** if needed
-5. Copy the Bot Token (click **Reset Token** if you need a new one — you can only see it once)
-6. Under **Privileged Gateway Intents**, enable **Message Content Intent**
-7. Go to **OAuth2** > **URL Generator**:
-   - Scopes: select `bot`
-   - Bot Permissions: select `Send Messages`, `Read Message History`, `Add Reactions`, `Attach Files`, `Use Slash Commands`
-8. Copy the generated URL and open it in your browser to invite the bot to your server
+Collect the three values and store them — the adapter reads them from `.env` and
+fails to start without `DISCORD_PUBLIC_KEY` and `DISCORD_APPLICATION_ID`. They go
+to `.env` (set-if-absent — a value you've already filled in is never
+overwritten) and sync to the container:
 
-### Store the credentials
-
-All three values are required — the adapter will fail to start without
-`DISCORD_PUBLIC_KEY` and `DISCORD_APPLICATION_ID`. Capture them, then write them.
-`prompt` only *asks* and binds the answer to a name; a separate directive
-consumes it — so the same prompts could feed `ncl` or the OneCLI vault instead of
-`.env` by swapping only the consumer. Here they go to `.env` (set-if-absent — a
-value you've already filled in is never overwritten) and sync to the container:
-
-```nc:prompt bot_token secret
+```nc:prompt bot_token secret validate:^[A-Za-z0-9._-]{50,}$
 Paste the Bot Token — Bot tab. Click `Reset Token` if you need a new one.
 ```
-```nc:prompt application_id
+```nc:prompt application_id validate:^\d{17,20}$
 Paste the Application ID — General Information tab.
 ```
-```nc:prompt public_key
+```nc:prompt public_key validate:^[a-fA-F0-9]{64}$
 Paste the Public Key — General Information tab.
 ```
 ```nc:env-set
@@ -106,15 +99,55 @@ DISCORD_PUBLIC_KEY={{public_key}}
 ```nc:env-sync
 ```
 
+## Restart
+
+Restart the service so it loads the Discord adapter and the credentials you just
+stored, and wait for its CLI socket before resolving:
+
+```nc:run effect:restart
+bash setup/lib/restart.sh
+```
+
+## Resolve your DM channel
+
+The agent talks to you in your direct-message channel with the bot. Resolve its
+address so the owner-wiring step can target it. You'll need your Discord user ID:
+open **Settings → Advanced → Developer Mode** on, then right-click your own
+name and **Copy User ID** — it's 17–20 digits.
+
+```nc:prompt owner_handle validate:^\d{17,20}$
+Your Discord user ID (Settings → Advanced → Developer Mode on, then right-click your name → "Copy User ID"; 17–20 digits).
+```
+
+Confirm the bot token works and capture the bot identity — `/users/@me` returns
+the bot user and fails here if the token is bad:
+
+```nc:run capture:connected_as effect:fetch
+curl -sf https://discord.com/api/v10/users/@me -H "Authorization: Bot {{bot_token}}" | jq -er '"@" + .username'
+```
+
+Open the DM with `POST /users/@me/channels` and take the channel id it returns as
+the conversation address `discord:@me:<channelId>` (if Discord refuses, the bot
+doesn't share a server with you yet — invite it, then retry):
+
+```nc:run capture:platform_id effect:fetch
+curl -s -X POST https://discord.com/api/v10/users/@me/channels -H "Authorization: Bot {{bot_token}}" -H "Content-Type: application/json" -d '{"recipient_id":"{{owner_handle}}"}' | jq -er '"discord:@me:" + .id'
+```
+
+`owner_handle` and `platform_id` are what the owner-wiring step needs. The
+greeting goes out over the DM channel, which works as soon as the bot shares a
+server with you.
+
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
-`/manage-channels` to wire this channel to an agent group.
+If you're in the middle of `/setup`, return to the setup flow now. Otherwise wire
+this channel with `/init-first-agent` (or `/manage-channels`).
 
 ## Channel Info
 
 - **type**: `discord`
 - **terminology**: Discord has "servers" (also called "guilds") containing "channels." Text channels start with #. The bot can also receive direct messages.
+- **platform-id-format**: `discord:@me:{dmChannelId}` for the owner DM (e.g. `discord:@me:1399...`), `discord:{guildId}:{channelId}` for server channels — both IDs required for channels.
 - **how-to-find-id**: Enable Developer Mode in Discord (Settings > App Settings > Advanced > Developer Mode). Then right-click a server and select "Copy Server ID" for the guild ID, and right-click the text channel and select "Copy Channel ID." The platform ID format used in registration is `discord:{guildId}:{channelId}` — both IDs are required.
 - **supports-threads**: yes
 - **typical-use**: Interactive chat — server channels or direct messages
