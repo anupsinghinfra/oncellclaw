@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applySkill, removeSkill, planSkill, fullyApplied, firstFailureHint, stepLabel, type Prompter, type PromptOpts, type StepReporter } from './skill-apply.js';
+import { applySkill, removeSkill, planSkill, fullyApplied, firstFailureHint, referenceProse, stepLabel, type Prompter, type PromptOpts, type StepReporter } from './skill-apply.js';
 import { parseDirectives, validate } from './skill-directives.js';
 
 // A synthetic skill exercising the fs handlers for real (no network), plus one
@@ -1238,5 +1238,103 @@ describe('nc:prompt PromptOpts (normalize at bind, opts threading)', () => {
     const res = await applySkill(nskill, nroot, { inputs: { a: 'MixedCASE', b: '  spaced  ' }, exec: () => {} });
     expect(res.vars.a).toBe('mixedcase');
     expect(res.vars.b).toBe('spaced');
+  });
+});
+
+// referenceProse slices the author-written reference FLOOR — the engine-ignored
+// `## Alternatives`, `## Optional configuration`, `## Troubleshooting` sections —
+// out of the raw markdown, keeping their ### subsections and plain bash/json
+// fences but dropping any stray nc: directive fence. Keyed on the author headings
+// (never the resolved {{var}} map), so a {{secret}} placeholder can never leak in.
+const REFERENCE_SKILL = `# demo
+
+Intro prose that is NOT reference floor.
+
+## Apply
+
+### 1. Build it
+\`\`\`nc:run effect:build
+pnpm run build
+\`\`\`
+
+## Alternatives
+
+### Use a dedicated number
+Register a number instead of linking.
+\`\`\`bash
+signal-cli -a +1 register
+\`\`\`
+
+## Optional configuration
+Tune the daemon.
+\`\`\`bash
+SIGNAL_TCP_HOST=127.0.0.1
+\`\`\`
+
+## Channel Info
+- type: demo
+
+## Troubleshooting
+
+### Bot not responding
+Check the logs.
+\`\`\`bash
+grep demo logs/nanoclaw.log
+\`\`\`
+`;
+
+describe('referenceProse (reference-floor slice)', () => {
+  it('slices the three reference headings (with ### subsections + plain fences) in document order', () => {
+    const ref = referenceProse(REFERENCE_SKILL);
+    expect(ref).toContain('## Alternatives');
+    expect(ref).toContain('Register a number instead of linking.');
+    expect(ref).toContain('signal-cli -a +1 register'); // a plain bash fence is kept
+    expect(ref).toContain('## Optional configuration');
+    expect(ref).toContain('SIGNAL_TCP_HOST=127.0.0.1');
+    expect(ref).toContain('## Troubleshooting');
+    expect(ref).toContain('### Bot not responding'); // a ### subsection is kept
+    expect(ref).toContain('grep demo logs/nanoclaw.log');
+    // non-reference sections are never included
+    expect(ref).not.toContain('## Apply');
+    expect(ref).not.toContain('## Channel Info');
+    expect(ref).not.toContain('Intro prose');
+    // document order: Alternatives, then Optional configuration, then Troubleshooting
+    expect(ref.indexOf('## Alternatives')).toBeLessThan(ref.indexOf('## Optional configuration'));
+    expect(ref.indexOf('## Optional configuration')).toBeLessThan(ref.indexOf('## Troubleshooting'));
+  });
+
+  it('drops nc: directive fences and never resolves a {{secret}} placeholder (no leak)', () => {
+    // A Troubleshooting section that (pathologically) carries an nc: fence and a
+    // {{token}} placeholder: the nc: block is dropped wholesale, while the literal
+    // placeholder stays literal — referenceProse keys on raw author text, not vars.
+    const md = [
+      '# s', '',
+      '## Apply', '```nc:prompt token secret', 'Paste it.', '```', '',
+      '## Troubleshooting', 'If it fails, confirm {{token}} was written.',
+      '```nc:run effect:restart', 'bash restart.sh', '```',
+      '```bash', 'grep TOK .env', '```', '',
+    ].join('\n');
+    const ref = referenceProse(md);
+    expect(ref).toContain('## Troubleshooting');
+    expect(ref).toContain('grep TOK .env'); // the plain fence survives
+    expect(ref).not.toContain('bash restart.sh'); // the nc: fence body is dropped…
+    expect(ref).not.toContain('nc:run'); // …along with its opening fence line
+    expect(ref).toContain('{{token}}'); // the placeholder is never resolved to a secret value
+  });
+
+  it('returns empty for a skill with no reference sections', () => {
+    expect(referenceProse('# only apply\n\n## Apply\n```nc:run effect:build\npnpm run build\n```\n')).toBe('');
+  });
+
+  it('is carried on ApplyResult.referenceProse through a real apply', async () => {
+    const sdir = mkdtempSync(join(tmpdir(), 'nc-ref-skill-'));
+    const rdir = mkdtempSync(join(tmpdir(), 'nc-ref-proj-'));
+    writeFileSync(join(rdir, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(rdir, '.env'), '');
+    writeFileSync(join(sdir, 'SKILL.md'), REFERENCE_SKILL);
+    const res = await applySkill(sdir, rdir, { inputs: {}, exec: () => {} });
+    expect(res.referenceProse).toContain('## Troubleshooting');
+    expect(res.referenceProse).toContain('## Alternatives');
+    expect(res.referenceProse).not.toContain('## Apply');
   });
 });

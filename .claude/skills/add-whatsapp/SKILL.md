@@ -219,6 +219,49 @@ this channel with `/init-first-agent` (or `/manage-channels`).
 
 Not supported (WhatsApp linked-device limitation): edit messages, delete messages.
 
+## Alternatives
+
+### QR code in a browser
+
+Besides the in-terminal QR and the pairing code the Apply flow uses, this skill
+ships a helper that renders the rotating QR as a PNG in your default browser —
+handy when the terminal QR is too small to scan reliably. It spawns the same
+`whatsapp-auth` step, parses each rotating QR from its `WHATSAPP_AUTH_QR` status
+blocks, and serves the current one on a local HTTP server (default port `8765`,
+falls back to a free port):
+
+```bash
+pnpm exec tsx .claude/skills/add-whatsapp/scripts/wa-qr-browser.ts
+```
+
+Flags: `--clean` wipes `store/auth/` before spawning, `--port N` pins the port.
+
+A browser window opens with a QR code. On your phone, open WhatsApp →
+**Settings** → **Linked Devices** → **Link a Device**, scan the QR, and the page
+shows "Authenticated!" when done.
+
+### Headless environments
+
+On a headless host (no display server — no `$DISPLAY`/`$WAYLAND_DISPLAY`, not
+macOS), the browser method can't open a window. Detect it and fall back to the
+pairing-code method (no camera needed):
+
+```bash
+[[ -z "$DISPLAY" && -z "$WAYLAND_DISPLAY" && "$OSTYPE" != darwin* ]] && echo "IS_HEADLESS=true" || echo "IS_HEADLESS=false"
+```
+
+## Optional configuration
+
+If the assistant runs on a dedicated number (its own phone/SIM, not your personal
+WhatsApp), tell the adapter so it doesn't prefix outbound replies with its name:
+
+```bash
+ASSISTANT_HAS_OWN_NUMBER=true
+```
+
+The Apply flow sets this for you when you pick a `dedicated` number; this is the
+key it writes, for reference. A shared (personal) number leaves it unset.
+
 ## Troubleshooting
 
 ### QR code or pairing code expired
@@ -241,6 +284,26 @@ WhatsApp's pairing-code flow occasionally rejects valid codes with "Couldn't lin
 device." This is a server-side rejection unrelated to the code itself. If you hit
 it more than once, switch to the QR method — it has a noticeably higher success
 rate.
+
+### Pairing code not working
+
+Codes expire in ~60 seconds. Delete auth and retry:
+
+```bash
+rm -rf store/auth/ && pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone <phone>
+```
+
+Ensure: digits only (no `+`), phone has internet, WhatsApp is updated.
+
+WhatsApp's pairing-code flow occasionally rejects valid codes with "Couldn't link
+device — An error happened. Please try again." This is a server-side rejection
+unrelated to the code itself; we've seen it happen twice in a row on fresh
+dedicated numbers. If you hit it more than once, switch to QR-browser auth — it
+has a noticeably higher success rate:
+
+```bash
+pnpm exec tsx .claude/skills/add-whatsapp/scripts/wa-qr-browser.ts --clean
+```
 
 ### "waiting for this message" on reactions
 

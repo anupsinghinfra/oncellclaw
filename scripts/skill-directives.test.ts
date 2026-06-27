@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { parseDirectives, validate, promptVar, resolveChatCoreVersion } from './skill-directives.js';
+import { parseDirectives, validate, promptVar, resolveChatCoreVersion, lintReferenceFloor } from './skill-directives.js';
 
 // Guards the structured-directive format against the converted add-slack skill:
 // red if the conversion drifts (a directive dropped/renamed) or the parser breaks.
@@ -283,6 +283,42 @@ describe('prompt PromptOpts attrs (flags/min/normalize/error/reuse)', () => {
   it('flags illegal regex flags:', () => {
     const md = ['```nc:prompt u validate:^x flags:zzz', 'q', '```'].join('\n');
     expect(validate(parseDirectives(md)).some((p) => /is not a valid regex/.test(p.message))).toBe(true);
+  });
+});
+
+// lintReferenceFloor is a WARN-ONLY smell check (never an error, never blocks):
+// a credentialed (nc:prompt secret) or interactive (nc:run effect:step) skill
+// should ship a ## Troubleshooting section — the human floor when a live step
+// misbehaves. It warns when that floor is absent and is silent otherwise.
+describe('lintReferenceFloor (warn-only reference floor)', () => {
+  it('warns when a secret-bearing skill has no ## Troubleshooting', () => {
+    const md = ['```nc:prompt token secret', 'Paste it.', '```'].join('\n');
+    const warnings = lintReferenceFloor(md);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].kind).toBe('reference-floor');
+    expect(warnings[0].message).toMatch(/## Troubleshooting/);
+  });
+
+  it('warns when an interactive effect:step skill has no ## Troubleshooting', () => {
+    const md = ['```nc:run effect:step capture:platform_id=PLATFORM_ID', 'pair', '```'].join('\n');
+    expect(lintReferenceFloor(md)).toHaveLength(1);
+  });
+
+  it('is silent once a ## Troubleshooting section is present', () => {
+    const md = ['```nc:prompt token secret', 'Paste it.', '```', '', '## Troubleshooting', 'Check the logs.'].join('\n');
+    expect(lintReferenceFloor(md)).toEqual([]);
+  });
+
+  it('is silent for a skill with no secret prompt or effect:step (no floor expected)', () => {
+    const md = ['```nc:prompt handle', 'Your handle.', '```', '```nc:env-set', 'H={{handle}}', '```'].join('\n');
+    expect(lintReferenceFloor(md)).toEqual([]);
+  });
+
+  it('never warns on the real credentialed channel skills — they ship a ## Troubleshooting', () => {
+    for (const ch of ['add-signal', 'add-whatsapp', 'add-teams']) {
+      const md = readFileSync(`.claude/skills/${ch}/SKILL.md`, 'utf8');
+      expect(lintReferenceFloor(md)).toEqual([]);
+    }
   });
 });
 

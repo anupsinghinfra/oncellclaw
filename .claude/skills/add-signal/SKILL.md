@@ -11,11 +11,6 @@ only Node.js builtins. NanoClaw links to Signal as a *secondary device* on your
 existing phone: no new number, no bot API. Your assistant sends and receives as
 the number on the phone that scans the link.
 
-The mechanical steps under **Apply** carry `nc:` directive fences: an agent reads
-the prose and applies them, and a parser can apply them deterministically from
-the same document. Every directive is idempotent, so the whole skill is safe to
-re-run; anything a parser can't apply falls back to the prose beside it.
-
 ## Apply
 
 ### 1. Install signal-cli
@@ -163,6 +158,98 @@ this channel with `/init-first-agent` (or `/manage-channels`).
 
 Not supported yet: outbound file attachments (logged and dropped), edit/delete messages, reactions.
 
+## Alternatives
+
+### Register a dedicated number instead of linking
+
+The device-link above joins Signal as a *secondary device* on an existing number.
+If you'd rather give the assistant its own number, register a dedicated SIM or
+VoIP number that NanoClaw owns entirely. This path takes a captcha, an SMS (or
+voice) verification, and an optional profile name.
+
+> **VoIP numbers:** Signal requires SMS verification before voice. Some VoIP providers are blocked even for voice calls. If registration fails with an auth error, try a different provider or a physical SIM.
+
+**Step 1: Solve the CAPTCHA**
+
+Signal requires a CAPTCHA on first registration:
+
+1. Open `https://signalcaptchas.org/registration/generate.html` in a browser
+2. Solve the captcha
+3. Right-click the **"Open Signal"** button → **Copy Link**
+4. The link starts with `signalcaptcha://` — the token is everything after that prefix
+
+**Step 2: Request SMS verification**
+
+```bash
+signal-cli -a +1YOURNUMBER register --captcha "PASTE_TOKEN_HERE"
+```
+
+**Step 3: Voice call fallback (if your number can't receive SMS)**
+
+Wait ~60 seconds after the SMS request, then:
+
+```bash
+signal-cli -a +1YOURNUMBER register --voice --captcha "SAME_TOKEN"
+```
+
+Signal calls your number and reads a 6-digit code. The same captcha token is reusable — no need to solve a new one.
+
+> You must request SMS first. Requesting voice immediately fails with `Invalid verification method: Before requesting voice verification…`
+
+**Step 4: Verify**
+
+```bash
+signal-cli -a +1YOURNUMBER verify CODE
+```
+
+No output = success.
+
+**Step 5: Set profile name (optional)**
+
+> ⚠ Stop NanoClaw before running signal-cli commands — the daemon holds an exclusive lock on its data directory while running.
+
+Run from your NanoClaw project root:
+
+```bash
+source setup/lib/install-slug.sh
+
+# macOS
+launchctl unload ~/Library/LaunchAgents/$(launchd_label).plist
+signal-cli -a +1YOURNUMBER updateProfile --name "YourBotName"
+# optionally: --avatar /path/to/avatar.jpg
+launchctl load ~/Library/LaunchAgents/$(launchd_label).plist
+
+# Linux
+systemctl --user stop $(systemd_unit)
+signal-cli -a +1YOURNUMBER updateProfile --name "YourBotName"
+systemctl --user start $(systemd_unit)
+```
+
+Once registered, set `SIGNAL_ACCOUNT` to this number (as under **Persist the account** above) and restart the service.
+
+## Optional configuration
+
+These `.env` keys tune how NanoClaw talks to the signal-cli daemon. All are
+optional — the defaults work for the device-link flow above.
+
+```bash
+# TCP daemon host and port (default: 127.0.0.1:7583)
+SIGNAL_TCP_HOST=127.0.0.1
+SIGNAL_TCP_PORT=7583
+
+# Path to the signal-cli binary (default: resolved on PATH)
+SIGNAL_CLI_PATH=/usr/local/bin/signal-cli
+
+# Whether NanoClaw manages the daemon lifecycle (default: true).
+# Set to false if you run signal-cli daemon externally.
+SIGNAL_MANAGE_DAEMON=true
+
+# signal-cli data directory (default: ~/.local/share/signal-cli)
+SIGNAL_DATA_DIR=~/.local/share/signal-cli
+```
+
+**Security note:** keep the TCP host on `127.0.0.1`. The daemon has no auth — binding it to a public interface would expose your full Signal account to the network.
+
 ## Troubleshooting
 
 ### Daemon not reachable
@@ -171,16 +258,47 @@ Not supported yet: outbound file attachments (logged and dropped), edit/delete m
 grep "Signal" logs/nanoclaw.log | tail
 ```
 
-If you see `Signal daemon failed to start. Is signal-cli installed and your account linked?`, confirm `signal-cli` is on PATH (or set `SIGNAL_CLI_PATH`) and that the account is linked — `signal-cli -a +YOURNUMBER listIdentities` should succeed without prompting.
+If you see `Signal daemon failed to start. Is signal-cli installed and your account linked?`:
+- Confirm `signal-cli` is on PATH (or set `SIGNAL_CLI_PATH`)
+- Confirm the account is linked: `signal-cli -a +YOURNUMBER listIdentities` should succeed without prompting
+
+If you see `Signal daemon not reachable at 127.0.0.1:7583` and `SIGNAL_MANAGE_DAEMON=false`, start the daemon yourself: `signal-cli -a +YOURNUMBER daemon --tcp 127.0.0.1:7583`.
+
+### Bot not responding
+
+1. Channel initialized: `grep "Signal channel connected" logs/nanoclaw.log | tail -1`
+2. Channel wired: `pnpm exec tsx scripts/q.ts data/v2.db "SELECT mg.platform_id, mg.name FROM messaging_groups mg JOIN messaging_group_agents mga ON mg.id = mga.messaging_group_id WHERE mg.channel_type='signal'"`
+3. Service running: `launchctl print gui/$(id -u)/"$(. setup/lib/install-slug.sh && launchd_label)"` (macOS) / `systemctl --user status "$(. setup/lib/install-slug.sh && systemd_unit)"` (Linux)
+4. **Check for duplicate service instances** — if `logs/nanoclaw.error.log` shows `No adapter for channel type channelType="signal"` despite the adapter starting, two NanoClaw processes are racing. See the `/debug` skill section "No adapter for channel type / Messages silently lost" for the full fix.
+
+### Messages delivered but never arrive (null platformMsgId)
+
+Signal responses show `platformMsgId=undefined` in the main log. This means the delivery poll ran but found no adapter — likely a duplicate service instance issue (see above). Affected messages cannot be retried; the user must resend.
+
+### Lost connection mid-session
+
+If you see `Signal channel lost TCP connection to signal-cli daemon` in the logs, the daemon dropped the connection. Restart the service to re-establish.
 
 ### Messages dropped with `not_member`
 
-New Signal senders — including the owner's Signal identity — are gated until granted access. `/init-first-agent` grants the owner automatically; for other users, wire access with `/manage-channels` after their first message appears in `messaging_groups`.
+The Signal user hasn't been granted membership. New Signal senders — including the owner's Signal identity — are gated until granted access. `/init-first-agent` grants the owner automatically; for other users, wire access with `/manage-channels` after their first message appears in `messaging_groups`. This affects every new Signal user, since their Signal identity is a separate user record from their identity on other channels even if it's the same person.
+
+### Captcha required
+
+Signal requires a captcha for new registrations. Go to `https://signalcaptchas.org/registration/generate.html`, solve it, right-click "Open Signal", copy the link, extract the token after `signalcaptcha://`.
+
+### `Invalid verification method: Before requesting voice verification…`
+
+You must request SMS first, wait ~60 seconds, then request voice. Both steps can use the same captcha token.
 
 ### Config file in use / daemon lock
 
-signal-cli holds an exclusive lock on its data directory while the daemon runs. Stop NanoClaw before running any `signal-cli` command directly, then restart afterward.
+signal-cli holds an exclusive lock on its data directory while the daemon is running. Stop NanoClaw before running any `signal-cli` commands directly, then restart afterward.
 
-### Linking URL expired
+### Group replies going to DM instead of group
 
-The `sgnl://linkdevice…` URL expires after a few minutes. Re-run the device-link step to get a fresh QR.
+Modern Signal groups use GroupV2. The adapter must extract the group ID from `envelope?.dataMessage?.groupV2?.id` — not `groupInfo?.groupId`, which is GroupV1/legacy. If group messages are routing as DMs, check `src/channels/signal.ts` and confirm the groupId extraction falls through to `groupV2.id`.
+
+### QR / linking URL expired
+
+The `sgnl://linkdevice…` URL (and the Path A registration captcha) expire after a few minutes. Re-run the device-link step to get a fresh QR.

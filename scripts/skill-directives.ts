@@ -319,6 +319,31 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
   return problems;
 }
 
+/**
+ * A WARN-ONLY reference-floor check — never an error, never blocks a build. A
+ * credentialed or interactive skill (one that prompts for a `secret`, or runs an
+ * `nc:run effect:step` — a pairing code, a QR device-link) should ship a
+ * `## Troubleshooting` section: the human floor a reader scrolls to when the live
+ * step misbehaves. Missing it is a smell, not a failure — the skill still applies
+ * cleanly — so this returns a warning the CLI prints but never exits non-zero on,
+ * keeping it strictly advisory. Returns [] when no secret/step is present (no
+ * floor is expected) or a `## Troubleshooting` heading already exists.
+ */
+export function lintReferenceFloor(markdown: string): Problem[] {
+  const directives = parseDirectives(markdown);
+  const isFloorBearing = (d: Directive): boolean =>
+    (d.kind === 'prompt' && d.args.includes('secret')) || (d.kind === 'run' && d.attrs.effect === 'step');
+  const anchor = directives.find(isFloorBearing);
+  if (!anchor) return []; // no credential / interactive step ⇒ no floor expected
+  const hasTroubleshooting = markdown.split('\n').some((l) => /^##\s+Troubleshooting\s*$/.test(l.trim()));
+  if (hasTroubleshooting) return [];
+  return [{
+    line: anchor.line,
+    kind: 'reference-floor',
+    message: 'a credentialed/interactive skill should carry a ## Troubleshooting section (the human floor when a live step misbehaves)',
+  }];
+}
+
 // CLI
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   let path = process.argv[2];
@@ -327,8 +352,14 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
     process.exit(2);
   }
   if (existsSync(path) && statSync(path).isDirectory()) path = join(path, 'SKILL.md');
-  const directives = parseDirectives(readFileSync(path, 'utf8'));
+  const md = readFileSync(path, 'utf8');
+  const directives = parseDirectives(md);
   const problems = validate(directives, { chatVersion: resolveChatCoreVersion(process.cwd()) });
-  console.log(JSON.stringify({ directives, problems }, null, 2));
+  // Reference-floor warnings are advisory only — printed for the author, never
+  // folded into the exit code (a missing ## Troubleshooting is a smell, not a
+  // gate). Exit stays driven solely by `validate` problems.
+  const warnings = lintReferenceFloor(md);
+  for (const w of warnings) console.error(`warning: ${w.kind} (line ${w.line}): ${w.message}`);
+  console.log(JSON.stringify({ directives, problems, warnings }, null, 2));
   process.exit(problems.length ? 1 : 0);
 }

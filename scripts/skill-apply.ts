@@ -247,6 +247,13 @@ export interface ApplyResult {
   // `owner_handle` + `platform_id`, the setup flow reads them to wire the agent.
   vars: Record<string, string>;
   journal: JournalEntry[];
+  // The skill's author-written REFERENCE floor — its `## Alternatives`,
+  // `## Optional configuration`, and `## Troubleshooting` sections, sliced
+  // verbatim from the RAW markdown (see `referenceProse`). The driver surfaces
+  // this beside the agentTasks on a bounce: the same prose a human reader would
+  // scroll to when a step doesn't apply cleanly. Sliced on the author headings,
+  // never the resolved {{var}} map, so a resolved {{secret}} can never leak in.
+  referenceProse: string;
 }
 
 export interface ApplyOptions {
@@ -308,6 +315,65 @@ export function firstFailureHint(res: ApplyResult): { headline: string; hint: st
   const heading = lines.find((l) => l.startsWith('#'));
   const headline = heading ? heading.replace(/^#+\s*/, '').trim() : (lines[0] ?? first.reason);
   return { headline, hint };
+}
+
+// The author-written REFERENCE sections the apply engine ignores entirely:
+// `## Alternatives`, `## Optional configuration`, `## Troubleshooting`. Matched
+// on the heading text (lowercased), level-2 only.
+const REFERENCE_HEADINGS = new Set(['alternatives', 'optional configuration', 'troubleshooting']);
+
+/**
+ * Slice a skill's reference floor out of its raw markdown — the
+ * `## Alternatives` / `## Optional configuration` / `## Troubleshooting` sections
+ * the engine never executes. This is the human floor a reader scrolls to (a
+ * dedicated-number path, optional env knobs, dropped-symptom fixes); the driver
+ * surfaces it beside the bounced agentTasks so the operator has the same
+ * reference. Returned VERBATIM from the author text keyed on the headings — never
+ * from the resolved {{var}} map — so a resolved {{secret}} can never leak into it
+ * (a `{{token}}` placeholder, if a reference section ever wrote one, stays a
+ * literal placeholder). Any stray `nc:` directive fence inside a section is
+ * dropped: reference prose is plain bash/json/text only — an `nc:` block belongs
+ * under Apply, never here. Fence state is tracked so a `# comment` line inside a
+ * code block is never mistaken for a markdown heading that would end the slice.
+ */
+export function referenceProse(md: string): string {
+  const sections: string[] = [];
+  let cur: string[] | null = null; // lines of the section being collected, or null
+  let fence: string | null = null; // open fence's info-string ('' for a bare fence), or null
+  const keep = (line: string): void => {
+    // Inside (or toggling) an `nc:` fence ⇒ drop; otherwise collect when capturing.
+    if (cur && !(fence ?? '').startsWith('nc:')) cur.push(line);
+  };
+  for (const line of md.split('\n')) {
+    if (line.startsWith('```')) {
+      if (fence === null) {
+        fence = line.slice(3).trim();
+        keep(line);
+      } else {
+        keep(line); // closing fence — `fence` still holds the opening info-string
+        fence = null;
+      }
+      continue;
+    }
+    if (fence !== null) { keep(line); continue; } // fence body
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      const text = h[2].trim().toLowerCase();
+      if (level === 2 && REFERENCE_HEADINGS.has(text)) {
+        if (cur) sections.push(cur.join('\n').trim());
+        cur = [line]; // open a new reference section
+      } else if (level <= 2) {
+        if (cur) { sections.push(cur.join('\n').trim()); cur = null; } // a non-reference h1/h2 closes the slice
+      } else if (cur) {
+        cur.push(line); // a subsection (### …) inside a captured reference section
+      }
+      continue;
+    }
+    if (cur) cur.push(line);
+  }
+  if (cur) sections.push(cur.join('\n').trim());
+  return sections.filter(Boolean).join('\n\n').trim();
 }
 
 // A hardcoded `origin` breaks forks where the registry branch lives on
@@ -665,7 +731,7 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
   const exec = opts.exec ?? (() => { throw new Error('no exec provided'); });
   const resolveRemote = opts.resolveRemote ?? ((b: string) => defaultResolveRemote(b, root));
   const vars = new Map<string, { value: string; secret: boolean }>();
-  const res: ApplyResult = { applied: [], skipped: [], deferred: [], agentTasks: [], operatorMessages: [], vars: {}, journal: [] };
+  const res: ApplyResult = { applied: [], skipped: [], deferred: [], agentTasks: [], operatorMessages: [], vars: {}, journal: [], referenceProse: referenceProse(md) };
   // A run-health gate: once ANY directive bounces to an agent, the skill is no
   // longer in a known-good state, so the dangerous side effects below must not
   // fire on their own — a live restart, an interactive pairing/QR step, or a wire

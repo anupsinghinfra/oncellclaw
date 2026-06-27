@@ -247,3 +247,104 @@ once you've DM'd the bot, wire this channel with `/init-first-agent` (or
 - **supports-threads**: yes (channels only; DMs and group chats are flat)
 - **typical-use**: Team collaboration with the bot in channels; personal assistant via DMs
 - **default-isolation**: Separate agent group per team. DMs can share an agent group with your main channel for unified personal memory.
+
+## Alternatives
+
+### Auto: Teams CLI
+
+The Credentials flow above walks the manual Azure Portal path. If you'd rather
+script it, the Microsoft Teams CLI creates the Entra app, client secret, and bot
+registration in one command. Requires Node.js 18+, a Microsoft 365 account with
+sideloading permissions, and a public HTTPS endpoint (ngrok, Cloudflare Tunnel,
+or similar).
+
+1. Install the CLI:
+
+   ```bash
+   npm install -g @microsoft/teams.cli@preview
+   ```
+
+2. Sign in and verify:
+
+   ```bash
+   teams login
+   teams status
+   ```
+
+3. Create the Entra app, client secret, and bot registration:
+
+   ```bash
+   teams app create \
+     --name "NanoClaw" \
+     --endpoint "https://your-domain/api/webhooks/teams"
+   ```
+
+   The CLI prints the credentials as `CLIENT_ID`, `CLIENT_SECRET`, and `TENANT_ID`. Map them to NanoClaw's env keys:
+
+   - `CLIENT_ID` → `TEAMS_APP_ID`
+   - `CLIENT_SECRET` → `TEAMS_APP_PASSWORD`
+   - `TENANT_ID` → `TEAMS_APP_TENANT_ID`
+
+4. Pick **Install in Teams** from the post-create menu and confirm in the Teams dialog.
+
+### Azure CLI for the bot resource
+
+The Azure Bot resource and Teams channel can also be created with `az` instead of
+clicking through the portal:
+
+```bash
+az group create --name nanoclaw-rg --location eastus
+az bot create \
+  --resource-group nanoclaw-rg \
+  --name nanoclaw-bot \
+  --app-type SingleTenant \
+  --appid YOUR_APP_ID \
+  --tenant-id YOUR_TENANT_ID \
+  --endpoint "https://your-domain/api/webhooks/teams"
+az bot msteams create --resource-group nanoclaw-rg --name nanoclaw-bot
+```
+
+## Optional configuration
+
+### Receive all channel messages (without @-mention)
+
+By default the bot only receives messages when @-mentioned. To receive every
+message in a channel, add an RSC (resource-specific consent) permission to your
+Teams app `manifest.json`:
+
+```json
+{
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        { "name": "ChannelMessage.Read.Group", "type": "Application" }
+      ]
+    }
+  }
+}
+```
+
+Re-sideload the updated app package for the change to take effect.
+
+## Troubleshooting
+
+### "Upload a custom app" is missing in Teams
+
+Your tenant admin has disabled sideloading. Enable it in Teams Admin Center →
+**Teams apps** → **Setup policies** → **Global** → **Upload custom apps** = On.
+Free personal Teams does not support sideloading at all — use a Microsoft 365
+Business / EDU / developer tenant.
+
+### Bot never receives messages
+
+1. The tunnel is up and the messaging endpoint matches it: Azure Bot → **Configuration** → **Messaging endpoint** must be `https://<your-domain>/api/webhooks/teams`, and your tunnel (e.g. `ngrok http 3000`) must be forwarding to this machine's port 3000.
+2. The adapter started: `grep -i teams logs/nanoclaw.log | tail`.
+3. The credentials are in `.env` and synced to `data/env/env` (re-run the env-sync step if not).
+
+### `Unauthorized` / 401 from Azure Bot Service
+
+The client secret is wrong or expired, or — for a Single Tenant app — `TEAMS_APP_TENANT_ID` is missing. Regenerate the secret in **Certificates & secrets** (copy the Value, not the Secret ID), update `.env`, and restart.
+
+### Replies land in the wrong place
+
+A Teams bot's platform ID is derived from the first inbound activity, so wire the messaging group that the router auto-creates after you DM the bot — don't guess the platform ID. See **Finish wiring** above.

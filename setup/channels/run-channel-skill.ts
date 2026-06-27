@@ -133,6 +133,11 @@ export async function runChannelSkill(
   if (!fullyApplied(res)) {
     if (res.deferred.length) p.log.warn(`Still needs: ${res.deferred.join(', ')}`);
     for (const t of res.agentTasks) p.log.warn(`Needs an agent (${t.kind}): ${t.reason}`);
+    // On a real bounce, also surface the skill's reference floor (Alternatives /
+    // Optional configuration / Troubleshooting) — the same prose a human reader
+    // would scroll to when a step doesn't apply cleanly. Only on a bounce
+    // (agentTasks), and only when the skill actually ships a reference section.
+    if (res.agentTasks.length && res.referenceProse) p.log.info(res.referenceProse);
     // Surface the bounced step's OWN prose as the failure hint + Claude-handoff
     // context (fail() dims the hint and forwards it to offerClaudeOnFailure),
     // instead of a generic "couldn't finish" message. Only a real bounce yields a
