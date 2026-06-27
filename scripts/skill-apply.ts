@@ -357,6 +357,53 @@ function whenMet(when: string, vars: Map<string, { value: string; secret: boolea
   return vars.get(when.slice(0, eq).trim())?.value === when.slice(eq + 1).trim();
 }
 
+// Resolve a jq-style dot-path (`.id`, `.owner.id`) into a parsed JSON value.
+// A missing/non-object hop yields undefined — the caller coerces that to ''.
+function dotPath(obj: unknown, path: string): unknown {
+  let cur: unknown = obj;
+  for (const key of path.replace(/^\./, '').split('.').filter(Boolean)) {
+    if (cur === null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return cur;
+}
+
+// Bind a `run capture:<spec>` from a command's stdout into one or more {{vars}}.
+//   • bare `capture:var`           → binds the trimmed stdout as-is (unchanged).
+//   • `capture:a=.x,b=.owner.id`   → parses the stdout as JSON and binds each var
+//                                     to its dot-path, so ONE API call resolves
+//                                     several values (the structured twin of the
+//                                     effect:step terminal-block capture — those
+//                                     two are distinguished by effect: step reads
+//                                     the status block, fetch/external read JSON
+//                                     stdout). Unparseable JSON throws → the outer
+//                                     catch bounces it to an agent.
+// An optional `validate:<re>` is enforced against every bound value; a mismatch
+// THROWS so the run bounces to an agent — a command's output has no human to
+// re-prompt, so an invalid capture is a real failure, not a re-ask.
+function bindCapture(
+  spec: string,
+  stdout: string,
+  validate: string | undefined,
+  vars: Map<string, { value: string; secret: boolean }>,
+): void {
+  const re = validate ? new RegExp(validate) : undefined;
+  const set = (name: string, value: string): void => {
+    if (re && !re.test(value)) throw new Error(`captured ${name}="${value}" does not match validate:${validate}`);
+    vars.set(name, { value, secret: false });
+  };
+  if (!spec.includes('=')) {
+    set(spec, stdout);
+    return;
+  }
+  const json = JSON.parse(stdout) as unknown; // not JSON → throws → outer catch bounces
+  for (const pair of spec.split(',')) {
+    const eq = pair.indexOf('=');
+    if (eq < 1) continue;
+    set(pair.slice(0, eq).trim(), String(dotPath(json, pair.slice(eq + 1).trim()) ?? ''));
+  }
+}
+
 // The mutating twin of selfStatus. Records what it did to the journal so remove
 // is derivable. Throws on failure → caught and bounced to an agent.
 async function applyOne(
@@ -418,6 +465,8 @@ async function applyOne(
       // API (e.g. Slack conversations.open → the DM channel id) and feed it to a
       // later directive, so a flow that validates/resolves stays pure directives.
       const capture = typeof d.attrs.capture === 'string' ? d.attrs.capture : undefined;
+      // A `validate:<re>` shape-guard the stdout capture enforces (see bindCapture).
+      const validate = typeof d.attrs.validate === 'string' ? d.attrs.validate : undefined;
       // effect:check runs the body as a shell PREDICATE — a precondition gate
       // that mutates NOTHING. It pushes no journal entry and binds no capture: a
       // zero exit is a silent pass; a non-zero exit throws → the outer catch
@@ -457,7 +506,9 @@ async function applyOne(
         // throws → caught → deferred (the prompt hasn't been answered yet).
         const out = await exec(substitute(cmd, vars));
         // Last command wins for capture (a capture run should be a single command).
-        if (capture) vars.set(capture, { value: typeof out === 'string' ? out.trim() : '', secret: false });
+        // bindCapture binds stdout-as-is OR a multi-field JSON spec, and enforces
+        // validate:<re> — a mismatch / unparseable JSON throws → bounced to an agent.
+        if (capture) bindCapture(capture, typeof out === 'string' ? out.trim() : '', validate, vars);
         // Journal the ORIGINAL command (placeholders intact) — never the
         // substituted form — so a secret interpolated into a run never lands in
         // the journal (or a remove replay).

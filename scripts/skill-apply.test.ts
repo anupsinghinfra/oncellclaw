@@ -333,6 +333,100 @@ describe('nc:run capture', () => {
   });
 });
 
+// Multi-field JSON capture: a `capture:a=.x,b=.owner.id` on an effect:fetch parses
+// the command's stdout as JSON and binds each var to its jq-style dot-path — so ONE
+// API call (Discord's /oauth2/applications/@me) resolves several values at once.
+// A single `capture:var` (no =) still binds stdout as-is. validate:<re> shape-guards
+// a captured value; a mismatch bounces to an agent (a command's output has no human
+// to re-prompt). effect:step's terminal-block field capture (distinguished by
+// effect) is untouched — see the effect:step describe above.
+const MULTI_CAPTURE_SKILL = `# multi-field capture demo
+
+## Derive three values from one call
+\`\`\`nc:run capture:application_id=.id,public_key=.verify_key,owner_handle=.owner.id effect:fetch
+curl -sf https://example/app
+\`\`\`
+
+## Store the derived values
+\`\`\`nc:env-set
+APP_ID={{application_id}}
+PUB_KEY={{public_key}}
+\`\`\`
+`;
+
+const CAPTURE_VALIDATE_SKILL = `# capture validate demo
+
+## Resolve an id that must be numeric
+\`\`\`nc:run capture:app_id=.id effect:fetch validate:^\\d+$
+curl -sf https://example/app
+\`\`\`
+
+## Use it
+\`\`\`nc:env-set
+APP_ID={{app_id}}
+\`\`\`
+`;
+
+describe('nc:run multi-field JSON capture + validate', () => {
+  let mroot: string;
+  let mskill: string;
+  beforeEach(() => {
+    mskill = mkdtempSync(join(tmpdir(), 'nc-multi-skill-'));
+    mroot = mkdtempSync(join(tmpdir(), 'nc-multi-proj-'));
+    writeFileSync(join(mroot, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(mroot, '.env'), '');
+  });
+
+  it('binds three vars from one JSON stdout via dot-paths (incl. a nested .owner.id) and feeds them downstream', async () => {
+    writeFileSync(join(mskill, 'SKILL.md'), MULTI_CAPTURE_SKILL);
+    const json = JSON.stringify({ id: '111111111111111111', verify_key: 'abc123', owner: { id: '999999999999999999' } });
+    const res = await applySkill(mskill, mroot, { inputs: {}, exec: () => json + '\n' });
+    expect(fullyApplied(res)).toBe(true);
+    expect(res.vars.application_id).toBe('111111111111111111');
+    expect(res.vars.public_key).toBe('abc123');
+    expect(res.vars.owner_handle).toBe('999999999999999999'); // nested dot-path resolved
+    const env = readFileSync(join(mroot, '.env'), 'utf8');
+    expect(env).toContain('APP_ID=111111111111111111'); // flowed into env-set
+    expect(env).toContain('PUB_KEY=abc123');
+  });
+
+  it('lint registers each capture:<var>=<dot-path> var as defined for the downstream env-set', () => {
+    expect(validate(parseDirectives(MULTI_CAPTURE_SKILL))).toEqual([]);
+  });
+
+  it('single capture:<var> (no =) still binds stdout as-is — unchanged', async () => {
+    writeFileSync(join(mskill, 'SKILL.md'), '# single\n\n```nc:run capture:dm effect:fetch\nresolve\n```\n```nc:env-set\nDM={{dm}}\n```\n');
+    const res = await applySkill(mskill, mroot, { inputs: {}, exec: () => 'D123\n' });
+    expect(res.vars.dm).toBe('D123');
+    expect(readFileSync(join(mroot, '.env'), 'utf8')).toContain('DM=D123');
+  });
+
+  it('a validate mismatch on a captured value bounces to an agent — never binds the var', async () => {
+    writeFileSync(join(mskill, 'SKILL.md'), CAPTURE_VALIDATE_SKILL);
+    const res = await applySkill(mskill, mroot, { inputs: {}, exec: () => JSON.stringify({ id: 'not-a-number' }) });
+    expect(res.agentTasks).toHaveLength(1); // bounce, not re-ask
+    expect(res.agentTasks[0].kind).toBe('run');
+    expect(res.vars.app_id).toBeUndefined(); // validate failed before binding
+    // the downstream env-set then defers on the unresolved {{app_id}}
+    expect(res.deferred.some((d) => /unresolved \{\{app_id\}\}/.test(d))).toBe(true);
+    expect(readFileSync(join(mroot, '.env'), 'utf8')).not.toContain('APP_ID=');
+  });
+
+  it('a validate match binds the captured value and applies clean', async () => {
+    writeFileSync(join(mskill, 'SKILL.md'), CAPTURE_VALIDATE_SKILL);
+    const res = await applySkill(mskill, mroot, { inputs: {}, exec: () => JSON.stringify({ id: '42' }) });
+    expect(fullyApplied(res)).toBe(true);
+    expect(res.vars.app_id).toBe('42');
+  });
+
+  it('unparseable JSON stdout for a multi-field capture bounces (degrade, not crash)', async () => {
+    writeFileSync(join(mskill, 'SKILL.md'), MULTI_CAPTURE_SKILL);
+    const res = await applySkill(mskill, mroot, { inputs: {}, exec: () => 'not json at all' });
+    expect(res.agentTasks).toHaveLength(1);
+    expect(res.vars.application_id).toBeUndefined();
+  });
+});
+
 // operator: the parts addressed to the human (UI steps), delineated so the agent
 // relays them and the engine renders them — the output twin of prompt.
 describe('nc:operator', () => {

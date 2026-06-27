@@ -28,6 +28,11 @@
 //        (rebuild, or a setup that restarts once) skips it via ApplyOptions.
 //        skipEffects. capture:<var> binds the command's stdout into {{var}} (twin
 //        of prompt) — e.g. resolve an id from an API and feed it to a later step.
+//        capture:<var>=<dot-path>[,<var2>=<dot-path2>…] parses the stdout as JSON
+//        and binds each var to its jq-style dot-path (.id, .owner.id), so ONE API
+//        call resolves several values at once. validate:<re> shape-guards each
+//        captured value (e.g. validate:^discord:); a mismatch bounces the run to
+//        an agent (a command's output has no human to re-prompt — unlike prompt).
 //        effect:step runs a long-running, operator-interactive step (a pairing
 //        code, a QR device-link) through the streaming exec: its
 //        `=== NANOCLAW SETUP: … ===` status blocks render to the operator live and
@@ -256,6 +261,14 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
     // capture:<var> binds stdout; capture:<var>=<FIELD>,… binds step block fields.
     if (d.kind === 'run' && typeof d.attrs.capture === 'string') {
       for (const v of captureVars(d.attrs.capture)) defined.add(v);
+    }
+    // A run's capture validate:<re> (the stdout shape-guard) must be a valid regex.
+    if (d.kind === 'run' && typeof d.attrs.validate === 'string') {
+      try {
+        new RegExp(d.attrs.validate);
+      } catch {
+        flag(d, `run validate:${d.attrs.validate} is not a valid regex`);
+      }
     }
   }
   return problems;

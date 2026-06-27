@@ -70,27 +70,35 @@ server with you. Tell the user:
 ```nc:operator
 Create the Discord bot:
 1. Go to https://discord.com/developers/applications → New Application. Name it (e.g. "NanoClaw Assistant").
-2. General Information → copy the Application ID and the Public Key.
-3. Bot tab → Add Bot if needed → Reset Token, then copy the Bot Token (it's shown only once).
-4. Bot tab → Privileged Gateway Intents → enable Message Content Intent.
-5. OAuth2 → URL Generator → Scopes: bot; Bot Permissions: Send Messages, Read Message History, Add Reactions, Attach Files, Use Slash Commands.
-6. Open the generated URL and invite the bot to a server you're also in (a personal server is fine) — the bot can only DM you once you share a server.
+2. Bot tab → Add Bot if needed → Reset Token, then copy the Bot Token (it's shown only once).
+3. Bot tab → Privileged Gateway Intents → enable Message Content Intent.
+4. OAuth2 → URL Generator → Scopes: bot; Bot Permissions: Send Messages, Read Message History, Add Reactions, Attach Files, Use Slash Commands.
+5. Open the generated URL and invite the bot to a server you're also in (a personal server is fine) — the bot can only DM you once you share a server.
 ```
 
-Collect the three values and store them — the adapter reads them from `.env` and
-fails to start without `DISCORD_PUBLIC_KEY` and `DISCORD_APPLICATION_ID`. They go
-to `.env` (set-if-absent — a value you've already filled in is never
-overwritten) and sync to the container:
+Paste the Bot Token (it's shown only once). You don't paste the Application ID or
+the Public Key by hand — the bot's own application record carries both, so a
+single call derives them from the token:
 
 ```nc:prompt bot_token secret validate:^[A-Za-z0-9._-]{50,}$
 Paste the Bot Token — Bot tab. Click `Reset Token` if you need a new one.
 ```
-```nc:prompt application_id validate:^\d{17,20}$
-Paste the Application ID — General Information tab.
+
+Read the application's own record. `GET /oauth2/applications/@me` returns the
+Application ID (`id`), the Public Key (`verify_key`), and your own account as the
+app's owner (`owner.id`) — so the App ID, the Public Key, and your Discord user ID
+all come from this one call instead of being copied by hand. A bad token fails
+here, before the restart, rather than silently later:
+
+```nc:run capture:application_id=.id,public_key=.verify_key,owner_handle=.owner.id effect:fetch
+curl -sf https://discord.com/api/v10/oauth2/applications/@me -H "Authorization: Bot {{bot_token}}"
 ```
-```nc:prompt public_key validate:^[a-fA-F0-9]{64}$
-Paste the Public Key — General Information tab.
-```
+
+Store the token and the two derived credentials — the adapter reads them from
+`.env` and fails to start without `DISCORD_PUBLIC_KEY` and `DISCORD_APPLICATION_ID`
+(set-if-absent, so a value you've already filled in is never overwritten) — and
+sync them to the container:
+
 ```nc:env-set
 DISCORD_BOT_TOKEN={{bot_token}}
 DISCORD_APPLICATION_ID={{application_id}}
@@ -110,21 +118,9 @@ bash setup/lib/restart.sh
 
 ## Resolve your DM channel
 
-The agent talks to you in your direct-message channel with the bot. Resolve its
-address so the owner-wiring step can target it. You'll need your Discord user ID:
-open **Settings → Advanced → Developer Mode** on, then right-click your own
-name and **Copy User ID** — it's 17–20 digits.
-
-```nc:prompt owner_handle validate:^\d{17,20}$
-Your Discord user ID (Settings → Advanced → Developer Mode on, then right-click your name → "Copy User ID"; 17–20 digits).
-```
-
-Confirm the bot token works and capture the bot identity — `/users/@me` returns
-the bot user and fails here if the token is bad:
-
-```nc:run capture:connected_as effect:fetch
-curl -sf https://discord.com/api/v10/users/@me -H "Authorization: Bot {{bot_token}}" | jq -er '"@" + .username'
-```
+The agent talks to you in your direct-message channel with the bot. Your Discord
+user ID was already derived as the application's owner (`owner_handle`), so all
+that's left is to open the DM and read back its channel id.
 
 Open the DM with `POST /users/@me/channels` and take the channel id it returns as
 the conversation address `discord:@me:<channelId>` (if Discord refuses, the bot

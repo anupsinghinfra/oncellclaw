@@ -218,4 +218,28 @@ describe('when: guard + multi-field capture', () => {
     ].join('\n');
     expect(validate(parseDirectives(md))).toEqual([]);
   });
+
+  it('registers each capture:<var>=<dot-path> (JSON multi-field) var as defined for downstream {{vars}}', () => {
+    const md = [
+      '```nc:run capture:application_id=.id,public_key=.verify_key,owner_handle=.owner.id effect:fetch',
+      'curl -sf https://example/app',
+      '```',
+      '```nc:env-set',
+      'APP={{application_id}}',
+      'PUB={{public_key}}',
+      'OWN={{owner_handle}}',
+      '```',
+    ].join('\n');
+    expect(validate(parseDirectives(md))).toEqual([]);
+  });
+
+  it('flags an invalid run capture validate:<re> regex', () => {
+    const md = ['```nc:run capture:app_id=.id effect:fetch validate:^[', 'curl x', '```'].join('\n');
+    expect(validate(parseDirectives(md)).some((p) => /run validate:.*is not a valid regex/.test(p.message))).toBe(true);
+  });
+
+  it('accepts a valid run capture validate:<re> regex', () => {
+    const md = ['```nc:run capture:app_id=.id effect:fetch validate:^\\d+$', 'curl x', '```'].join('\n');
+    expect(validate(parseDirectives(md))).toEqual([]);
+  });
 });
