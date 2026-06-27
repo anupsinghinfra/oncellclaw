@@ -114,14 +114,12 @@ publicly reachable for Slack to deliver events. Running locally, expose it with
 ngrok (`ngrok http 3000`), a Cloudflare Tunnel, or a reverse proxy on a VPS —
 the resulting public URL is the base for the Request URL above.
 
-## Wire
+## Connect yourself
 
-This is the whole procedure `setup/channels/slack.ts` ran — validate the token,
-resolve your DM channel, wire you as owner, greet you — expressed as directives:
-`prompt` collects input, `run capture:<var>` binds an API result into a `{{var}}`,
-and `ncl` does the wiring. Runs once the service is up (in `/setup`, after the
-restart; for a standalone `/add-slack`, it's already running). Find your member
-ID in Slack: **Profile → ⋮ → "Copy member ID"** (starts with `U`).
+Wire your own Slack account as the owner so you can talk to the assistant, and
+have it send you a hello. You'll need your Slack member ID: open your profile
+(your avatar, bottom-left), then **⋮** → **Copy member ID** — it starts with `U`.
+Pick which agent should answer you, too (`ncl groups list` shows their folders).
 
 ```nc:prompt slack_user_id
 Your Slack member ID (Profile → ⋮ → "Copy member ID"; starts with U).
@@ -130,23 +128,23 @@ Your Slack member ID (Profile → ⋮ → "Copy member ID"; starts with U).
 Which agent should answer your Slack DMs? Enter its folder (run `ncl groups list`).
 ```
 
-Validate the bot token first — a bad token fails here, not silently later
-(`jq -e` exits non-zero unless `ok` is true):
+Confirm the bot token works — `auth.test` should come back `ok`:
 
 ```nc:run effect:fetch
 curl -sf -X POST https://slack.com/api/auth.test -H "Authorization: Bearer {{bot_token}}" | jq -e .ok >/dev/null
 ```
 
-Resolve your DM channel id — this is the `platform_id` (`slack:<dmId>`).
-`conversations.open` returns it and `capture:dm_channel` binds it for the wiring;
-`jq -er` fails the step if Slack returns no channel (e.g. the `im:write` scope is
-missing), so a broken resolve degrades instead of wiring a bad id:
+The conversation address is your direct-message channel with the bot —
+`slack:<channelId>`. Open the DM with `conversations.open` and take the channel
+id it returns (if Slack returns no channel, the bot is missing the `im:write`
+scope — add it and reinstall):
 
 ```nc:run capture:dm_channel effect:fetch
 curl -s -X POST https://slack.com/api/conversations.open -H "Authorization: Bearer {{bot_token}}" -H "Content-Type: application/json" -d '{"users":"{{slack_user_id}}"}' | jq -er .channel.id
 ```
 
-Wire the owner and send the welcome (every `ncl … create` is idempotent):
+Register yourself as the owner, wire your DM to the agent so it answers every
+message, and send a greeting:
 
 ```nc:run effect:wire
 ncl users create --id slack:{{slack_user_id}} --kind slack --display-name Owner
@@ -156,11 +154,9 @@ ncl wirings create --channel-type slack --platform-id slack:{{dm_channel}} --age
 ncl messaging-groups send --channel-type slack --platform-id slack:{{dm_channel}} --sender-id slack:{{slack_user_id}} --sender Owner --text "Hi — I'm your NanoClaw assistant. Say anything to get started."
 ```
 
-`{{bot_token}}` is the secret you pasted above; substituting it into `curl` does
-not journal it (the journal keeps the `{{bot_token}}` placeholder). The welcome
-DM goes out over `chat.postMessage`, which works before Event Subscriptions are
-configured — but to receive *replies* you must finish the Event Subscriptions +
-Interactivity steps so Slack can reach your webhook.
+The greeting goes out over `chat.postMessage`, which works right away. To receive
+replies, finish the Event Subscriptions and Interactivity steps above so Slack
+can reach the webhook.
 
 ## Next Steps
 

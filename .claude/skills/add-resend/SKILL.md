@@ -107,14 +107,11 @@ RESEND_WEBHOOK_SECRET={{webhook_secret}}
 ```nc:env-sync
 ```
 
-## Wire
+## Connect yourself
 
-Email is direct-addressable — outbound works with no prior inbound (the bot can
-email first) — so the wiring is the **owner bootstrap**: collect your address,
-wire you as owner of an existing agent group, and have the bot email you a hello.
-It is just collected input fed to `ncl`; a parser runs the same calls a person
-would. These run once the service is up (in `/setup`, after the restart; for a
-standalone `/add-resend`, the service is already running).
+Because email is direct-addressable, the bot can write to you first — so wire
+your own address as the owner and have it email you a hello. Tell it your address
+and which agent should answer your email (`ncl groups list` shows their folders):
 
 ```nc:prompt owner_email
 Your email address — I'll wire you as owner and email you a hello.
@@ -122,6 +119,10 @@ Your email address — I'll wire you as owner and email you a hello.
 ```nc:prompt agent_folder
 Which agent should answer your email? Enter its folder (run `ncl groups list`).
 ```
+
+Register yourself as the owner, wire your address so the agent answers your email,
+and send the hello:
+
 ```nc:run effect:wire
 ncl users create --id resend:{{owner_email}} --kind resend --display-name Owner
 ncl roles grant --user resend:{{owner_email}} --role owner
@@ -130,11 +131,8 @@ ncl wirings create --channel-type resend --platform-id resend:{{owner_email}} --
 ncl messaging-groups send --channel-type resend --platform-id resend:{{owner_email}} --sender-id resend:{{owner_email}} --sender Owner --text "Hi — I'm your NanoClaw assistant, reachable by email now. Reply to this thread anytime."
 ```
 
-Every `ncl … create` is idempotent, so re-running this skill is safe. The
-platform_id is `resend:<your-address>`, prefix included — a bare `you@example.com`
-is stored unprefixed (it contains `@`) and inbound, which arrives as
-`resend:you@example.com`, would never match. The bot's hello lands as a fresh
-email thread; reply to keep the conversation going.
+The hello arrives as a fresh email thread; reply to keep the conversation going.
+Your own address is the conversation key (`resend:<your-address>`).
 
 ## Next Steps
 

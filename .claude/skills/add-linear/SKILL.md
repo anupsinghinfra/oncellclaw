@@ -147,11 +147,9 @@ LINEAR_API_KEY=lin_api_...
 
 ## Wiring
 
-Linear is team-routed: one messaging group per team (`linear:<TEAM_KEY>`), and the
-agent answers *every* comment on that team's issues (it can't be @-mentioned). This
-is pre-wired — collect the target agent and wire it with `ncl`, reusing the team key
-you entered above. It is just collected input fed to `ncl`; a parser runs the same
-calls a person would. Runs once the service is up.
+Linear is team-routed: the assistant watches one team and answers *every* comment
+on its issues (it can't be @-mentioned). Wire the team you set up to an agent —
+pick which one should answer (`ncl groups list` shows their folders):
 
 ```nc:prompt agent_folder
 Which agent should answer Linear comments? Enter its folder (run `ncl groups list`).
@@ -161,11 +159,10 @@ ncl messaging-groups create --channel-type linear --platform-id linear:{{linear_
 ncl wirings create --channel-type linear --platform-id linear:{{linear_team_key}} --agent-group {{agent_folder}} --engage-mode pattern --engage-pattern . --session-mode per-thread
 ```
 
-Both `create`s are idempotent, so re-running this skill is safe. The `platform_id`
-is `linear:<TEAM_KEY>` — it must match what the adapter emits inbound. There's no
-welcome (Linear has no DM); the agent greets users when it first answers a comment.
-For a public-internet workspace use `--unknown-sender-policy strict` and register
-trusted members (see the GitHub skill). Each issue thread gets its own session.
+Each issue thread becomes its own conversation. There's no welcome — Linear has
+no direct message, so the assistant greets people when it first answers a comment.
+For a public-internet workspace, restrict it to people you've registered with
+`--unknown-sender-policy strict` (see the GitHub skill for adding members).
 
 ## Next Steps
 
