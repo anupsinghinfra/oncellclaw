@@ -18,6 +18,33 @@ import path from 'path';
 import { log } from '../src/log.js';
 import { emitStatus } from './status.js';
 
+/**
+ * Upsert a `KEY=VALUE` line into the project's `.env`, returning whether the
+ * key already existed. The single writer for `.env` edits so flows don't invent
+ * grep/sed pipelines (which can't be allowlisted tightly).
+ */
+export function upsertEnvVar(key: string, value: string): { existed: boolean } {
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+    throw new Error(`Invalid env key: ${key} (must be UPPER_SNAKE_CASE)`);
+  }
+  const envFile = path.join(process.cwd(), '.env');
+  let content = '';
+  if (fs.existsSync(envFile)) {
+    content = fs.readFileSync(envFile, 'utf-8');
+  }
+  const lineRegex = new RegExp(`^${key}=.*$`, 'm');
+  const existed = lineRegex.test(content);
+  const newLine = `${key}=${value}`;
+  if (existed) {
+    content = content.replace(lineRegex, newLine);
+  } else {
+    const sep = content && !content.endsWith('\n') ? '\n' : '';
+    content = content + sep + newLine + '\n';
+  }
+  fs.writeFileSync(envFile, content);
+  return { existed };
+}
+
 export async function run(args: string[]): Promise<void> {
   const keyIdx = args.indexOf('--key');
   const valueIdx = args.indexOf('--value');
@@ -33,37 +60,15 @@ export async function run(args: string[]): Promise<void> {
   const key = args[keyIdx + 1];
   const value = args[valueIdx + 1];
 
-  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
-    throw new Error(`Invalid env key: ${key} (must be UPPER_SNAKE_CASE)`);
-  }
-
-  const projectRoot = process.cwd();
-  const envFile = path.join(projectRoot, '.env');
-
-  let content = '';
-  if (fs.existsSync(envFile)) {
-    content = fs.readFileSync(envFile, 'utf-8');
-  }
-
-  const lineRegex = new RegExp(`^${key}=.*$`, 'm');
-  const newLine = `${key}=${value}`;
-  const existed = lineRegex.test(content);
-
-  if (existed) {
-    content = content.replace(lineRegex, newLine);
-  } else {
-    const sep = content && !content.endsWith('\n') ? '\n' : '';
-    content = content + sep + newLine + '\n';
-  }
-
-  fs.writeFileSync(envFile, content);
+  const { existed } = upsertEnvVar(key, value);
   log.info('Updated .env', { key, existed });
 
   let synced = false;
   if (syncContainer) {
+    const projectRoot = process.cwd();
     const dataEnvDir = path.join(projectRoot, 'data', 'env');
     fs.mkdirSync(dataEnvDir, { recursive: true });
-    fs.copyFileSync(envFile, path.join(dataEnvDir, 'env'));
+    fs.copyFileSync(path.join(projectRoot, '.env'), path.join(dataEnvDir, 'env'));
     synced = true;
     log.info('Synced .env to container mount', { path: 'data/env/env' });
   }
