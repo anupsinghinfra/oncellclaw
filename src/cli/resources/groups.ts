@@ -5,6 +5,7 @@ import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
+  ensureContainerConfig,
   getContainerConfig,
   updateContainerConfigScalars,
   updateContainerConfigJson,
@@ -62,6 +63,11 @@ registerResource({
   // DELETE violates FK constraints (see #2525). The cascading handler is
   // provided as `customOperations.delete` below.
   operations: { list: 'open', get: 'open', create: 'approval', update: 'approval' },
+  // A CLI-created group has no config row until first spawn; seed one now so it's
+  // created on the instance default (ensureContainerConfig stamps it) and is
+  // spawnable without waiting for the startup backfill. Per-group overrides via
+  // `groups config update --provider` still win.
+  afterCreate: (created) => ensureContainerConfig(created.id as string),
   customOperations: {
     delete: {
       access: 'approval',

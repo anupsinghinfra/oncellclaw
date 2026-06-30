@@ -16,7 +16,6 @@ const mockRequestApproval = vi.fn().mockResolvedValue(undefined);
 const mockGetContainerConfig = vi.fn();
 const mockCreateAgentGroup = vi.fn();
 const mockInitGroupFilesystem = vi.fn();
-const mockUpdateScalars = vi.fn();
 const mockWriteDestinations = vi.fn();
 const mockNotifyWrite = vi.fn();
 
@@ -26,7 +25,6 @@ vi.mock('../approvals/index.js', () => ({
 vi.mock('../../db/container-configs.js', () => ({
   getContainerConfig: (...a: unknown[]) => mockGetContainerConfig(...a),
   ensureContainerConfig: () => {},
-  updateContainerConfigScalars: (...a: unknown[]) => mockUpdateScalars(...a),
 }));
 vi.mock('../../db/agent-groups.js', () => ({
   getAgentGroup: (id: string) => ({ id, name: id.toUpperCase(), folder: id, agent_provider: null, created_at: '' }),
@@ -80,8 +78,10 @@ describe('handleCreateAgent — scope-based authorization', () => {
 
   it('child inherits the creator provider (codex parent → codex child)', async () => {
     // A subagent must run on the same authenticated runtime as its creator —
-    // on a codex-only install a claude default would 401. Red-on-delete:
-    // dropping the inheritance leaves the child provider-less (→ claude).
+    // on a codex-only install a claude default would 401. The provider is
+    // passed to initGroupFilesystem, which stamps the child's config row.
+    // Red-on-delete: dropping the inheritance lets the child fall through to the
+    // instance default instead of codex.
     mockGetContainerConfig.mockReturnValue({ cli_scope: 'global', provider: 'codex' });
 
     await handleCreateAgent({ name: 'Scout', instructions: 'help' }, SESSION);
@@ -90,15 +90,19 @@ describe('handleCreateAgent — scope-based authorization', () => {
       expect.anything(),
       expect.objectContaining({ provider: 'codex' }),
     );
-    expect(mockUpdateScalars).toHaveBeenCalledWith(expect.any(String), { provider: 'codex' });
   });
 
-  it('claude creator leaves the child provider unset (built-in default)', async () => {
-    mockGetContainerConfig.mockReturnValue({ cli_scope: 'global' }); // no provider
+  it('claude creator pins the child to claude, not the instance default', async () => {
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'global' }); // parent has no explicit provider
 
     await handleCreateAgent({ name: 'Scout', instructions: 'help' }, SESSION);
 
-    expect(mockUpdateScalars).not.toHaveBeenCalled();
+    // The child inherits the parent's EFFECTIVE provider (claude), passed
+    // explicitly so it never falls through to a non-claude instance default.
+    expect(mockInitGroupFilesystem).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ provider: 'claude' }),
+    );
   });
 
   it('group scope (default): requires approval, does NOT create directly', async () => {

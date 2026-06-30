@@ -46,6 +46,7 @@ import './providers/index.js';
 import { brightSelect } from './lib/bright-select.js';
 import { offerClaudeOnFailure } from './lib/claude-handoff.js';
 import { setPickedProvider } from './lib/picked-provider.js';
+import { upsertEnvVar } from './set-env.js';
 import {
   applyToEnv,
   parseFlags,
@@ -65,6 +66,7 @@ import { ensureAnswer, fail, runQuietChild, runQuietStep, spawnQuiet } from './l
 import { emit as phEmit } from './lib/diagnostics.js';
 import { accentGreen, brandBody, brandBold, brandChip, dimWrap, fitToWidth, fmtDuration, note, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
+import { DEFAULT_AGENT_PROVIDER } from '../src/config.js';
 
 const CLI_AGENT_NAME = 'Terminal Agent';
 const RUN_START = Date.now();
@@ -341,6 +343,10 @@ async function main(): Promise<void> {
     // same way (docs/provider-migration.md).
     agentProvider = await askAgentProviderChoice();
     setPickedProvider(agentProvider);
+    // Persist the pick as the instance-wide default so every future group
+    // (channel-approved, ncl-created) is created on this provider. Read from
+    // .env at host start; per-group `ncl groups config update --provider` wins.
+    upsertEnvVar('DEFAULT_AGENT_PROVIDER', agentProvider);
     let providerEntry = getSetupProvider(agentProvider);
     if (agentProvider !== 'claude' && !providerEntry) {
       // A non-claude provider picked from the hard-wired list isn't wired in
@@ -827,14 +833,18 @@ async function askAgentProviderChoice(): Promise<string> {
     phEmit('agent_provider_chosen', { provider: preset, preset: true });
     return preset;
   }
-  // The pick installs and authenticates a runtime — it is not an
-  // install-wide default, so re-runs safely Enter-through on claude (its
-  // auth flow short-circuits when the secret already exists).
+  // The pick is persisted as the instance default (DEFAULT_AGENT_PROVIDER), so
+  // pre-select the current default — a re-run Enter-through then preserves it
+  // instead of silently resetting it to claude. Fall back to claude if the
+  // persisted default isn't an offered option (e.g. its provider was removed).
+  const currentDefault = options.some((o) => o.value === DEFAULT_AGENT_PROVIDER)
+    ? DEFAULT_AGENT_PROVIDER
+    : 'claude';
   const choice = ensureAnswer(
     await brightSelect<string>({
       message: 'Which agent runtime should power your assistant?',
       options,
-      initialValue: 'claude',
+      initialValue: currentDefault,
     }),
   ) as string;
   setupLog.userInput('agent_provider', choice);

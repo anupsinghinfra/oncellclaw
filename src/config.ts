@@ -6,9 +6,27 @@ import { getContainerImageBase, getDefaultContainerImage, getInstallSlug } from 
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER', 'ONECLI_URL', 'ONECLI_API_KEY', 'TZ']);
+const envConfig = readEnvFile([
+  'ASSISTANT_NAME',
+  'ASSISTANT_HAS_OWN_NUMBER',
+  'ONECLI_URL',
+  'ONECLI_API_KEY',
+  'TZ',
+  'DEFAULT_AGENT_PROVIDER',
+]);
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+
+// Instance-wide default agent provider for newly created groups. `claude` (the
+// built-in provider) when unset, so existing installs are unaffected on upgrade.
+// Applied only at group-creation time (stamped onto the config row) — never in
+// provider resolution — so existing groups are never retroactively flipped.
+// Per-group `ncl groups config update --provider` still overrides it.
+export const DEFAULT_AGENT_PROVIDER = (
+  process.env.DEFAULT_AGENT_PROVIDER ||
+  envConfig.DEFAULT_AGENT_PROVIDER ||
+  'claude'
+).toLowerCase();
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 
