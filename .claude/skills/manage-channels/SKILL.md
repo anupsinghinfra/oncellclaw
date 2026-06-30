@@ -67,7 +67,7 @@ pnpm exec tsx setup/index.ts --step register -- \
 
 The `register` step creates the agent group (reusing it if the folder already exists), the messaging group, and the wiring row. `createMessagingGroupAgent` auto-creates the companion `agent_destinations` row so the agent can address the channel by name.
 
-When creating a NEW agent group on a non-default provider, append `--provider <name>` (e.g. `--provider codex`) — there is no install-wide default; existing groups switch via `ncl groups config update --provider` instead.
+New agent groups are created on the instance default provider (`DEFAULT_AGENT_PROVIDER` in `.env`, or `claude` when unset). To run a group on a different provider, switch it after creation with `ncl groups config update --provider <name>` (e.g. `codex`).
 
 For separate agents, also ask for a folder name and optionally a different assistant name.
 

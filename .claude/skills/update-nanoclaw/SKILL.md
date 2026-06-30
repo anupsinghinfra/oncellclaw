@@ -233,7 +233,7 @@ Parse the diff output for lines that contain `[BREAKING]` anywhere in the line. 
 ```
 
 If no `[BREAKING]` lines are found:
-- Skip this step silently. Proceed to Step 7 (skill updates check).
+- Skip this step silently. Proceed to Step 6.5.
 
 If one or more `[BREAKING]` lines are found:
 - Display a warning header to the user: "This update includes breaking changes that may require action:"
@@ -244,7 +244,29 @@ If one or more `[BREAKING]` lines are found:
   - "Skip — I'll handle these manually"
 - Set `multiSelect: true` so the user can pick multiple skills if there are several breaking changes.
 - For each skill the user selects, invoke it using the Skill tool.
-- After all selected skills complete (or if user chose Skip), proceed to Step 7 (skill updates check).
+- After all selected skills complete (or if user chose Skip), proceed to Step 6.5.
+
+# Step 6.5: Offer codex as the new-group default (only if codex is installed)
+
+This update adds an instance-wide default provider (`DEFAULT_AGENT_PROVIDER` in `.env`) that decides which provider **newly created** agent groups use. Existing groups are unaffected — they keep their current provider. When unset, the default is `claude`.
+
+If the operator installed codex (`/add-codex`) before this update, the "set codex as the default?" prompt never fired — so new groups would still come up `claude` even though codex is available. Surface the choice once, here.
+
+Detect whether to offer it — both must hold:
+- Codex is installed: `test -f src/providers/codex.ts` (this file exists only after `/add-codex`).
+- The default is not already set: `grep -q '^DEFAULT_AGENT_PROVIDER=' .env` returns non-zero.
+
+If codex is NOT installed, or the default is already set, or there is no `.env`: skip this step silently and proceed to Step 7.
+
+Otherwise, use AskUserQuestion (single-select):
+- Question: "Codex is installed but new agent groups still default to claude. Make codex the default for newly created groups? Existing groups keep their current provider and are not touched."
+- Option 1: "Yes — default new groups to codex"
+- Option 2: "No — keep claude as the default" (description: "New groups stay on claude. You can still pick codex per group with `ncl groups config update --provider codex`, or set the default later.")
+
+- On "Yes": `pnpm exec tsx setup/index.ts --step set-env -- --key DEFAULT_AGENT_PROVIDER --value codex`. Tell the operator the change takes effect for the host on its next start (the upgrade's host restart covers it; otherwise restart with `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` on macOS or `systemctl --user restart nanoclaw` on Linux).
+- On "No": proceed.
+
+Proceed to Step 7.
 
 # Step 7: Skill updates (part of updating NanoClaw)
 
