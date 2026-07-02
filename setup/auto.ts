@@ -343,10 +343,6 @@ async function main(): Promise<void> {
     // same way (docs/provider-migration.md).
     agentProvider = await askAgentProviderChoice();
     setPickedProvider(agentProvider);
-    // Persist the pick as the instance-wide default so every future group
-    // (channel-approved, ncl-created) is created on this provider. Read from
-    // .env at host start; per-group `ncl groups config update --provider` wins.
-    upsertEnvVar('DEFAULT_AGENT_PROVIDER', agentProvider);
     let providerEntry = getSetupProvider(agentProvider);
     if (agentProvider !== 'claude' && !providerEntry) {
       // A non-claude provider picked from the hard-wired list isn't wired in
@@ -381,6 +377,12 @@ async function main(): Promise<void> {
     } else {
       await runAuthStep();
     }
+    // Persist the pick as the instance-wide default so every future group
+    // (channel-approved, ncl-created) is created on this provider. Read from
+    // .env at host start; per-group `ncl groups config update --provider` wins.
+    // Only after install + auth succeeded — a failed setup must not leave new
+    // groups defaulting to an unauthenticated runtime.
+    upsertEnvVar('DEFAULT_AGENT_PROVIDER', agentProvider);
   }
 
   if (!skip.has('mounts')) {

@@ -20,8 +20,9 @@ import { emitStatus } from './status.js';
 
 /**
  * Upsert a `KEY=VALUE` line into the project's `.env`, returning whether the
- * key already existed. The single writer for `.env` edits so flows don't invent
- * grep/sed pipelines (which can't be allowlisted tightly).
+ * key already existed. The canonical writer for new `.env` edits (legacy setup
+ * steps still write directly) so flows don't invent grep/sed pipelines (which
+ * can't be allowlisted tightly).
  */
 export function upsertEnvVar(key: string, value: string): { existed: boolean } {
   if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
