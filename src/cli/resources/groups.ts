@@ -1,6 +1,9 @@
+import { randomUUID } from 'crypto';
+
 import type { McpServerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
+import { createAgentGroup } from '../../db/agent-groups.js';
 import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
 import { writeSessionMessage } from '../../session-manager.js';
@@ -10,7 +13,8 @@ import {
   updateContainerConfigScalars,
   updateContainerConfigJson,
 } from '../../db/container-configs.js';
-import type { ContainerConfigRow } from '../../types.js';
+import { createAgentFromTemplate } from '../../templates/create-agent.js';
+import type { AgentGroup, ContainerConfigRow } from '../../types.js';
 import { registerResource } from '../crud.js';
 
 /** Deserialize JSON columns for display. */
@@ -59,16 +63,42 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
-  // `delete` is intentionally not in `operations` — the generic single-table
-  // DELETE violates FK constraints (see #2525). The cascading handler is
-  // provided as `customOperations.delete` below.
-  operations: { list: 'open', get: 'open', create: 'approval', update: 'approval' },
-  // A CLI-created group has no config row until first spawn; seed one now so it's
-  // created on the instance default (ensureContainerConfig stamps it) and is
-  // spawnable without waiting for the startup backfill. Per-group overrides via
-  // `groups config update --provider` still win.
-  afterCreate: (created) => ensureContainerConfig(created.id as string),
+  // `create` and `delete` are intentionally not in `operations` — create needs
+  // a `--template` branch (below); the generic single-table DELETE violates FK
+  // constraints (see #2525). Both are provided as `customOperations`.
+  operations: { list: 'open', get: 'open', update: 'approval' },
   customOperations: {
+    create: {
+      access: 'approval',
+      description:
+        'Create an agent group. With --template <ref>, stamp from a local template under templates/ ' +
+        '(MCP servers + instructions + skills); else insert a bare row (--name, --folder).',
+      handler: async (args) => {
+        if (args.template) {
+          return createAgentFromTemplate(String(args.template), {
+            name: args.name ? String(args.name) : undefined,
+          });
+        }
+        const name = args.name ? String(args.name) : '';
+        const folder = args.folder ? String(args.folder) : '';
+        if (!name) throw new Error('--name is required');
+        if (!folder) throw new Error('--folder is required');
+        const group: AgentGroup = {
+          id: randomUUID(),
+          name,
+          folder,
+          agent_provider: null,
+          created_at: new Date().toISOString(),
+        };
+        createAgentGroup(group);
+        // Seed the config row now so the group is created on the instance
+        // default (ensureContainerConfig stamps it) and is spawnable without
+        // waiting for the startup backfill. Per-group overrides via
+        // `groups config update --provider` still win.
+        ensureContainerConfig(group.id);
+        return group;
+      },
+    },
     delete: {
       access: 'approval',
       description:

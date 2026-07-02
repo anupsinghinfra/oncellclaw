@@ -71,12 +71,6 @@ export interface ResourceDef {
   };
   /** Non-standard verbs (grant, revoke, add, remove, restart, etc.). */
   customOperations?: Record<string, CustomOperation>;
-  /**
-   * Hook run after a successful generic create, with the inserted row's values.
-   * For dependent rows the single-table INSERT can't seed (e.g. a group's
-   * container_configs row).
-   */
-  afterCreate?: (created: Record<string, unknown>) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +162,6 @@ function genericCreate(def: ResourceDef) {
     getDb()
       .prepare(`INSERT INTO ${def.table} (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`)
       .run(values);
-    if (def.afterCreate) await def.afterCreate(values);
     return values;
   };
 }
