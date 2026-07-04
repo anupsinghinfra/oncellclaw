@@ -41,7 +41,11 @@ build step, no push pipeline, and no edits to NanoClaw source — it just reads
 
 clidash is fully self-contained — copy the whole directory in:
 
+`tools/` is not a standard NanoClaw directory and `cp -R` won't create it, so
+make it first:
+
 ```bash
+mkdir -p tools
 cp -R .claude/skills/add-clidash/add/tools/clidash tools/clidash
 ```
 
@@ -76,7 +80,7 @@ Tests use a stub CLI — no real `ncl` or `docker` needed:
 npm test
 ```
 
-All tests should pass (Node ≥ 20, `node:test`, zero dependencies).
+All tests should pass (Node ≥ 22.5, `node:test`, zero dependencies).
 
 ### 4. Run and verify
 

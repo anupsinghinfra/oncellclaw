@@ -9,7 +9,8 @@ It ships pre-wired for NanoClaw's `ncl` CLI (agent groups, sessions, messaging
 groups, wirings, users, roles, …) plus `docker`, but the same config shape
 works for any list-as-JSON CLI.
 
-- **Zero dependencies** — Node built-ins only (Node ≥ 20), no build step,
+- **Zero dependencies** — Node built-ins only (Node ≥ 22.5, for `node:sqlite`),
+  no build step,
   vanilla-JS frontend.
 - **Read-only by construction** — the server can only `execFile` the configured
   argv templates; `{resource}` is the sole substitution and is validated
