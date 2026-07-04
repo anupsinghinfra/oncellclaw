@@ -10,14 +10,14 @@
 // Phases (the F2 runtime contract, minimal form):
 //   1. parse + validate   — lint; a malformed skill never reaches apply
 //   2. PLAN               — per directive: skip|apply|needs-input|agent — no writes
-//   3. acquire inputs     — resolve every `prompt` via the injected Prompter
+//   3. acquire inputs     — resolve every `prompt` via `inputs` / `resolveInput`
 //   4. mutate             — copy/append/env-set, journaled + idempotent
 //   5. run                — build/test/fetch (+ dep install) via injected exec
 // Remove is derived from the journal — no hand-written REMOVE.md.
 //
-// Inputs + the Prompter make one engine serve three contexts:
-//   • programmatic    → pass `inputs` (var→value); no prompter, runs through fully
-//   • setup flow      → interactive prompter asks the user inline for anything left
+// Inputs + `resolveInput` make one engine serve three contexts:
+//   • programmatic    → pass `inputs` (var→value); no resolver, runs through fully
+//   • setup flow      → an interactive `resolveInput` collects anything left
 //   • recipe rebuild  → headless: no answer for a prompt ⇒ it (and its consumers) defer
 //
 // Usage: pnpm exec tsx scripts/skill-apply.ts <skillDir>     # plan (no writes)
@@ -26,20 +26,6 @@ import { execSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, appendFileSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { parseDirectives, promptVar, type Directive } from './skill-directives.js';
-
-// Optional per-prompt UX hints an `nc:prompt`'s attrs carry. Every field is
-// trailing-optional, so an existing `async ask(name)` test fake is untouched.
-//   • flags      regex flags for `validate` (e.g. `i` → case-insensitive match)
-//   • min        a minimum length the interactive prompter enforces (re-asks if short)
-//   • error      the validation message the prompter surfaces on a mismatch
-//   • normalize  a deterministic transform applied AT BIND (see `normalizeValue`) to
-//                BOTH `inputs` and interactive answers: trim | rstrip-slash | lower
-export interface PromptOpts {
-  flags?: string;
-  min?: number;
-  error?: string;
-  normalize?: string;
-}
 
 // What an `nc:prompt` DECLARES about the value it needs — the core seam's input
 // contract, passed to `resolveInput` so a consumer can run its OWN re-ask loop
@@ -69,48 +55,11 @@ export type ApplyEvent =
 // operator: text = the rendered, {{var}}-substituted block body;
 //           line = the directive's opening-fence line (keys driver policy maps)
 
-// LEGACY seam — being replaced by `resolveInput` + `onEvent` (the engine prefers
-// those when present). Kept only until every in-tree caller migrates.
-export interface Prompter {
-  // Return the value, or undefined to DEFER (headless rebuild collects these).
-  // `validate` is an optional regex (from `nc:prompt … validate:<re>`) the
-  // interactive prompter enforces, re-asking until the answer matches. `opts`
-  // carries the trailing-optional PromptOpts (flags/min/error — normalize is the
-  // engine's, applied at bind, not the prompter's). A fake may ignore both.
-  ask(varName: string, question: string, secret: boolean, validate?: string, opts?: PromptOpts): Promise<string | undefined>;
-  // Show an `nc:operator` block to the human operator (a clack note in setup, a
-  // channel message when a coding agent relays). Absent ⇒ no operator present
-  // (headless rebuild), so the instructions are simply skipped.
-  tell?(text: string): Promise<void> | void;
-  // Ask the operator a yes/no question (used by the driver's reuse-existing
-  // offer and an `nc:operator gate` barrier). Absent ⇒ no operator present, so
-  // the offer / barrier is skipped (headless/programmatic apply proceeds).
-  confirm?(message: string): Promise<boolean>;
-  // Open a URL in the operator's browser — an `nc:operator open:<url>` deep-link
-  // (the Azure portal, a Telegram bot chat, a Discord invite). Best-effort and
-  // trailing-optional: absent ⇒ no display (headless/programmatic), so the open
-  // is skipped — the URL is already in the rendered operator text for copy-paste.
-  open?(url: string): Promise<void> | void;
-}
-
 // The result of a streaming `nc:run effect:step`: the spawn's exit success plus
 // the terminal status block's fields, which `capture:<var>=<FIELD>` binds.
 export interface StepOutcome {
   ok: boolean;
   fields: Record<string, string>;
-}
-
-// LEGACY apply-lifecycle hook — being replaced by `onEvent` step-start/step-end
-// events (same payload, plus the discriminating `type`). The engine fires
-// `stepStart` immediately before it mutates (applyOne) and `stepEnd` immediately
-// after — every start has a matching end (including the failure path), so a
-// driver-side spinner is never left hanging. `label` is the caption from
-// `stepLabel` — null declares the step instant/cheap, or that it renders its own
-// live operator-facing output (see `stepLabel`). Optional everywhere: no
-// reporter ⇒ silent, the headless/programmatic apply is unchanged.
-export interface StepReporter {
-  stepStart(e: { kind: string; line: number; label: string | null }): void;
-  stepEnd(e: { kind: string; line: number; label: string | null; ok: boolean; durationMs: number; error?: string }): void;
 }
 
 export type StepStatus = 'skip' | 'apply' | 'needs-input' | 'agent';
@@ -260,11 +209,6 @@ export interface AgentTask {
   line: number;
   reason: string;
   prose: string; // the surrounding prose the agent reads to apply the step
-  // A concise failure hint surfaced to the operator (and the Claude handoff)
-  // when this step bounces. Defaults to the trimmed prose; an optional
-  // `on-fail:<token>` attr on the fence narrows it to the single prose line that
-  // diagnoses the failure. See `failHint`.
-  hint?: string;
 }
 
 export interface ApplyResult {
@@ -288,30 +232,25 @@ export interface ApplyResult {
 }
 
 export interface ApplyOptions {
-  // Pre-supplied answers for `prompt` vars (var name → value). Checked before the
-  // prompter, so a caller that has every answer needs no prompter at all and the
-  // whole skill runs through with no human interaction (fully programmatic apply).
+  // Pre-supplied answers for `prompt` vars (var name → value). Checked FIRST, so
+  // a caller that has every answer needs no resolver at all and the whole skill
+  // runs through with no human interaction (fully programmatic apply).
   inputs?: Record<string, string>;
-  // The core input seam (replaces Prompter.ask): resolve a prompt var the caller
-  // didn't pre-supply. `meta` carries the declared semantics (question, secret,
+  // The core input seam: resolve a prompt var the caller didn't pre-supply.
+  // `meta` carries the declared semantics (question, secret,
   // validate/flags/normalize) so a consumer can run its OWN re-ask loop.
-  // Returning undefined ⇒ defer (unchanged semantics). When present, the legacy
-  // `prompter` is never consulted.
+  // Returning undefined ⇒ defer. Optional — omit it (with full `inputs`) for a
+  // headless run; a prompt with neither defers.
   resolveInput?: (name: string, meta: InputMeta) => Promise<string | undefined>;
-  // The core output seam (replaces BOTH StepReporter and Prompter.tell): every
-  // engine emission — the step-start/step-end brackets and each rendered
-  // `nc:operator` block — flows through this one handler, and every call is
-  // AWAITED before the engine proceeds (that ordering is what lets a consumer
-  // gate on an operator block). A rejection is treated like any other throw at
-  // that directive: bounce, never crash — a consumer that throws on an operator
-  // event accepts the bounce consequence, including the `blocked` latch
-  // cascading over later side effects. When present, the legacy `reporter` and
-  // `prompter.tell/open/confirm` are never consulted.
+  // The core output seam: every engine emission — the step-start/step-end
+  // brackets and each rendered `nc:operator` block — flows through this one
+  // handler, and every call is AWAITED before the engine proceeds (that
+  // ordering is what lets a consumer gate on an operator block). A rejection is
+  // treated like any other throw at that directive: bounce, never crash — a
+  // consumer that throws on an operator event accepts the bounce consequence,
+  // including the `blocked` latch cascading over later side effects. Absent ⇒
+  // silent; the headless/programmatic apply runs identically.
   onEvent?: (e: ApplyEvent) => void | Promise<void>;
-  // LEGACY interactive prompter for any prompt not covered by `inputs` — used
-  // only when `resolveInput` is absent. Optional — omit it (with full `inputs`)
-  // for a headless run; a prompt with neither defers.
-  prompter?: Prompter;
   // dep/run/branch-fetch; injectable for tests. Returns the command's stdout so
   // a `run capture:<var>` can bind it into a {{var}} (the twin of `prompt`).
   exec?: (cmd: string) => string | void | Promise<string | void>;
@@ -329,11 +268,6 @@ export interface ApplyOptions {
   // generic resolver (env override → first remote that has the branch → origin);
   // setup injects one that reuses setup/lib/channels-remote.sh for exact parity.
   resolveRemote?: (branch: string) => string;
-  // LEGACY lifecycle hook — used only when `onEvent` is absent. The setup driver
-  // uses it to spin on each slow apply step (stepStart/stepEnd bracket every
-  // applyOne). Absent ⇒ no reporting; the headless/programmatic apply runs
-  // identically. See `stepLabel`.
-  reporter?: StepReporter;
 }
 
 /**
@@ -357,7 +291,7 @@ export function fullyApplied(res: ApplyResult): boolean {
 export function firstFailureHint(res: ApplyResult): { headline: string; hint: string } | undefined {
   const first = res.agentTasks[0];
   if (!first) return undefined;
-  const hint = (first.hint ?? first.prose).trim();
+  const hint = first.prose.trim();
   // The concise headline: the nearest `#`-heading the prose carries, stripped of
   // its markers; failing that, the first prose line; failing that, the reason.
   const lines = first.prose.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -457,27 +391,6 @@ function proseFor(md: string, fenceLine1: number): string {
   return [heading, ...para].filter(Boolean).join('\n').trim();
 }
 
-// The concise failure hint surfaced to the operator when a directive bounces.
-// Defaults to the surrounding prose (so a stripped fence still reads coherently:
-// prose-primary, never a leak). An optional `on-fail:<token>` attr on the fence
-// narrows it to the single prose LINE that diagnoses this failure — but the attr
-// is stripped along with the fence when a skill degrades to prose, so the SAME
-// diagnosis must already live in the prose. We enforce that by falling back to
-// the full prose when no prose line contains the token, never surfacing a bare
-// token the operator would otherwise never see.
-function failHint(d: Directive, prose: string): string {
-  const token = typeof d.attrs['on-fail'] === 'string' ? d.attrs['on-fail'] : undefined;
-  if (token) {
-    const needle = token.toLowerCase();
-    const line = prose
-      .split('\n')
-      .map((l) => l.replace(/^#+\s*/, '').trim())
-      .find((l) => l.length > 0 && l.toLowerCase().includes(needle));
-    if (line) return line;
-  }
-  return prose.trim();
-}
-
 // The nearest `#`-prefixed heading above a fence (the same upward scan proseFor
 // uses), stripped of its leading `#`s — a concise caption for a step spinner.
 function headingAbove(md: string, fenceLine1: number): string {
@@ -500,14 +413,11 @@ const SPIN_EFFECTS = new Set(['build', 'test', 'fetch', 'wire', 'restart', 'exte
  * write, a json-merge), or it renders its own live operator-facing output
  * (`effect:step`'s QR card / pairing code) — the step event still carries
  * `kind` + `line`, so a consumer wanting a different render policy can derive
- * its own. An explicit `label:<word>` attr on the fence wins; otherwise
- * the caption is the nearest heading above the directive (so the spinner reads
- * like the section it's in), falling back to a kind/effect default. The attr
- * lives on the directive fence, so it's stripped along with the fence when a
- * skill degrades to prose — invisible to the agent, never narrated.
+ * its own. Labels are HEADING-DERIVED only: the caption is the nearest heading
+ * above the directive (so a consumer's progress line reads like the section
+ * it's in), falling back to a kind/effect default.
  */
 export function stepLabel(d: Directive, md: string): string | null {
-  if (typeof d.attrs.label === 'string') return d.attrs.label;
   const effect = typeof d.attrs.effect === 'string' ? d.attrs.effect : undefined;
   const spins =
     d.kind === 'dep' ||
@@ -531,7 +441,7 @@ export function stepLabel(d: Directive, md: string): string | null {
 //   rstrip-slash  drop trailing slash(es) — a base URL with no trailing path
 //   lower         lowercase
 // Absent/unknown ⇒ a no-op (lint gates the known set). Doing it here, not in the
-// prompter, means a programmatic `inputs` value and a typed answer land identically.
+// consumer, means a programmatic `inputs` value and a typed answer land identically.
 // Exported so the driver's reuse-offer pre-filter (§5.4) tests an `.env` value
 // against the SAME normalize-then-validate the engine will apply at bind.
 export function normalizeValue(value: string, normalize: string | undefined): string {
@@ -547,18 +457,6 @@ export function normalizeValue(value: string, normalize: string | undefined): st
   }
 }
 
-// The PromptOpts an `nc:prompt`'s attrs carry. Stripped with the fence when a
-// skill degrades to prose — invisible to the agent — so a plain re-read still
-// reads as a normal question. `min` parses to a number; the rest pass through.
-function promptOptsOf(d: Directive): PromptOpts {
-  const opts: PromptOpts = {};
-  if (typeof d.attrs.flags === 'string') opts.flags = d.attrs.flags;
-  if (typeof d.attrs.error === 'string') opts.error = d.attrs.error;
-  if (typeof d.attrs.normalize === 'string') opts.normalize = d.attrs.normalize;
-  if (typeof d.attrs.min === 'string' && /^\d+$/.test(d.attrs.min)) opts.min = Number(d.attrs.min);
-  return opts;
-}
-
 // The engine-applied normalize transforms (see `normalizeValue`) — the set
 // InputMeta.normalize narrows to. Lint gates authorship to these; an unknown
 // value simply isn't declared in the meta (and normalizeValue no-ops on it).
@@ -566,13 +464,14 @@ const NORMALIZE_KINDS: ReadonlySet<string> = new Set(['trim', 'rstrip-slash', 'l
 
 // The InputMeta an `nc:prompt` declares — handed to `resolveInput` so a
 // consumer can run its own re-ask loop against the same semantics the engine
-// enforces at bind.
-function inputMetaOf(d: Directive, secret: boolean, validate: string | undefined, promptOpts: PromptOpts): InputMeta {
+// enforces at bind. The attrs live on the directive fence, so they're stripped
+// along with the fence when a skill degrades to prose — invisible to the agent.
+function inputMetaOf(d: Directive, secret: boolean, validate: string | undefined): InputMeta {
   const meta: InputMeta = { question: d.body.join('\n'), secret };
   if (validate !== undefined) meta.validate = validate;
-  if (promptOpts.flags !== undefined) meta.flags = promptOpts.flags;
-  if (promptOpts.normalize !== undefined && NORMALIZE_KINDS.has(promptOpts.normalize)) {
-    meta.normalize = promptOpts.normalize as InputMeta['normalize'];
+  if (typeof d.attrs.flags === 'string') meta.flags = d.attrs.flags;
+  if (typeof d.attrs.normalize === 'string' && NORMALIZE_KINDS.has(d.attrs.normalize)) {
+    meta.normalize = d.attrs.normalize as InputMeta['normalize'];
   }
   return meta;
 }
@@ -817,14 +716,13 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
   const SIDE_EFFECTS = new Set(['restart', 'step', 'wire']);
   const bounce = (d: Directive, reason: string) => {
     blocked = true;
-    const prose = proseFor(md, d.line);
-    res.agentTasks.push({ kind: d.kind, line: d.line, reason, prose, hint: failHint(d, prose) });
+    res.agentTasks.push({ kind: d.kind, line: d.line, reason, prose: proseFor(md, d.line) });
   };
 
   for (const d of directives) {
-    // Tracks an in-flight reported step so the catch can always close a matching
-    // stepEnd (start/end stay balanced even when applyOne throws — the driver's
-    // spinner is never orphaned). Set only after stepStart fires.
+    // Tracks an in-flight step so the catch can always close a matching
+    // step-end (start/end stay balanced even when applyOne throws — a consumer's
+    // spinner is never orphaned). Set only after step-start fires.
     let inFlight: { label: string | null; at: number } | null = null;
     try {
       // A `when:<var>=<value>` guard that isn't met skips the directive entirely —
@@ -839,23 +737,19 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
         const v = promptVar(d)!;
         const secret = d.args.includes('secret');
         const validate = typeof d.attrs.validate === 'string' ? d.attrs.validate : undefined;
-        const promptOpts = promptOptsOf(d);
+        const flags = typeof d.attrs.flags === 'string' ? d.attrs.flags : undefined;
+        const normalize = typeof d.attrs.normalize === 'string' ? d.attrs.normalize : undefined;
         // Pre-supplied inputs win OUTRIGHT (fully-programmatic apply) — an
         // invalid `inputs` value never falls through to a second acquisition
         // path (validation below rejects it loudly instead). Otherwise resolve
-        // via the new seam (`resolveInput`), falling back to the legacy
-        // prompter; still undefined ⇒ defer (headless, no answer).
+        // via `resolveInput`; still undefined ⇒ defer (headless, no answer).
         let val = opts.inputs?.[v];
-        if (val === undefined) {
-          val = opts.resolveInput
-            ? await opts.resolveInput(v, inputMetaOf(d, secret, validate, promptOpts))
-            : await opts.prompter?.ask(v, d.body.join(' '), secret, validate, promptOpts);
-        }
+        if (val === undefined) val = await opts.resolveInput?.(v, inputMetaOf(d, secret, validate));
         if (val === undefined) { res.deferred.push(v); continue; }
         // normalize:<how> binds DETERMINISTICALLY for both inputs and answers, so
         // an `inputs` value and a typed one land identically (a trailing slash
         // stripped, whitespace trimmed) — see normalizeValue.
-        const bound = normalizeValue(val, promptOpts.normalize);
+        const bound = normalizeValue(val, normalize);
         // Validate-at-bind: `validate:` (+ `flags:`) is DATA validation, enforced
         // on the NORMALIZED value no matter where it came from (normalize-then-
         // validate is normative: a trailing slash is stripped before an anchor
@@ -866,7 +760,7 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
         // and a pipeline passing a malformed env value fails loudly. The
         // interactive re-ask loop lives in the consumer's `resolveInput`; this is
         // the backstop for programmatic paths.
-        if (validate !== undefined && !new RegExp(validate, promptOpts.flags).test(bound)) {
+        if (validate !== undefined && !new RegExp(validate, flags).test(bound)) {
           res.deferred.push(`${v}: invalid value (does not match validate:${validate})`);
           continue;
         }
@@ -875,35 +769,18 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
       }
       if (d.kind === 'operator') {
         // Always collect the human-facing instructions into the result so a
-        // programmatic caller can relay/output them; also render live when an
-        // interactive prompter is present. {{vars}} render so a resolved value
-        // can be shown (throws → deferred if a referenced var is unset).
+        // programmatic caller can relay/output them. {{vars}} render so a
+        // resolved value can be shown (throws → deferred if a referenced var is
+        // unset — the whole block defers before any event fires).
         const text = substitute(d.body.join('\n'), vars);
-        // open:<url> deep-links the operator to the page the steps describe.
-        // Resolve it up front so an unresolved {{var}} in the URL defers the
-        // whole block (consistent with the body) instead of half-rendering it.
-        const openTarget = typeof d.attrs.open === 'string' ? substitute(d.attrs.open, vars) : undefined;
         res.operatorMessages.push(text);
-        if (opts.onEvent) {
-          // The core seam: emit the rendered block and AWAIT the consumer before
-          // evaluating the next directive — that ordering is what lets a consumer
-          // gate (hold the event until the human confirms readiness). The engine
-          // itself never defers/bounces an operator block; a handler that throws
-          // opts into the standard bounce path via the outer catch (including
-          // the `blocked` latch over later side effects).
-          await opts.onEvent({ type: 'operator', line: d.line, text });
-        } else {
-          await opts.prompter?.tell?.(text);
-          // After rendering, open the deep-link (best-effort; absent method ⇒ the
-          // URL is already in the rendered text for copy-paste — never a crash).
-          if (openTarget !== undefined) await opts.prompter?.open?.(openTarget);
-          // A bare `gate` flag turns the block into a human BARRIER: wait on a
-          // confirm before the following side-effecting directives run (a manifest
-          // build, a restart), so a manual UI step (the Azure app must exist) is
-          // finished first. Pure polish — a stripped fence leaves the same prose,
-          // and a prompter without confirm (headless/programmatic) just proceeds.
-          if (d.args.includes('gate')) await opts.prompter?.confirm?.('Done with the steps above? Continue when you are ready.');
-        }
+        // The core seam: emit the rendered block and AWAIT the consumer before
+        // evaluating the next directive — that ordering is what lets a consumer
+        // gate (hold the event until the human confirms readiness). The engine
+        // itself never defers/bounces an operator block; a handler that throws
+        // opts into the standard bounce path via the outer catch (including
+        // the `blocked` latch over later side effects).
+        if (opts.onEvent) await opts.onEvent({ type: 'operator', line: d.line, text });
         res.applied.push(`operator: ${(d.body[0] ?? '').slice(0, 50)}`);
         continue;
       }
@@ -924,20 +801,18 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
       const st = selfStatus(d, root);
       if (st.status === 'agent') { bounce(d, 'no deterministic handler'); continue; }
       if (st.status === 'skip') { res.skipped.push(`${d.kind}: ${st.detail}`); continue; }
-      // Bracket the real mutation with step events (`onEvent` preferred, legacy
-      // reporter otherwise) so a consumer can render progress. `label` null is a
-      // step-cost/interactivity declaration (see `stepLabel`). `inFlight` is set
-      // only after step-start fires; the ok:true step-end clears it BEFORE its
-      // own (awaited) emission, so a consumer throw there never double-closes.
+      // Bracket the real mutation with step events so a consumer can render
+      // progress. `label` null is a step-cost/interactivity declaration (see
+      // `stepLabel`). `inFlight` is set only after step-start fires; the ok:true
+      // step-end clears it BEFORE its own (awaited) emission, so a consumer
+      // throw there never double-closes.
       const label = stepLabel(d, md);
       if (opts.onEvent) await opts.onEvent({ type: 'step-start', kind: d.kind, line: d.line, label });
-      else opts.reporter?.stepStart({ kind: d.kind, line: d.line, label });
       inFlight = { label, at: Date.now() };
       await applyOne(d, { root, skillDir, exec, execStream: opts.execStream, resolveRemote, vars, journal: res.journal });
       const durationMs = Date.now() - inFlight.at;
       inFlight = null;
       if (opts.onEvent) await opts.onEvent({ type: 'step-end', kind: d.kind, line: d.line, label, ok: true, durationMs });
-      else opts.reporter?.stepEnd({ kind: d.kind, line: d.line, label, ok: true, durationMs });
       res.applied.push(`${d.kind}: ${st.detail}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -946,13 +821,9 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
       // bounce (a real failure, handled below). The failure-path close is
       // best-effort: a consumer that also throws here can't change the outcome —
       // we're already on the failure path.
-      if (inFlight) {
+      if (inFlight && opts.onEvent) {
         const end = { kind: d.kind, line: d.line, label: inFlight.label, ok: false, durationMs: Date.now() - inFlight.at, error: msg };
-        if (opts.onEvent) {
-          try { await opts.onEvent({ type: 'step-end', ...end }); } catch { /* already failing — the close is best-effort */ }
-        } else {
-          opts.reporter?.stepEnd(end);
-        }
+        try { await opts.onEvent({ type: 'step-end', ...end }); } catch { /* already failing — the close is best-effort */ }
       }
       if (/unresolved \{\{/.test(msg)) res.deferred.push(msg); // blocked on a prompt input
       else bounce(d, `engine could not apply (${msg}) — an agent applies it from the prose`);

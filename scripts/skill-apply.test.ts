@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applySkill, removeSkill, planSkill, fullyApplied, firstFailureHint, referenceProse, stepLabel, type ApplyEvent, type InputMeta, type Prompter, type PromptOpts, type StepReporter } from './skill-apply.js';
+import { applySkill, removeSkill, planSkill, fullyApplied, firstFailureHint, referenceProse, stepLabel, type ApplyEvent, type InputMeta } from './skill-apply.js';
 import { parseDirectives, validate } from './skill-directives.js';
 
 // A synthetic skill exercising the fs handlers for real (no network), plus one
@@ -36,7 +36,8 @@ register demo
 
 let root: string;
 let skillDir: string;
-const headless = (vals: Record<string, string>): Prompter => ({ async ask(name) { return vals[name]; } });
+// A headless resolveInput fake: answers from a fixed map; a missing var defers.
+const headless = (vals: Record<string, string>) => async (name: string): Promise<string | undefined> => vals[name];
 const recordingExec = () => {
   const cmds: string[] = [];
   return { cmds, exec: (c: string) => void cmds.push(c) };
@@ -57,7 +58,7 @@ beforeEach(() => {
 describe('apply engine lifecycle', () => {
   it('applies fs directives, captures the secret, and bounces the unknown step to an agent', async () => {
     const { exec } = recordingExec();
-    const res = await applySkill(skillDir, root, { prompter: headless({ token: 'sekret-123' }), exec });
+    const res = await applySkill(skillDir, root, { resolveInput: headless({ token: 'sekret-123' }), exec });
 
     // mutations happened
     expect(existsSync(join(root, 'src/sample.ts'))).toBe(true);
@@ -74,23 +75,23 @@ describe('apply engine lifecycle', () => {
 
   it('is idempotent — a second apply changes nothing', async () => {
     const p = headless({ token: 'sekret-123' });
-    await applySkill(skillDir, root, { prompter: p, exec: () => {} });
-    const second = await applySkill(skillDir, root, { prompter: p, exec: () => {} });
+    await applySkill(skillDir, root, { resolveInput: p, exec: () => {} });
+    const second = await applySkill(skillDir, root, { resolveInput: p, exec: () => {} });
     expect(second.applied).toEqual([]); // everything already applied
     expect(second.journal).toEqual([]); // nothing mutated
     expect(second.skipped.length).toBeGreaterThanOrEqual(3);
   });
 
   it('removes cleanly from the journal — no hand-written REMOVE.md', async () => {
-    const res = await applySkill(skillDir, root, { prompter: headless({ token: 'sekret-123' }), exec: () => {} });
+    const res = await applySkill(skillDir, root, { resolveInput: headless({ token: 'sekret-123' }), exec: () => {} });
     await removeSkill(root, res.journal);
     expect(existsSync(join(root, 'src/sample.ts'))).toBe(false);
     expect(readFileSync(join(root, 'src/barrel.ts'), 'utf8')).not.toContain("import './sample.js';");
     expect(readFileSync(join(root, '.env'), 'utf8')).not.toContain('DEMO_TOKEN');
   });
 
-  it('defers a prompt (and its consumer) when the prompter has no value — headless rebuild', async () => {
-    const res = await applySkill(skillDir, root, { prompter: headless({}), exec: () => {} });
+  it('defers a prompt (and its consumer) when resolveInput has no value — headless rebuild', async () => {
+    const res = await applySkill(skillDir, root, { resolveInput: headless({}), exec: () => {} });
     expect(res.deferred).toContain('token'); // prompt deferred
     expect(res.deferred.some((d) => /unresolved \{\{token\}\}/.test(d))).toBe(true); // env-set blocked on it
     expect(readFileSync(join(root, '.env'), 'utf8')).not.toContain('DEMO_TOKEN');
@@ -125,7 +126,7 @@ describe('json-merge directive', () => {
   });
 
   it('pushes the object, preserving 2-space indent + trailing newline', async () => {
-    const res = await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
+    const res = await applySkill(jskill, jroot, { resolveInput: headless({}), exec: () => {} });
     const out = readFileSync(join(jroot, 'container/cli-tools.json'), 'utf8');
     expect(out.endsWith('\n')).toBe(true);
     const arr = JSON.parse(out);
@@ -138,8 +139,8 @@ describe('json-merge directive', () => {
   });
 
   it('is idempotent — re-applying does not duplicate the element', async () => {
-    await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
-    const second = await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
+    await applySkill(jskill, jroot, { resolveInput: headless({}), exec: () => {} });
+    const second = await applySkill(jskill, jroot, { resolveInput: headless({}), exec: () => {} });
     expect(second.applied).toEqual([]);
     expect(second.skipped.length).toBe(1);
     const arr = JSON.parse(readFileSync(join(jroot, 'container/cli-tools.json'), 'utf8'));
@@ -147,7 +148,7 @@ describe('json-merge directive', () => {
   });
 
   it('removeSkill drops the element whose key matches', async () => {
-    const res = await applySkill(jskill, jroot, { prompter: headless({}), exec: () => {} });
+    const res = await applySkill(jskill, jroot, { resolveInput: headless({}), exec: () => {} });
     await removeSkill(jroot, res.journal);
     const arr = JSON.parse(readFileSync(join(jroot, 'container/cli-tools.json'), 'utf8'));
     expect(arr).toEqual([{ name: 'vercel', version: '52.2.1' }]);
@@ -195,7 +196,7 @@ describe('append at:<marker>', () => {
 
   it('inserts before the `<<< marker` line, matching its indentation', async () => {
     writeFileSync(join(askill, 'SKILL.md'), APPEND_AT_SKILL);
-    await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    await applySkill(askill, aroot, { resolveInput: headless({}), exec: () => {} });
     const out = readFileSync(join(aroot, 'setup/index.ts'), 'utf8').split('\n');
     const closeIdx = out.findIndex((l) => l.includes('<<< nanoclaw:setup-steps'));
     expect(out[closeIdx - 1]).toBe("  codex: () => import('./codex.js'),"); // inserted just above, 2-space indent
@@ -204,8 +205,8 @@ describe('append at:<marker>', () => {
 
   it('is idempotent (whole-file line check) regardless of position', async () => {
     writeFileSync(join(askill, 'SKILL.md'), APPEND_AT_SKILL);
-    await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
-    const second = await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    await applySkill(askill, aroot, { resolveInput: headless({}), exec: () => {} });
+    const second = await applySkill(askill, aroot, { resolveInput: headless({}), exec: () => {} });
     expect(second.applied).toEqual([]);
     const count = readFileSync(join(aroot, 'setup/index.ts'), 'utf8').split('\n').filter((l) => l.trim() === "codex: () => import('./codex.js'),").length;
     expect(count).toBe(1);
@@ -213,14 +214,14 @@ describe('append at:<marker>', () => {
 
   it('removeSkill deletes the inserted line (position-agnostic, by trimmed line)', async () => {
     writeFileSync(join(askill, 'SKILL.md'), APPEND_AT_SKILL);
-    const res = await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    const res = await applySkill(askill, aroot, { resolveInput: headless({}), exec: () => {} });
     await removeSkill(aroot, res.journal);
     expect(readFileSync(join(aroot, 'setup/index.ts'), 'utf8')).not.toContain("codex: () => import('./codex.js'),");
   });
 
   it('without at: still appends at EOF (unchanged behavior)', async () => {
     writeFileSync(join(askill, 'SKILL.md'), APPEND_EOF_SKILL);
-    await applySkill(askill, aroot, { prompter: headless({}), exec: () => {} });
+    await applySkill(askill, aroot, { resolveInput: headless({}), exec: () => {} });
     const lines = readFileSync(join(aroot, 'setup/index.ts'), 'utf8').split('\n').filter(Boolean);
     expect(lines[lines.length - 1]).toBe('// trailing line'); // at EOF, not before the marker
   });
@@ -259,7 +260,7 @@ describe('nc:run variable substitution', () => {
 
   it('interpolates a prompted {{var}} into run commands; var-free runs pass through unchanged', async () => {
     const { cmds, exec } = recordingExec();
-    await applySkill(rskill, rroot, { prompter: headless({ owner_email: 'you@example.com' }), exec });
+    await applySkill(rskill, rroot, { resolveInput: headless({ owner_email: 'you@example.com' }), exec });
     expect(cmds).toContain(
       'ncl messaging-groups create --channel-type resend --platform-id resend:you@example.com --is-group 0',
     );
@@ -270,7 +271,7 @@ describe('nc:run variable substitution', () => {
   });
 
   it('journals the ORIGINAL command (placeholders intact) — a substituted value never lands in the journal', async () => {
-    const res = await applySkill(rskill, rroot, { prompter: headless({ owner_email: 'you@example.com' }), exec: () => {} });
+    const res = await applySkill(rskill, rroot, { resolveInput: headless({ owner_email: 'you@example.com' }), exec: () => {} });
     const ran = res.journal.filter((e) => e.op === 'ran').map((e) => 'cmd' in e ? e.cmd : '');
     expect(ran).toContain(
       'ncl messaging-groups create --channel-type resend --platform-id resend:{{owner_email}} --is-group 0',
@@ -280,7 +281,7 @@ describe('nc:run variable substitution', () => {
 
   it('defers a wiring run when its {{var}} prompt is unanswered (degrade, not crash)', async () => {
     const { cmds, exec } = recordingExec();
-    const res = await applySkill(rskill, rroot, { prompter: headless({}), exec });
+    const res = await applySkill(rskill, rroot, { resolveInput: headless({}), exec });
     expect(res.deferred.some((d) => /unresolved \{\{owner_email\}\}/.test(d))).toBe(true);
     expect(cmds.some((c) => c.startsWith('ncl'))).toBe(false); // no ncl ran with an unresolved value
     expect(cmds).toContain('pnpm run build'); // the var-free run still executes
@@ -323,7 +324,7 @@ describe('nc:run capture', () => {
       cmds.push(c);
       if (c.startsWith('resolve-dm')) return 'D0SLACK123\n';
     };
-    await applySkill(cskill, croot, { prompter: headless({ user_id: 'U999' }), exec });
+    await applySkill(cskill, croot, { resolveInput: headless({ user_id: 'U999' }), exec });
     expect(cmds).toContain('resolve-dm U999'); // resolved with the prompted id
     expect(cmds).toContain('ncl messaging-groups create --channel-type slack --platform-id slack:D0SLACK123'); // captured value flowed downstream
   });
@@ -438,120 +439,26 @@ describe('nc:operator', () => {
     writeFileSync(join(oroot, 'package.json'), '{"name":"scratch"}');
   });
 
-  it('relays the operator body to prompter.tell, substituting {{vars}}', async () => {
-    writeFileSync(
-      join(oskill, 'SKILL.md'),
-      '# op demo\n\n```nc:prompt who\nName?\n```\nTell the user:\n```nc:operator\nHello {{who}} — go click the button.\n```\n',
-    );
-    const told: string[] = [];
-    const prompter: Prompter = { async ask() { return 'world'; }, tell: (t) => void told.push(t) };
-    await applySkill(oskill, oroot, { prompter, exec: () => {} });
-    expect(told).toEqual(['Hello world — go click the button.']);
-  });
-
   it('is a no-op when no operator sink is present (headless rebuild) — not a crash, not an agent bounce', async () => {
     writeFileSync(join(oskill, 'SKILL.md'), '# op demo\n\nTell the user:\n```nc:operator\nDo a manual thing.\n```\n');
-    const res = await applySkill(oskill, oroot, { prompter: headless({}), exec: () => {} });
+    const res = await applySkill(oskill, oroot, { resolveInput: headless({}), exec: () => {} });
     expect(res.agentTasks).toEqual([]); // operator with no sink is fine, not bounced
   });
-});
 
-// nc:operator open:<url> deep-links the operator to the page the steps describe
-// (after rendering, {{vars}} substituted); a bare `gate` flag turns the block into
-// a human BARRIER — a confirm the engine waits on before the following
-// side-effecting directives run. Both are pure polish: a prompter without
-// open/confirm just skips them (headless/programmatic), never a crash.
-const OPEN_SKILL = `# open demo
-
-## Name the bot
-\`\`\`nc:prompt bot
-Bot username?
-\`\`\`
-
-## Open the chat
-Tell the user:
-\`\`\`nc:operator open:https://t.me/{{bot}}
-Open @{{bot}} in Telegram and keep it on screen.
-\`\`\`
-`;
-
-const GATE_BARRIER_SKILL = `# gate barrier demo
-
-## Do the manual portal steps
-Tell the user:
-\`\`\`nc:operator gate open:https://portal.example
-Finish the portal steps, then continue.
-\`\`\`
-
-## Build the package (a side effect that must wait for the human)
-\`\`\`nc:run effect:external
-build-package
-\`\`\`
-`;
-
-describe('nc:operator open + gate', () => {
-  let oroot: string;
-  let oskill: string;
-  beforeEach(() => {
-    oskill = mkdtempSync(join(tmpdir(), 'nc-open-skill-'));
-    oroot = mkdtempSync(join(tmpdir(), 'nc-open-proj-'));
-    writeFileSync(join(oroot, 'package.json'), '{"name":"scratch"}');
-    writeFileSync(join(oroot, '.env'), '');
-  });
-
-  it('open:<url> calls prompter.open with the substituted URL, after rendering the block', async () => {
-    writeFileSync(join(oskill, 'SKILL.md'), OPEN_SKILL);
-    const order: string[] = [];
-    const prompter: Prompter = {
-      async ask() { return undefined; },
-      tell: () => void order.push('tell'),
-      open: (u) => void order.push(`open:${u}`),
-    };
-    const res = await applySkill(oskill, oroot, { inputs: { bot: 'mybot' }, prompter, exec: () => {} });
-    expect(order).toEqual(['tell', 'open:https://t.me/mybot']); // rendered, THEN opened, {{bot}} substituted
-    expect(res.agentTasks).toEqual([]);
-  });
-
-  it('gate calls prompter.confirm as a barrier BEFORE the next side-effecting directive runs', async () => {
-    writeFileSync(join(oskill, 'SKILL.md'), GATE_BARRIER_SKILL);
-    const events: string[] = [];
-    const prompter: Prompter = {
-      async ask() { return undefined; },
-      tell: () => void events.push('tell'),
-      open: (u) => void events.push(`open:${u}`),
-      async confirm() { events.push('confirm'); return true; },
-    };
-    const exec = (c: string): void => void events.push(`exec:${c}`);
-    await applySkill(oskill, oroot, { inputs: {}, prompter, exec });
-    // the barrier (confirm) fires after the block renders + opens, and BEFORE the build
-    expect(events).toEqual(['tell', 'open:https://portal.example', 'confirm', 'exec:build-package']);
-  });
-
-  it('degrades with a prompter lacking open/confirm — no crash, the block + side effect still run', async () => {
-    writeFileSync(join(oskill, 'SKILL.md'), GATE_BARRIER_SKILL);
-    const cmds: string[] = [];
-    // a minimal prompter: ask only, no tell/open/confirm
-    const prompter: Prompter = { async ask() { return undefined; } };
-    const res = await applySkill(oskill, oroot, { inputs: {}, prompter, exec: (c) => void cmds.push(c) });
-    expect(res.agentTasks).toEqual([]); // gate/open absent ⇒ skipped, not bounced
-    expect(cmds).toContain('build-package'); // the gated side effect still ran (no barrier to wait on)
-  });
-
-  it('an unresolved {{var}} in open:<url> defers the block (degrade, not crash) — nothing opened or rendered', async () => {
-    // open references {{bot}} but no prompt/capture defines it
-    writeFileSync(join(oskill, 'SKILL.md'), '# o\n\nTell the user:\n```nc:operator open:https://t.me/{{bot}}\nOpen the bot.\n```\n');
-    const opened: string[] = [];
-    const told: string[] = [];
-    const prompter: Prompter = { async ask() { return undefined; }, tell: (t) => void told.push(t), open: (u) => void opened.push(u) };
-    const res = await applySkill(oskill, oroot, { inputs: {}, prompter, exec: () => {} });
-    expect(opened).toEqual([]); // never opened — the URL var was unresolved
-    expect(told).toEqual([]); // and never rendered (deferred before the push/tell)
+  it('an unresolved {{var}} in the operator body defers the whole block — nothing collected, no event fired', async () => {
+    // the body references {{bot}} but no prompt/capture defines it
+    writeFileSync(join(oskill, 'SKILL.md'), '# o\n\nTell the user:\n```nc:operator\nOpen @{{bot}} in Telegram and keep it on screen.\n```\n');
+    const events: ApplyEvent[] = [];
+    const res = await applySkill(oskill, oroot, { inputs: {}, exec: () => {}, onEvent: (e) => void events.push(e) });
+    expect(events).toEqual([]); // never emitted — deferred before any event
+    expect(res.operatorMessages).toEqual([]); // and never collected half-rendered
     expect(res.deferred.some((d) => /unresolved \{\{bot\}\}/.test(d))).toBe(true);
+    expect(res.agentTasks).toEqual([]); // deferred, not bounced
   });
 });
 
 // Programmatic apply: pass every prompt answer via `inputs` and the whole skill
-// runs through with no prompter and no human interaction.
+// runs through with no resolver and no human interaction.
 const PROGRAMMATIC_SKILL = `# programmatic demo
 
 ## Collect
@@ -584,7 +491,7 @@ describe('programmatic apply via inputs', () => {
     writeFileSync(join(proot, '.env'), '');
   });
 
-  it('runs the whole skill from inputs alone — no prompter, nothing deferred or bounced', async () => {
+  it('runs the whole skill from inputs alone — no resolver, nothing deferred or bounced', async () => {
     writeFileSync(join(pskill, 'SKILL.md'), PROGRAMMATIC_SKILL);
     const cmds: string[] = [];
     const exec = (c: string): string | void => {
@@ -607,14 +514,14 @@ describe('programmatic apply via inputs', () => {
     expect(res.deferred).toContain('owner');
   });
 
-  it('inputs win over the prompter; the prompter only fills the gaps', async () => {
+  it('inputs win over resolveInput; resolveInput only fills the gaps', async () => {
     writeFileSync(join(pskill, 'SKILL.md'), '# two prompts\n\n```nc:prompt a\nA?\n```\n```nc:prompt b\nB?\n```\n```nc:env-set\nA={{a}}\nB={{b}}\n```\n');
     const asked: string[] = [];
-    const prompter: Prompter = { async ask(n) { asked.push(n); return 'fromPrompter'; } };
-    await applySkill(pskill, proot, { inputs: { a: 'fromInputs' }, prompter, exec: () => {} });
+    const resolveInput = async (n: string): Promise<string> => { asked.push(n); return 'fromResolveInput'; };
+    await applySkill(pskill, proot, { inputs: { a: 'fromInputs' }, resolveInput, exec: () => {} });
     const env = readFileSync(join(proot, '.env'), 'utf8');
     expect(env).toContain('A=fromInputs'); // input wins
-    expect(env).toContain('B=fromPrompter'); // prompter filled the gap
+    expect(env).toContain('B=fromResolveInput'); // resolveInput filled the gap
     expect(asked).toEqual(['b']); // 'a' was never asked — it came from inputs
   });
 
@@ -631,16 +538,16 @@ describe('programmatic apply via inputs', () => {
     expect(res.skipped.some((s) => /run restart: owned by the caller/.test(s))).toBe(true);
   });
 
-  it('threads a prompt validate:<re> through to the prompter', async () => {
+  it('declares the prompt validate:<re> to resolveInput via InputMeta', async () => {
     writeFileSync(join(pskill, 'SKILL.md'), '# v\n\n```nc:prompt token secret validate:^xoxb-\nPaste.\n```\n');
     let seenValidate: string | undefined;
-    const prompter: Prompter = {
-      async ask(_name, _q, _secret, validate) {
-        seenValidate = validate;
+    await applySkill(pskill, proot, {
+      exec: () => {},
+      resolveInput: async (_name, meta) => {
+        seenValidate = meta.validate;
         return 'xoxb-ok';
       },
-    };
-    await applySkill(pskill, proot, { prompter, exec: () => {} });
+    });
     expect(seenValidate).toBe('^xoxb-');
   });
 
@@ -713,7 +620,7 @@ describe('when: guard', () => {
   it('a guarded prompt with no input does not defer when its guard is unmet (the programmatic-run contract)', async () => {
     const { sdir, rdir } = modeScratch();
     // local mode, server_url neither supplied nor answerable — must still complete.
-    const res = await applySkill(sdir, rdir, { inputs: { mode: 'local' }, prompter: headless({}), exec: () => {} });
+    const res = await applySkill(sdir, rdir, { inputs: { mode: 'local' }, resolveInput: headless({}), exec: () => {} });
     expect(res.deferred).toEqual([]);
     expect(fullyApplied(res)).toBe(true);
   });
@@ -858,7 +765,7 @@ describe('run-health gate (a bounce blocks later side effects)', () => {
   it('a deferred prompt does NOT block a later restart (headless rebuild stays runnable)', async () => {
     writeFileSync(join(gskill, 'SKILL.md'), DEFER_THEN_RESTART_SKILL);
     const cmds: string[] = [];
-    const res = await applySkill(gskill, groot, { prompter: headless({}), exec: (c) => void cmds.push(c) });
+    const res = await applySkill(gskill, groot, { resolveInput: headless({}), exec: (c) => void cmds.push(c) });
 
     // the prompt and its consumer deferred (no answer headless) — not a failure
     expect(res.deferred).toContain('token');
@@ -941,7 +848,7 @@ describe('nc:run effect:check (precondition gate)', () => {
   it('an unresolved {{var}} in a check defers (headless rebuild) — not a bounce', async () => {
     writeFileSync(join(chkSkill, 'SKILL.md'), CHECK_VAR_SKILL);
     const cmds: string[] = [];
-    const res = await applySkill(chkSkill, chkRoot, { prompter: headless({}), exec: (c) => void cmds.push(c) });
+    const res = await applySkill(chkSkill, chkRoot, { resolveInput: headless({}), exec: (c) => void cmds.push(c) });
 
     expect(res.deferred).toContain('bot_phone'); // the prompt deferred (no headless answer)
     expect(res.deferred.some((d) => /unresolved \{\{bot_phone\}\}/.test(d))).toBe(true); // the check deferred on it
@@ -965,13 +872,9 @@ describe('nc:run effect:check (precondition gate)', () => {
   });
 });
 
-// The apply-lifecycle reporter brackets each real mutation (applyOne) with
-// stepStart/stepEnd so the setup driver can spin on the slow ones. An effectful
-// step (a run, a dep, a branch-fetch copy) carries a human label (the nearest
-// heading); an instant step (a local copy, an env write) carries null so the
-// driver stays silent. The engine fires the events; this asserts shape + order +
-// timing + the failure path, all with no real clack involved.
-const REPORTER_SKILL = `# reporter demo
+// A two-step skill for the event suite below: one effectful run (heading label)
+// and one instant env-set (null label).
+const EVENT_SKILL = `# event demo
 
 ## Verify the credential
 \`\`\`nc:run effect:fetch
@@ -984,79 +887,11 @@ DEMO=ok
 \`\`\`
 `;
 
-type RecordedEvent =
-  | { ev: 'start'; kind: string; label: string | null }
-  | { ev: 'end'; kind: string; label: string | null; ok: boolean; durationMs: number; error?: string };
-
-function recordingReporter(): { events: RecordedEvent[]; reporter: StepReporter } {
-  const events: RecordedEvent[] = [];
-  return {
-    events,
-    reporter: {
-      stepStart: (e) => void events.push({ ev: 'start', kind: e.kind, label: e.label }),
-      stepEnd: (e) =>
-        void events.push({ ev: 'end', kind: e.kind, label: e.label, ok: e.ok, durationMs: e.durationMs, error: e.error }),
-    },
-  };
-}
-
-describe('apply-lifecycle reporter (driver spinners)', () => {
-  let rroot: string;
-  let rskill: string;
-  beforeEach(() => {
-    rskill = mkdtempSync(join(tmpdir(), 'nc-rep-skill-'));
-    rroot = mkdtempSync(join(tmpdir(), 'nc-rep-proj-'));
-    writeFileSync(join(rskill, 'SKILL.md'), REPORTER_SKILL);
-    writeFileSync(join(rroot, '.env'), '');
-    writeFileSync(join(rroot, 'package.json'), '{"name":"scratch"}');
-  });
-
-  it('fires stepStart/stepEnd in order; effectful step carries a heading label, instant step null', async () => {
-    const { events, reporter } = recordingReporter();
-    await applySkill(rskill, rroot, { exec: () => {}, reporter });
-
-    // bracketed in document order: the run, then the env-set
-    expect(events.map((e) => `${e.ev}:${e.kind}`)).toEqual([
-      'start:run', 'end:run', 'start:env-set', 'end:env-set',
-    ]);
-
-    // the effectful run: the nearest heading is its spinner label, ok + numeric ms
-    expect(events.find((e) => e.ev === 'start' && e.kind === 'run')?.label).toBe('Verify the credential');
-    const runEnd = events.find((e): e is Extract<RecordedEvent, { ev: 'end' }> => e.ev === 'end' && e.kind === 'run')!;
-    expect(runEnd.ok).toBe(true);
-    expect(typeof runEnd.durationMs).toBe('number');
-    expect(runEnd.durationMs).toBeGreaterThanOrEqual(0);
-
-    // the instant env-set: null label ⇒ no spin
-    expect(events.find((e) => e.ev === 'start' && e.kind === 'env-set')?.label).toBe(null);
-  });
-
-  it('on a failed step, fires stepEnd ok=false with the error — balanced with its start', async () => {
-    const { events, reporter } = recordingReporter();
-    const exec = (c: string): string | void => {
-      if (c === 'verify-cred') throw new Error('401 bad credential');
-    };
-    const res = await applySkill(rskill, rroot, { exec, reporter });
-
-    const runEnd = events.find((e): e is Extract<RecordedEvent, { ev: 'end' }> => e.ev === 'end' && e.kind === 'run')!;
-    expect(runEnd.ok).toBe(false);
-    expect(runEnd.error).toMatch(/401 bad credential/);
-    // every stepStart has a matching stepEnd (the spinner is never left hanging)
-    expect(events.filter((e) => e.ev === 'start')).toHaveLength(events.filter((e) => e.ev === 'end').length);
-    // and the failure still degraded to an agent, not a crash
-    expect(res.agentTasks).toHaveLength(1);
-  });
-
-  it('no reporter ⇒ silent (unchanged) — apply still completes', async () => {
-    const res = await applySkill(rskill, rroot, { exec: () => {} });
-    expect(fullyApplied(res)).toBe(true);
-  });
-});
-
-// The core event seam: `onEvent` replaces BOTH StepReporter and Prompter.tell.
-// Step events carry the StepReporter payload plus the discriminating `type`;
-// operator events carry the rendered ({{var}}-substituted) block body + the
-// directive's opening-fence line. Every call is AWAITED before the engine
+// The core event seam: every engine emission flows through `onEvent`. Step
+// events bracket each real mutation (applyOne) — an effectful step (a run, a
+// dep, a branch-fetch copy) carries a heading-derived label, an instant step
+// null; operator events carry the rendered ({{var}}-substituted) block body +
+// the directive's opening-fence line. Every call is AWAITED before the engine
 // proceeds — the ordering guarantee a consumer's gating is built on — and a
 // handler throw is treated like any other throw at that directive: bounce,
 // never crash, never a silent drop.
@@ -1070,8 +905,8 @@ describe('onEvent (core event seam)', () => {
     writeFileSync(join(eroot, 'package.json'), '{"name":"scratch"}');
   });
 
-  it('fires step-start/step-end with the reporter payload + type; effectful label, instant null', async () => {
-    writeFileSync(join(eskill, 'SKILL.md'), REPORTER_SKILL);
+  it('fires step-start/step-end brackets in document order; effectful label, instant null', async () => {
+    writeFileSync(join(eskill, 'SKILL.md'), EVENT_SKILL);
     const events: ApplyEvent[] = [];
     await applySkill(eskill, eroot, { exec: () => {}, onEvent: (e) => void events.push(e) });
 
@@ -1079,7 +914,7 @@ describe('onEvent (core event seam)', () => {
       'step-start:run', 'step-end:run', 'step-start:env-set', 'step-end:env-set',
     ]);
     const start = events[0] as Extract<ApplyEvent, { type: 'step-start' }>;
-    expect(start.label).toBe('Verify the credential'); // heading-derived, same as the reporter
+    expect(start.label).toBe('Verify the credential'); // heading-derived
     expect(typeof start.line).toBe('number');
     const end = events[1] as Extract<ApplyEvent, { type: 'step-end' }>;
     expect(end.ok).toBe(true);
@@ -1088,7 +923,7 @@ describe('onEvent (core event seam)', () => {
   });
 
   it('closes a failed step with step-end ok=false + error — start/end always balanced', async () => {
-    writeFileSync(join(eskill, 'SKILL.md'), REPORTER_SKILL);
+    writeFileSync(join(eskill, 'SKILL.md'), EVENT_SKILL);
     const events: ApplyEvent[] = [];
     const exec = (c: string): void => {
       if (c === 'verify-cred') throw new Error('401 bad credential');
@@ -1130,7 +965,7 @@ describe('onEvent (core event seam)', () => {
   });
 
   it('a handler throw on a step event bounces that directive (degrade, not crash)', async () => {
-    writeFileSync(join(eskill, 'SKILL.md'), REPORTER_SKILL);
+    writeFileSync(join(eskill, 'SKILL.md'), EVENT_SKILL);
     const res = await applySkill(eskill, eroot, {
       exec: () => {},
       onEvent: (e) => {
@@ -1159,33 +994,22 @@ describe('onEvent (core event seam)', () => {
     expect(res.agentTasks.some((t) => /an earlier step did not complete/.test(t.reason))).toBe(true); // …incl. the cascade
   });
 
-  it('replaces the legacy reporter and prompter.tell entirely when both are supplied', async () => {
-    writeFileSync(join(eskill, 'SKILL.md'), '# both\n\nTell the user:\n```nc:operator\nHi there.\n```\n```nc:env-set\nA=1\n```\n');
-    const events: string[] = [];
-    const told: string[] = [];
-    const reporterCalls: string[] = [];
-    await applySkill(eskill, eroot, {
-      inputs: {},
-      exec: () => {},
-      onEvent: (e) => void events.push(e.type),
-      prompter: { async ask() { return undefined; }, tell: (t) => void told.push(t) },
-      reporter: { stepStart: () => void reporterCalls.push('start'), stepEnd: () => void reporterCalls.push('end') },
-    });
-    expect(events).toEqual(['operator', 'step-start', 'step-end']);
-    expect(told).toEqual([]); // legacy tell never consulted
-    expect(reporterCalls).toEqual([]); // legacy reporter never consulted
+  it('no onEvent ⇒ silent — the headless/programmatic apply still completes', async () => {
+    writeFileSync(join(eskill, 'SKILL.md'), EVENT_SKILL);
+    const res = await applySkill(eskill, eroot, { exec: () => {} });
+    expect(fullyApplied(res)).toBe(true);
   });
 });
 
 describe('stepLabel', () => {
-  it('labels effectful kinds from the nearest heading, instant kinds null; label: attr overrides; step is silent', () => {
+  it('labels effectful kinds from the nearest heading, instant kinds null; step is silent', () => {
     const md = [
       '# s', '',
       '## Install deps', '```nc:dep', 'pkg@1.0.0', '```', '',
       '## Copy a file', '```nc:copy', 'a -> b', '```', '',
       '## Pull from the branch', '```nc:copy from-branch:channels', 'x -> y', '```', '',
       '## Link the device', '```nc:run effect:step capture:platform_id=PLATFORM_ID', 'pair', '```', '',
-      '## Wire it', '```nc:run effect:wire label:Connecting', 'ncl wire', '```',
+      '## Wire it', '```nc:run effect:wire', 'ncl wire', '```',
     ].join('\n');
     const ds = parseDirectives(md);
     const nth = (k: string, i = 0) => ds.filter((d) => d.kind === k)[i];
@@ -1193,7 +1017,7 @@ describe('stepLabel', () => {
     expect(stepLabel(nth('copy', 0), md)).toBe(null);                     // local copy = instant
     expect(stepLabel(nth('copy', 1), md)).toBe('Pull from the branch');   // from-branch fetch spins
     expect(stepLabel(nth('run', 0), md)).toBe(null);                      // effect:step renders its own live output
-    expect(stepLabel(nth('run', 1), md)).toBe('Connecting');             // label: attr overrides the heading
+    expect(stepLabel(nth('run', 1), md)).toBe('Wire it');                 // heading-derived only — no attr override
   });
 
   it('falls back to a kind/effect default when there is no heading above the fence', () => {
@@ -1204,36 +1028,14 @@ describe('stepLabel', () => {
 
 // firstFailureHint surfaces the prose beside the FIRST bounced directive as the
 // operator's failure hint (the setup driver threads it into fail() + the Claude
-// handoff). The hint defaults to the surrounding prose; an `on-fail:<token>` attr
-// on the fence narrows it to the single prose LINE that diagnoses the failure —
-// and because that attr is stripped when a skill degrades to prose, the SAME
-// diagnosis must already live in the prose, so a token with no matching prose
-// line falls back to the full prose (prose-primary, never a leak).
+// handoff). The hint IS the surrounding prose — the same text an agent reads to
+// apply the step (prose-primary: a stripped fence leaves the same diagnosis).
 const FAIL_HINT_SKILL = `# connect demo
 
 ## Verify the credential
 The bot token must be valid. If auth.test fails, the token is wrong or the app isn't installed in the workspace.
 \`\`\`nc:hand-verify
 check the token
-\`\`\`
-`;
-
-const ON_FAIL_SKILL = `# connect demo
-
-## Connect to the service
-Install the app, then paste the bot token below.
-If auth.test returns invalid_auth, your token is wrong — regenerate it from the OAuth page.
-\`\`\`nc:hand-verify on-fail:invalid_auth
-check the token
-\`\`\`
-`;
-
-const ON_FAIL_MISS_SKILL = `# connect demo
-
-## Connect
-Do the manual connection step in the dashboard.
-\`\`\`nc:hand-verify on-fail:nonexistent_token
-check
 \`\`\`
 `;
 
@@ -1262,43 +1064,24 @@ describe('firstFailureHint', () => {
     const diag = firstFailureHint(res);
     expect(diag?.headline).toBe('Verify the credential'); // the section heading, # stripped
     expect(diag?.hint).toContain('the token is wrong'); // the prose beside the step
-    // the AgentTask carries the same hint (default = trimmed prose)
-    expect(res.agentTasks[0].hint).toBe(diag?.hint);
-  });
-
-  it('an on-fail:<token> narrows the hint to the prose line that diagnoses the failure', async () => {
-    writeFileSync(join(fskill, 'SKILL.md'), ON_FAIL_SKILL);
-    const res = await applySkill(fskill, froot, { inputs: {}, exec: () => {} });
-    const diag = firstFailureHint(res);
-    expect(diag?.headline).toBe('Connect to the service');
-    // narrowed to the single diagnosing line — not the whole paragraph
-    expect(diag?.hint).toBe('If auth.test returns invalid_auth, your token is wrong — regenerate it from the OAuth page.');
-    expect(diag?.hint).not.toContain('Install the app');
-  });
-
-  it('falls back to the full prose when the on-fail token has no matching prose line (no leak)', async () => {
-    writeFileSync(join(fskill, 'SKILL.md'), ON_FAIL_MISS_SKILL);
-    const res = await applySkill(fskill, froot, { inputs: {}, exec: () => {} });
-    const diag = firstFailureHint(res);
-    // the bare token never surfaces — the operator sees the prose
-    expect(diag?.hint).toContain('Do the manual connection step in the dashboard.');
-    expect(diag?.hint).not.toContain('nonexistent_token');
+    // hint ≡ prose: the diagnosis IS the bounced task's own trimmed prose
+    expect(diag?.hint).toBe(res.agentTasks[0].prose.trim());
   });
 
   it('returns undefined when nothing bounced (a deferred prompt is not a failure)', async () => {
     writeFileSync(join(fskill, 'SKILL.md'), NO_BOUNCE_SKILL);
-    const res = await applySkill(fskill, froot, { prompter: headless({}), exec: () => {} });
+    const res = await applySkill(fskill, froot, { resolveInput: headless({}), exec: () => {} });
     expect(res.deferred).toContain('token'); // deferred, not bounced
     expect(res.agentTasks).toEqual([]);
     expect(firstFailureHint(res)).toBeUndefined();
   });
 });
 
-// PromptOpts: `nc:prompt` attrs (flags/min/error/normalize). `normalize:<how>` is
-// applied DETERMINISTICALLY at engine bind — to BOTH an `inputs` value and an
-// interactive answer — so they land identically (a deliberate behavior change).
-// flags/min/error are carried through to the prompter (their interactive
-// enforcement is asserted in skill-driver.test.ts against promptValidator).
+// `nc:prompt normalize:<how>` is applied DETERMINISTICALLY at engine bind — to
+// BOTH an `inputs` value and a resolveInput answer — so they land identically.
+// validate/flags/normalize are DECLARED to the consumer via InputMeta (their
+// interactive enforcement is asserted in skill-driver.test.ts against
+// promptValidator).
 const NORMALIZE_SKILL = `# normalize demo
 
 ## Collect a base URL
@@ -1310,7 +1093,7 @@ PUBLIC_URL={{public_url}}
 \`\`\`
 `;
 
-describe('nc:prompt PromptOpts (normalize at bind, opts threading)', () => {
+describe('nc:prompt normalize at bind + InputMeta declaration', () => {
   let nroot: string;
   let nskill: string;
   beforeEach(() => {
@@ -1328,28 +1111,25 @@ describe('nc:prompt PromptOpts (normalize at bind, opts threading)', () => {
   });
 
   it('normalize:rstrip-slash strips a trailing slash on an interactive answer too (same bind path)', async () => {
-    const res = await applySkill(nskill, nroot, { prompter: headless({ public_url: 'https://x.ngrok.io/' }), exec: () => {} });
+    const res = await applySkill(nskill, nroot, { resolveInput: headless({ public_url: 'https://x.ngrok.io/' }), exec: () => {} });
     expect(res.vars.public_url).toBe('https://x.ngrok.io'); // identical to the inputs path
     expect(readFileSync(join(nroot, '.env'), 'utf8')).toContain('PUBLIC_URL=https://x.ngrok.io');
   });
 
-  it('threads validate + PromptOpts (flags/min/normalize) through to the prompter, then normalizes the answer at bind', async () => {
+  it('declares validate/flags/normalize to resolveInput via InputMeta, then normalizes the answer at bind', async () => {
     writeFileSync(
       join(nskill, 'SKILL.md'),
-      '# o\n\n```nc:prompt url validate:^https?:// flags:i min:5 normalize:rstrip-slash\nURL?\n```\n',
+      '# o\n\n```nc:prompt url validate:^https?:// flags:i normalize:rstrip-slash\nURL?\n```\n',
     );
-    let seenValidate: string | undefined;
-    let seenOpts: PromptOpts | undefined;
-    const prompter: Prompter = {
-      async ask(_n, _q, _s, validate, opts) {
-        seenValidate = validate;
-        seenOpts = opts;
-        return 'HTTPS://x.io/'; // the prompter returns the raw answer; the engine normalizes
+    let seen: InputMeta | undefined;
+    const res = await applySkill(nskill, nroot, {
+      exec: () => {},
+      resolveInput: async (_n, meta) => {
+        seen = meta;
+        return 'HTTPS://x.io/'; // the consumer returns the raw answer; the engine normalizes
       },
-    };
-    const res = await applySkill(nskill, nroot, { prompter, exec: () => {} });
-    expect(seenValidate).toBe('^https?://');
-    expect(seenOpts).toMatchObject({ flags: 'i', min: 5, normalize: 'rstrip-slash' });
+    });
+    expect(seen).toMatchObject({ validate: '^https?://', flags: 'i', normalize: 'rstrip-slash' });
     // normalize applied at bind (trailing slash gone); case preserved (lower not set)
     expect(res.vars.url).toBe('HTTPS://x.io');
   });
@@ -1365,11 +1145,9 @@ describe('nc:prompt PromptOpts (normalize at bind, opts threading)', () => {
   });
 });
 
-// The core input seam: `resolveInput` replaces Prompter.ask. The engine hands it
-// the prompt's DECLARED semantics (InputMeta) so a consumer can run its own
-// re-ask loop (clack validate, a chat exchange); returning undefined defers,
-// exactly like the legacy prompter. When present, the legacy prompter is never
-// consulted; `inputs` still win over both.
+// The core input seam: the engine hands `resolveInput` the prompt's DECLARED
+// semantics (InputMeta) so a consumer can run its own re-ask loop (clack
+// validate, a chat exchange); returning undefined defers. `inputs` win over it.
 describe('resolveInput (core input seam)', () => {
   let iroot: string;
   let iskill: string;
@@ -1419,9 +1197,8 @@ describe('resolveInput (core input seam)', () => {
     expect(res.deferred).toEqual(['token']);
   });
 
-  it('takes precedence over the legacy prompter; inputs still win over both', async () => {
+  it('is consulted only for vars `inputs` did not pre-supply — inputs win', async () => {
     writeFileSync(join(iskill, 'SKILL.md'), '# p\n\n```nc:prompt a\nA?\n```\n```nc:prompt b\nB?\n```\n');
-    const askedLegacy: string[] = [];
     const resolved: string[] = [];
     const res = await applySkill(iskill, iroot, {
       inputs: { a: 'fromInputs' },
@@ -1430,17 +1207,10 @@ describe('resolveInput (core input seam)', () => {
         resolved.push(n);
         return 'fromResolveInput';
       },
-      prompter: {
-        async ask(n) {
-          askedLegacy.push(n);
-          return 'fromPrompter';
-        },
-      },
     });
     expect(res.vars.a).toBe('fromInputs'); // inputs win
     expect(res.vars.b).toBe('fromResolveInput'); // resolveInput fills the gap
-    expect(resolved).toEqual(['b']);
-    expect(askedLegacy).toEqual([]); // the legacy prompter is never consulted
+    expect(resolved).toEqual(['b']); // 'a' was never asked
   });
 });
 
@@ -1539,11 +1309,6 @@ describe('validate-at-bind (inputs + resolveInput answers)', () => {
     expect(res.vars.h).toBe('U12345678');
   });
 
-  it('a legacy prompter answer is validated at the same bind point (transitional parity)', async () => {
-    const res = await applySkill(vskill, vroot, { prompter: headless({ owner_handle: 'U1' }), exec: () => {} });
-    expect(res.deferred).toContain('owner_handle: invalid value (does not match validate:^U[A-Z0-9]{8,}$)');
-    expect(res.vars.owner_handle).toBeUndefined();
-  });
 });
 
 // referenceProse slices the author-written reference FLOOR — the engine-ignored
