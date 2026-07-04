@@ -762,6 +762,59 @@ describe('run-health gate (a bounce blocks later side effects)', () => {
     expect(gated).toHaveLength(2); // restart + step, both bounced by the gate
   });
 
+  // Once blocked, an operator block must not walk the human through steps the
+  // run has already gated ("a pairing code is about to appear" → nothing
+  // appears). No event ⇒ a consumer's URL offer / readiness confirm never
+  // fires; no operatorMessages entry ⇒ a failed run's manual-steps report
+  // omits steps predicated on the failure. A block BEFORE the failure still
+  // renders normally.
+  it('a bounce also silences later operator blocks — no event, no collected message', async () => {
+    writeFileSync(
+      join(gskill, 'SKILL.md'),
+      [
+        '# doomed walkthrough demo',
+        '',
+        '## Create the bot',
+        '```nc:operator',
+        'Make the bot first.',
+        '```',
+        '',
+        '## Validate the credential',
+        '```nc:run capture:who effect:fetch',
+        'verify-cred',
+        '```',
+        '',
+        '## Get ready to pair',
+        '```nc:operator',
+        'Open the bot — a pairing code is about to appear.',
+        '```',
+        '',
+        '## Pair',
+        '```nc:run effect:step capture:platform_id=PLATFORM_ID',
+        'run-pair-step',
+        '```',
+        '',
+      ].join('\n'),
+    );
+    const events: string[] = [];
+    const res = await applySkill(gskill, groot, {
+      inputs: {},
+      exec: (c) => {
+        if (c === 'verify-cred') throw new Error('401 bad credential');
+      },
+      execStream: async () => ({ ok: true, fields: { PLATFORM_ID: 'x' } }),
+      onEvent: (e) => {
+        if (e.type === 'operator') events.push(e.text);
+      },
+    });
+
+    expect(events).toEqual(['Make the bot first.']); // pre-failure block rendered…
+    expect(res.operatorMessages).toEqual(['Make the bot first.']); // …and collected
+    expect(res.operatorMessages.join()).not.toContain('about to appear'); // doomed block silenced
+    expect(res.skipped).toContain('operator: skipped after an earlier failure');
+    expect(res.agentTasks.some((t) => /an earlier step did not complete/.test(t.reason))).toBe(true); // step still gated
+  });
+
   it('a deferred prompt does NOT block a later restart (headless rebuild stays runnable)', async () => {
     writeFileSync(join(gskill, 'SKILL.md'), DEFER_THEN_RESTART_SKILL);
     const cmds: string[] = [];

@@ -115,6 +115,12 @@ can derive its own.
    `res.operatorMessages`, then `await onEvent({type:'operator', …})` before
    evaluating the next directive. An unresolved `{{var}}` in the body defers the
    whole block before any event fires (today's behavior, `skill-apply.ts:787`).
+   **Once the run is `blocked`** (an earlier bounce), operator directives are
+   skipped instead — no event, no `operatorMessages` entry, recorded in
+   `skipped`. Walking the human through steps whose side effects the run has
+   already gated ("a pairing code is about to appear" → nothing appears) is
+   actively misleading, and a failed run's manual-steps report must not include
+   steps predicated on the failure.
 3. Every `onEvent` call is awaited; a rejection from `onEvent` is treated like
    any other throw at that directive (bounce, not crash). This applies to
    operator events too: a consumer that throws from `onEvent` **accepts the

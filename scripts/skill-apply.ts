@@ -768,6 +768,16 @@ export async function applySkill(skillDir: string, root: string, opts: ApplyOpti
         continue;
       }
       if (d.kind === 'operator') {
+        // Once the run is blocked, walking the human through further manual
+        // steps is actively misleading — the side effects those instructions
+        // lead up to ("a pairing code is about to appear") have already been
+        // gated. Skip: no event (so a consumer's URL offer / readiness confirm
+        // never fires), no operatorMessages entry (a failed run's manual-steps
+        // report must not include steps predicated on the failed one).
+        if (blocked) {
+          res.skipped.push('operator: skipped after an earlier failure');
+          continue;
+        }
         // Always collect the human-facing instructions into the result so a
         // programmatic caller can relay/output them. {{vars}} render so a
         // resolved value can be shown (throws → deferred if a referenced var is
