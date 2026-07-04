@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runSkill, hostExec, hostExecStream, promptValidator, clackResolveInput, type RunSkillOptions } from './skill-driver.js';
+import { runSkill, hostExec, hostExecStream, labelOrdinals, promptValidator, clackResolveInput, type RunSkillOptions } from './skill-driver.js';
 import { fullyApplied, type ApplyEvent } from '../../scripts/skill-apply.js';
 
 // Shared test state for the clack + claude-handoff mocks (hoisted so the vi.mock
@@ -399,5 +399,45 @@ describe('thin skill driver', () => {
     // describes the expected shape, so no authored error: string exists anymore
     expect(ci!('ftp://example.com')).toBe(`That doesn't match the expected format. ${question}`);
     expect(promptValidator(undefined, undefined, question)).toBeUndefined(); // no regex ⇒ no validator
+  });
+});
+
+// Two steps under one heading share a spinner caption (build + test both read
+// "Build and validate") — the ordinal suffix marks them as a sequence, not a
+// stuttered duplicate. Solo captions stay unsuffixed.
+describe('labelOrdinals (repeated-caption disambiguation)', () => {
+  const MD = [
+    '# demo',
+    '',
+    '## Build and validate',
+    '```nc:run effect:build',
+    'pnpm run build',
+    '```',
+    '```nc:run effect:test',
+    'pnpm exec vitest run x.test.ts',
+    '```',
+    '',
+    '## Restart',
+    '```nc:run effect:restart',
+    'bash restart.sh',
+    '```',
+    '',
+  ].join('\n');
+
+  it('suffixes (1/2)/(2/2) on the shared caption and leaves the solo one alone', () => {
+    const ords = labelOrdinals(MD);
+    const buildLine = 4; // opening fence of the build run (1-based)
+    const testLine = 7;
+    const restartLine = 12;
+    expect(ords.get(buildLine)).toBe(' (1/2)');
+    expect(ords.get(testLine)).toBe(' (2/2)');
+    expect(ords.has(restartLine)).toBe(false); // unique caption — no suffix
+  });
+
+  it('the real add-telegram build+test pair (the live stutter) gets ordinals', () => {
+    const md = readFileSync(join(process.cwd(), '.claude/skills/add-telegram/SKILL.md'), 'utf8');
+    const suffixes = [...labelOrdinals(md).values()];
+    expect(suffixes).toContain(' (1/2)');
+    expect(suffixes).toContain(' (2/2)');
   });
 });

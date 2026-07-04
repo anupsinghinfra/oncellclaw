@@ -22,6 +22,7 @@ import {
   applySkill,
   fullyApplied,
   normalizeValue,
+  stepLabel,
   type ApplyEvent,
   type ApplyResult,
   type InputMeta,
@@ -289,11 +290,37 @@ const GATE_WORDING: Record<'readiness' | 'completed', string> = {
 };
 
 /**
+ * Where several steps under one heading share a spinner caption (a build and a
+ * test both labelled "5. Build and validate"), suffix an ordinal — "(1/2)",
+ * "(2/2)" — so consecutive spinners read as distinct steps, not a stutter.
+ * Keyed by directive line (the step events carry it). Counting is static
+ * (document order over the parsed directives); a runtime-skipped sibling can
+ * leave a gap in the rendered sequence — cosmetic only.
+ */
+export function labelOrdinals(md: string): Map<number, string> {
+  const byLabel = new Map<string, number[]>();
+  for (const d of parseDirectives(md)) {
+    const label = stepLabel(d, md);
+    if (label === null) continue;
+    const lines = byLabel.get(label) ?? [];
+    lines.push(d.line);
+    byLabel.set(label, lines);
+  }
+  const out = new Map<number, string>();
+  for (const lines of byLabel.values()) {
+    if (lines.length < 2) continue;
+    lines.forEach((ln, i) => out.set(ln, ` (${i + 1}/${lines.length})`));
+  }
+  return out;
+}
+
+/**
  * The driver's DEFAULT `onEvent` handler — the whole wizard presentation policy:
  *
  *   • step-start/step-end → a per-step clack spinner (built on runner.ts's
  *     `startSpinner`), TTY-gated so piped/CI/test runs stay quiet. A null label
  *     is the engine's instant/renders-its-own-output declaration — no spinner.
+ *     Repeated captions under one heading get an ordinal suffix (labelOrdinals).
  *   • operator → render the block as a clack note, then the URL offer
  *     (extractOfferUrl → confirm → openUrl), then the natural-barrier confirm
  *     when gatePolicy says this block precedes a side-effecting directive.
@@ -308,11 +335,12 @@ function defaultOnEvent(
   open: (url: string) => Promise<void>,
 ): (e: ApplyEvent) => Promise<void> {
   const gates = gatePolicy(md);
+  const ordinals = labelOrdinals(md);
   let active: ReturnType<typeof startSpinner> | null = null;
   return async (e) => {
     if (e.type === 'step-start') {
       if (!process.stdout.isTTY || e.label === null) return; // quiet: non-TTY, or instant/cheap step
-      const base = e.label.replace(/…+$/, '');
+      const base = e.label.replace(/…+$/, '') + (ordinals.get(e.line) ?? '');
       active = startSpinner({ running: `${base}…`, done: base, failed: `${base} failed` });
       return;
     }
