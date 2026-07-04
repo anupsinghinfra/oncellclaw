@@ -80,6 +80,22 @@ export interface ResourceDef {
    * inserted, so generated fields like `id` and `created_at` are populated.
    */
   postCreate?: (row: Record<string, unknown>) => void;
+  /**
+   * Runs AFTER the create transaction has committed, with the row that was
+   * written. Use this — not `postCreate` — for side effects that live
+   * OUTSIDE the central DB (filesystem writes, projecting rows into a
+   * running agent's session `inbound.db`) or that are async: those must not
+   * sit inside the better-sqlite3 transaction, which only covers central-DB
+   * statements and is synchronous.
+   *
+   * The canonical case is live-refresh parity with `ncl destinations add`:
+   * after `ncl wirings create` writes the companion `agent_destinations`
+   * row, the change has to be projected into any running container's session
+   * DB or the agent won't see the new delivery target until its next spawn
+   * (#2389). Runs only if the transaction succeeds, so it never observes a
+   * rolled-back row.
+   */
+  postCommit?: (row: Record<string, unknown>) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,13 +186,16 @@ function genericCreate(def: ResourceDef) {
     const placeholders = colNames.map((c) => `@${c}`);
     // Single transaction so a postCreate throw rolls back the parent INSERT —
     // closes the partial-state class this PR exists to fix (#2415, #2389).
-    // better-sqlite3 .transaction() is sync, which matches postCreate's
-    // signature (`(row) => void`); current hooks are pure DB writes.
+    // better-sqlite3 .transaction() is sync, so `postCreate` is sync too and
+    // must only touch the central DB (it's the atomic companion-row write).
+    // Anything async or outside the central DB — filesystem, session-DB
+    // projection — belongs in `postCommit`, which runs after commit below.
     const db = getDb();
     db.transaction(() => {
       db.prepare(`INSERT INTO ${def.table} (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`).run(values);
       if (def.postCreate) def.postCreate(values);
     })();
+    if (def.postCommit) await def.postCommit(values);
     return values;
   };
 }

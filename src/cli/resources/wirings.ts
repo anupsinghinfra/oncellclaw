@@ -1,6 +1,7 @@
 import { ensureAgentDestinationForWiring } from '../../db/messaging-groups.js';
 import type { MessagingGroupAgent } from '../../types.js';
 import { registerResource } from '../crud.js';
+import { projectDestinationsToSessions } from './destinations.js';
 
 registerResource({
   name: 'wiring',
@@ -77,5 +78,17 @@ registerResource({
     // `createMessagingGroupAgent` does this automatically; the generic
     // CRUD path doesn't, hence this hook. See issue #2389.
     ensureAgentDestinationForWiring(row as unknown as MessagingGroupAgent);
+  },
+  postCommit: async (row) => {
+    // Live-refresh parity with `ncl destinations add`: `postCreate` above
+    // only wrote the central `agent_destinations` row. Any container already
+    // running for this agent keeps serving its stale session projection, so
+    // it would drop replies to this chat as "unknown destination" until the
+    // next spawn (the exact symptom operators hit running `ncl wirings
+    // create` against a live instance — it needed a group restart). Project
+    // the new destination into live sessions now so the fix takes effect
+    // without a restart. Runs after commit because it writes to session
+    // `inbound.db` files (outside the central-DB transaction) and is async.
+    await projectDestinationsToSessions((row as unknown as MessagingGroupAgent).agent_group_id);
   },
 });
