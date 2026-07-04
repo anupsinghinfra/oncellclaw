@@ -55,13 +55,7 @@ The config mounts (`container.json`, `CLAUDE.md`, `.claude-fragments`) are
 read its config but cannot modify it. The project root is **never mounted**: the
 container only ever sees the paths above plus any provider-contributed mounts
 (e.g. an OpenCode XDG dir). Host application source (`src/`, `dist/`,
-`package.json`) is not reachable. There is no per-group split for a "main"
-group — every agent group's mounts are built the same way.
-
-The old `groups/global/` shared-memory mount no longer exists; that content
-was folded into `container/CLAUDE.md`, which every group already gets
-read-only at `/app/CLAUDE.md` (see `migrateGroupsToClaudeLocal` in
-`src/claude-md-compose.ts`).
+`package.json`) is not reachable.
 
 **Additional-mount allowlist** — extra mounts from a group's container config
 are validated against an allowlist at `~/.config/nanoclaw/mount-allowlist.json`,
