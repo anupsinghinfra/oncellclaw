@@ -9,5 +9,3 @@ The files in this directory are original design documents and developer referenc
 | [SPEC.md](SPEC.md) | [Architecture](https://docs.nanoclaw.dev/concepts/architecture) |
 | [SECURITY.md](SECURITY.md) | [Security model](https://docs.nanoclaw.dev/concepts/security) |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | [Introduction](https://docs.nanoclaw.dev/introduction) |
-| [docker-sandboxes.md](docker-sandboxes.md) | _v1-historical — reference only_ |
-| [APPLE-CONTAINER-NETWORKING.md](APPLE-CONTAINER-NETWORKING.md) | _v1-historical — reference only_ |
