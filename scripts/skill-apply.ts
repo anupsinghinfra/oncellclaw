@@ -532,7 +532,9 @@ export function stepLabel(d: Directive, md: string): string | null {
 //   lower         lowercase
 // Absent/unknown ⇒ a no-op (lint gates the known set). Doing it here, not in the
 // prompter, means a programmatic `inputs` value and a typed answer land identically.
-function normalizeValue(value: string, normalize: string | undefined): string {
+// Exported so the driver's reuse-offer pre-filter (§5.4) tests an `.env` value
+// against the SAME normalize-then-validate the engine will apply at bind.
+export function normalizeValue(value: string, normalize: string | undefined): string {
   switch (normalize) {
     case 'trim':
       return value.trim();

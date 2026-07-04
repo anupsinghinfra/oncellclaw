@@ -12,8 +12,8 @@
  *
  *   1. **No install-time secrets.** A provider's credentials are vault-only and
  *      land in a separate auth walk-through (`runAuth`), so the SKILL.md carries
- *      no `nc:prompt` directives. The Prompter therefore defers everything; it
- *      is never actually called.
+ *      no `nc:prompt` directives. No `resolveInput` is wired — absent means any
+ *      prompt would simply defer, and none exists to defer.
  *   2. **Build + auth are owned by the surrounding flow.** The provider SKILL.md
  *      ends with `nc:run effect:build` / `effect:test` / `effect:external` (the
  *      external one re-invokes `--step provider-auth`, which would recurse). The
@@ -29,7 +29,7 @@
  */
 import { execSync } from 'node:child_process';
 
-import { applySkill, type ApplyResult, type Prompter } from '../../scripts/skill-apply.js';
+import { applySkill, type ApplyResult } from '../../scripts/skill-apply.js';
 
 /** Commands the directive engine emits that the surrounding setup flow owns. */
 function isFlowOwnedCommand(cmd: string): boolean {
@@ -58,15 +58,9 @@ export async function applyProviderSkill(
   projectRoot: string,
 ): Promise<ProviderInstallResult> {
   // A provider SKILL.md has no prompt directives (vault-only auth runs
-  // separately), so the Prompter defers everything and is never called.
-  const prompter: Prompter = {
-    async ask() {
-      return undefined;
-    },
-  };
-
+  // separately). No resolveInput is passed: absent ⇒ any prompt defers, which
+  // is exactly the old defer-all stub's semantics with no stub to maintain.
   const result = await applySkill(skillDir, projectRoot, {
-    prompter,
     exec: (cmd) => {
       if (isFlowOwnedCommand(cmd)) return; // build/test/auth are the flow's job
       execSync(cmd, { cwd: projectRoot, stdio: 'pipe' });

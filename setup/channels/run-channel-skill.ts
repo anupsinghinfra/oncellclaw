@@ -119,11 +119,16 @@ export async function runChannelSkill(
   const res = await runSkill(`.claude/skills/add-${channel}`, {
     projectRoot,
     exec: overrides.exec,
-    prompter: overrides.prompter,
+    resolveInput: overrides.resolveInput,
     resolveRemote: overrides.resolveRemote,
     inputs: overrides.inputs,
     skipEffects: overrides.skipEffects,
-    reporter: overrides.reporter, // undefined ⇒ runSkill's TTY-gated spinner
+    // undefined ⇒ runSkill's default policy handler (TTY-gated spinner + operator
+    // note → URL offer → natural-barrier confirm). An injected onEvent replaces
+    // that policy entirely; inject confirm/openUrl to observe the default policy.
+    onEvent: overrides.onEvent,
+    confirm: overrides.confirm,
+    openUrl: overrides.openUrl,
     reuse: overrides.reuse ?? true, // offer to reuse credentials already in .env
     // Handoff context for the `?` help-escape: a lone `?` at any of this skill's
     // prompts hands the operator off to interactive Claude scoped to this channel.

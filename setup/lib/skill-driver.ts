@@ -3,9 +3,14 @@
  * the directive engine. The entire connect+wire procedure now lives in the
  * SKILL.md — operator walkthroughs (`nc:operator`), credential prompts
  * (`nc:prompt`), the service restart (`nc:run effect:restart`), and the wiring
- * (`nc:run effect:wire`, `ncl …`). So the driver is just: render the operator
- * blocks, ask the prompts, run the engine in document order. It replaces the
- * bespoke per-channel `setup/channels/<channel>.ts` flows with one function.
+ * (`nc:run effect:wire`, `ncl …`). So the driver is just: ask the prompts
+ * (`resolveInput`), render the engine's events (`onEvent` — spinners for step
+ * events, notes + policy for operator blocks), run the engine in document order.
+ *
+ * The engine only DECLARES and EMITS (scripts/skill-apply.ts); everything
+ * presentational lives here, derived from document structure via the shared
+ * policy module (scripts/skill-policy.ts): the natural-barrier gate confirm,
+ * the URL offer, the prose-derived validation message.
  */
 import { execSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -13,48 +18,50 @@ import { join } from 'node:path';
 
 import * as p from '@clack/prompts';
 
-import { applySkill, fullyApplied, type ApplyResult, type Prompter, type PromptOpts, type StepOutcome, type StepReporter } from '../../scripts/skill-apply.js';
+import {
+  applySkill,
+  fullyApplied,
+  normalizeValue,
+  type ApplyEvent,
+  type ApplyResult,
+  type InputMeta,
+  type StepOutcome,
+} from '../../scripts/skill-apply.js';
 import { parseDirectives, promptVar } from '../../scripts/skill-directives.js';
+import { extractOfferUrl, gatePolicy } from '../../scripts/skill-policy.js';
 import { isHeadless } from '../platform.js';
 import { openUrl } from './browser.js';
 import { isHelpEscape, offerClaudeHandoff, validateWithHelpEscape } from './claude-handoff.js';
 import { startSpinner } from './runner.js';
 
 /**
- * Clack-backed human I/O: `ask` collects an `nc:prompt` (password for secrets,
- * text otherwise; a cancel defers), `tell` renders an `nc:operator` block as a
- * note. The prompt that follows an operator block is the natural barrier — the
- * user can't paste a token before they've done the steps.
- */
-/**
  * Build the clack `validate` callback an `nc:prompt` carries — the interactive
- * enforcement of `validate:<re>` (with `flags:`), `min:`, and the `error:` message.
- * Returns undefined when the prompt has neither a regex nor a min (no validation to
- * do). Exported so the policy is unit-testable without a TTY. Normalization is NOT
- * here: it's deterministic, applied at bind by the engine (skill-apply
- * `normalizeValue`), so it lands the same for `inputs` and typed answers.
+ * enforcement of `validate:<re>` (with `flags:`). On a miss the message is
+ * derived from the QUESTION PROSE, which by authoring convention describes the
+ * expected shape ("Paste the bot token (looks like `123456:ABC-DEF...`)."), so
+ * there is no separate authored error string. Returns undefined when the prompt
+ * declares no regex. Exported so the policy is unit-testable without a TTY.
+ * Normalization is NOT here: it's deterministic, applied at bind by the engine
+ * (skill-apply `normalizeValue`), so it lands the same for `inputs` and typed
+ * answers.
  */
 export function promptValidator(
   validate: string | undefined,
-  opts: PromptOpts | undefined,
+  flags: string | undefined,
+  question: string,
 ): ((v: string | undefined) => string | undefined) | undefined {
-  const re = validate ? new RegExp(validate, opts?.flags) : undefined;
-  const min = opts?.min;
-  if (!re && min === undefined) return undefined;
-  return (v) => {
-    const s = (v ?? '').trim();
-    if (min !== undefined && s.length < min) return opts?.error ?? `Must be at least ${min} characters.`;
-    if (re && !re.test(s)) return opts?.error ?? `That doesn't match the expected format.`;
-    return undefined;
-  };
+  if (!validate) return undefined;
+  const re = new RegExp(validate, flags);
+  return (v) => (re.test((v ?? '').trim()) ? undefined : `That doesn't match the expected format. ${question}`);
 }
 
 /**
  * Handoff context for the `?` help-escape (Step 8 / mechanism M3). A lone `?` at
  * any prompt hands the operator to interactive Claude with this context, then
- * re-asks the same prompt. Both fields are optional so a bare `clackPrompter()`
- * (e.g. the standalone CLI below) still works — it just hands off with a generic
- * `setup` channel and the prompt's own var name as the step.
+ * re-asks the same prompt. Both fields are optional so a bare
+ * `clackResolveInput()` (e.g. the standalone CLI below) still works — it just
+ * hands off with a generic `setup` channel and the prompt's own var name as the
+ * step.
  */
 export interface PrompterContext {
   /** Channel this run is wiring (e.g. 'telegram') — surfaced to the handoff. */
@@ -63,28 +70,28 @@ export interface PrompterContext {
   step?: string;
 }
 
-export function clackPrompter(ctx: PrompterContext = {}): Prompter {
+/**
+ * The wizard's `resolveInput` implementation: collect an `nc:prompt` through
+ * clack (password for secrets, text otherwise; a cancel defers), running the
+ * interactive re-ask loop against the prompt's declared `validate:`/`flags:`
+ * (the engine's validate-at-bind is the programmatic backstop, not the UX).
+ */
+export function clackResolveInput(ctx: PrompterContext = {}): (name: string, meta: InputMeta) => Promise<string | undefined> {
   // The `?` help-escape is only meaningful at a real terminal: it hands the
   // operator off to an interactive Claude session (stdio inherited). In a
   // headless / non-TTY run nobody can type `?` into a clack prompt anyway, and
   // we must never spawn an interactive child without a TTY — so it's a no-op
   // there (read at ask-time so a re-run picks up a terminal that appears later).
-  async function ask(
-    varName: string,
-    question: string,
-    secret: boolean,
-    validate?: string,
-    opts?: PromptOpts,
-  ): Promise<string | undefined> {
-    const check = promptValidator(validate, opts);
+  async function ask(name: string, meta: InputMeta): Promise<string | undefined> {
+    const check = promptValidator(meta.validate, meta.flags, meta.question);
     // Wrap the validator so a lone `?` short-circuits format checks and comes
     // back as a literal "?" instead of being rejected — we intercept it below.
     const guarded = validateWithHelpEscape(check);
     // clearOnError wipes a rejected secret so the operator re-pastes cleanly
     // (a half-pasted token isn't left masked in the field).
-    const ans = secret
-      ? await p.password({ message: question, validate: guarded, clearOnError: true })
-      : await p.text({ message: question, validate: guarded });
+    const ans = meta.secret
+      ? await p.password({ message: meta.question, validate: guarded, clearOnError: true })
+      : await p.text({ message: meta.question, validate: guarded });
     if (p.isCancel(ans)) return undefined; // cancelled ⇒ defer
     if (isHelpEscape(ans) && process.stdout.isTTY) {
       // Operator asked for help: hand off to interactive Claude with this
@@ -92,31 +99,36 @@ export function clackPrompter(ctx: PrompterContext = {}): Prompter {
       // bounded — they decide when to stop typing `?`.
       await offerClaudeHandoff({
         channel: ctx.channel ?? 'setup',
-        step: ctx.step ?? varName,
-        stepDescription: question,
+        step: ctx.step ?? name,
+        stepDescription: meta.question,
       });
-      return ask(varName, question, secret, validate, opts);
+      return ask(name, meta);
     }
     const v = String(ans).trim();
     return v.length ? v : undefined;
   }
-  return {
-    ask,
-    tell(text) {
-      p.note(text, 'Do this');
-    },
-    async confirm(message) {
-      const ans = await p.confirm({ message });
-      return ans === true; // cancel ⇒ false
-    },
-    open(url) {
-      // Best-effort browser open for an `nc:operator open:<url>` deep-link.
-      // Headless-safe: on a machine with no display we skip the open entirely —
-      // the URL is already surfaced in the operator note for copy-paste.
-      if (isHeadless()) return;
-      openUrl(url);
-    },
-  };
+  return ask;
+}
+
+/**
+ * The default `confirm` seam: a clack yes/no, TTY-gated exactly like the step
+ * spinner — a non-TTY run resolves TRUE (proceed), so a headless run with full
+ * inputs never stalls on a barrier or an offer. A cancel counts as decline.
+ */
+async function defaultConfirm(message: string): Promise<boolean> {
+  if (!process.stdout.isTTY) return true;
+  const ans = await p.confirm({ message });
+  return ans === true; // cancel ⇒ false
+}
+
+/**
+ * The default `openUrl` seam: best-effort browser open (setup/lib/browser.ts).
+ * Headless-safe: on a machine with no display we skip the open entirely — the
+ * URL is already in the rendered operator note for copy-paste.
+ */
+async function defaultOpenUrl(url: string): Promise<void> {
+  if (isHeadless()) return;
+  openUrl(url);
 }
 
 /** Mask a credential for display: first 6 + last 4. */
@@ -138,7 +150,13 @@ function parseEnv(body: string): Record<string, string> {
  * Offer to reuse credentials already in `.env` so a re-run doesn't re-prompt for
  * them. The prompt var → ENV_KEY mapping comes from the skill's own `env-set`
  * directives, so this stays generic. Returns the inputs the operator chose to
- * reuse (interactive: each is confirmed via `prompter.confirm`).
+ * reuse (interactive: each is confirmed via the `confirm` seam).
+ *
+ * Every offer is PRE-FILTERED through the target prompt's declared
+ * `normalize`/`validate`/`flags`: an `.env` value that would fail the engine's
+ * validate-at-bind is silently not offered, so the operator is prompted fresh
+ * instead of hitting a dead-end (`inputs` win outright at bind — a stale
+ * credential passed through would reject loudly with no re-ask).
  */
 async function reuseFromEnv(
   skillDir: string,
@@ -153,6 +171,7 @@ async function reuseFromEnv(
     return {};
   }
   const varToKey = new Map<string, string>();
+  const promptShape = new Map<string, { validate?: string; flags?: string; normalize?: string }>();
   for (const d of parseDirectives(md)) {
     // 1st pass: infer var → ENV_KEY from env-set directives (KEY={{var}}).
     if (d.kind === 'env-set') {
@@ -161,14 +180,21 @@ async function reuseFromEnv(
         if (m) varToKey.set(m[2], m[1]); // var → ENV_KEY
       }
     }
-    // 2nd pass: an explicit `nc:prompt … reuse:<ENV_KEY>` links a prompt to a
-    // credential a HELPER SCRIPT owns — written by effect:external, not nc:env-set
-    // (e.g. imessage's Photon IMESSAGE_SERVER_URL / IMESSAGE_API_KEY). The env-set
-    // inference above can't see those, so the prompt states the linkage to regain
-    // the masked reuse offer on a re-run.
-    if (d.kind === 'prompt' && typeof d.attrs.reuse === 'string') {
+    if (d.kind === 'prompt') {
       const v = promptVar(d);
-      if (v) varToKey.set(v, d.attrs.reuse); // var → ENV_KEY (explicit)
+      if (!v) continue;
+      // Record each prompt's declared value shape for the reuse pre-filter.
+      promptShape.set(v, {
+        validate: typeof d.attrs.validate === 'string' ? d.attrs.validate : undefined,
+        flags: typeof d.attrs.flags === 'string' ? d.attrs.flags : undefined,
+        normalize: typeof d.attrs.normalize === 'string' ? d.attrs.normalize : undefined,
+      });
+      // 2nd pass: an explicit `nc:prompt … reuse:<ENV_KEY>` links a prompt to a
+      // credential a HELPER SCRIPT owns — written by effect:external, not
+      // nc:env-set (e.g. imessage's Photon IMESSAGE_SERVER_URL /
+      // IMESSAGE_API_KEY). The env-set inference above can't see those, so the
+      // prompt states the linkage to regain the masked reuse offer on a re-run.
+      if (typeof d.attrs.reuse === 'string') varToKey.set(v, d.attrs.reuse);
     }
   }
   let env: Record<string, string> = {};
@@ -182,6 +208,11 @@ async function reuseFromEnv(
     if (v in alreadyHave) continue; // caller already supplied it
     const existing = env[key];
     if (!existing) continue;
+    // Pre-filter: normalize-then-validate, mirroring the engine's bind order. A
+    // stale credential that no longer matches the declared shape is never
+    // offered — prompting fresh beats a loud validate-at-bind dead-end.
+    const shape = promptShape.get(v);
+    if (shape?.validate && !new RegExp(shape.validate, shape.flags).test(normalizeValue(existing, shape.normalize))) continue;
     if (await confirm(`Found an existing ${key} (${maskValue(existing)}). Use it?`)) reuse[v] = existing;
   }
   return reuse;
@@ -248,28 +279,57 @@ export function hostExecStream(projectRoot: string): (cmd: string) => Promise<St
     });
 }
 
+// The barrier-confirm wording per gate flavor (§5.1.5). Decline = proceed: the
+// barrier is a PAUSE, not a branch — the result is deliberately discarded, and
+// the handler never throws for a decline (an operator-event throw would bounce
+// and latch the engine's `blocked` gate over later side effects).
+const GATE_WORDING: Record<'readiness' | 'completed', string> = {
+  readiness: 'Ready? The next step starts immediately.',
+  completed: "Done with the steps above? Continue when you're ready.",
+};
+
 /**
- * The setup driver's per-step spinner, built from runner.ts's `startSpinner`
- * primitive. The apply engine fires `stepStart`/`stepEnd` around each mutation;
- * a labelled (non-null) step gets a live clack spinner with elapsed time, and
- * stepEnd renders it done or failed. Instant/cheap steps carry a null label and
- * stay silent. Gated on a TTY so piped/CI/test runs stay quiet and unchanged —
- * matching the engine's "no reporter ⇒ silent" default for non-interactive use.
+ * The driver's DEFAULT `onEvent` handler — the whole wizard presentation policy:
+ *
+ *   • step-start/step-end → a per-step clack spinner (built on runner.ts's
+ *     `startSpinner`), TTY-gated so piped/CI/test runs stay quiet. A null label
+ *     is the engine's instant/renders-its-own-output declaration — no spinner.
+ *   • operator → render the block as a clack note, then the URL offer
+ *     (extractOfferUrl → confirm → openUrl), then the natural-barrier confirm
+ *     when gatePolicy says this block precedes a side-effecting directive.
+ *
+ * An INJECTED `onEvent` replaces this handler entirely (the injector owns its
+ * I/O) — which is why driver-policy tests run this default and inject the
+ * `confirm`/`openUrl` seams instead.
  */
-export function spinnerReporter(): StepReporter {
-  if (!process.stdout.isTTY) return { stepStart() {}, stepEnd() {} };
+function defaultOnEvent(
+  md: string,
+  confirm: (message: string) => Promise<boolean>,
+  open: (url: string) => Promise<void>,
+): (e: ApplyEvent) => Promise<void> {
+  const gates = gatePolicy(md);
   let active: ReturnType<typeof startSpinner> | null = null;
-  return {
-    stepStart({ label }) {
-      if (label === null) return; // instant/cheap step — no spinner
-      const base = label.replace(/…+$/, '');
+  return async (e) => {
+    if (e.type === 'step-start') {
+      if (!process.stdout.isTTY || e.label === null) return; // quiet: non-TTY, or instant/cheap step
+      const base = e.label.replace(/…+$/, '');
       active = startSpinner({ running: `${base}…`, done: base, failed: `${base} failed` });
-    },
-    stepEnd({ label, ok }) {
-      if (label === null || !active) return; // never started a spinner for this one
-      active.stop({ ok });
+      return;
+    }
+    if (e.type === 'step-end') {
+      if (!active) return; // never started a spinner for this one
+      active.stop({ ok: e.ok });
       active = null;
-    },
+      return;
+    }
+    // operator: note → URL offer → natural-barrier confirm.
+    p.note(e.text, 'Do this');
+    const url = extractOfferUrl(e.text);
+    if (url !== undefined && (await confirm(`Open ${url} in your browser?`))) await open(url);
+    const gate = gates.get(e.line);
+    // Decline = proceed (result discarded): the confirm is a pause so a manual
+    // UI step is finished first — never an abort, never a throw.
+    if (gate?.needsConfirm) await confirm(GATE_WORDING[gate.flavor]);
   };
 }
 
@@ -287,8 +347,12 @@ export interface RunSkillOptions {
   projectRoot?: string;
   /** Pre-supplied prompt answers — pass them all for a fully programmatic run. */
   inputs?: Record<string, string>;
-  /** Defaults to clack; inject a fake for tests or a relay for a coding agent. */
-  prompter?: Prompter;
+  /**
+   * Resolve a prompt var the caller didn't pre-supply. Defaults to the clack
+   * collector (`clackResolveInput` — masked secrets, validate re-ask loop, `?`
+   * help-escape); inject a fake for tests or a relay for a coding agent.
+   */
+  resolveInput?: (name: string, meta: InputMeta) => Promise<string | undefined>;
   /** Defaults to `hostExec`. */
   exec?: (cmd: string) => string | void;
   /** Defaults to `hostExecStream`. Streaming exec for `nc:run effect:step`. */
@@ -300,15 +364,30 @@ export interface RunSkillOptions {
   /** Offer to reuse credentials already in `.env` instead of re-prompting. */
   reuse?: boolean;
   /**
-   * Per-step spinner reporter. Defaults to a TTY-gated clack spinner
-   * (`spinnerReporter`); pass a fake in tests or a no-op to silence.
+   * Consumer for every engine emission (step events + operator blocks). When
+   * injected it REPLACES the driver's default policy handler ENTIRELY — the
+   * spinner, the note, the URL offer, and the natural-barrier confirm are all
+   * the default handler's; the injector owns its I/O. To observe the default
+   * policy in tests, inject `confirm`/`openUrl` instead.
    */
-  reporter?: StepReporter;
+  onEvent?: (e: ApplyEvent) => void | Promise<void>;
+  /**
+   * Yes/no seam used by the reuse offer, the natural-barrier gate, and the URL
+   * offer. Defaults to a clack confirm, TTY-gated like the spinner — a non-TTY
+   * run resolves true (proceed) so a headless run with full inputs never stalls.
+   */
+  confirm?: (message: string) => Promise<boolean>;
+  /**
+   * Browser-open seam for the URL offer, attempted only after a `confirm` yes.
+   * Defaults to setup/lib/browser.ts `openUrl` (headless ⇒ no-op).
+   */
+  openUrl?: (url: string) => Promise<void>;
   /**
    * Handoff context for the `?` help-escape (Step 8 / mechanism M3), threaded
-   * into the default `clackPrompter`. A lone `?` at any prompt hands the operator
-   * off to interactive Claude with this `channel` + `step` label, then re-asks.
-   * Ignored when an explicit `prompter` is injected (the injector owns its I/O).
+   * into the default `clackResolveInput`. A lone `?` at any prompt hands the
+   * operator off to interactive Claude with this `channel` + `step` label, then
+   * re-asks. Ignored when an explicit `resolveInput` is injected (the injector
+   * owns its I/O).
    */
   channel?: string;
   step?: string;
@@ -321,21 +400,31 @@ export interface RunSkillOptions {
  */
 export async function runSkill(skillDir: string, opts: RunSkillOptions = {}): Promise<ApplyResult> {
   const projectRoot = opts.projectRoot ?? process.cwd();
-  const prompter = opts.prompter ?? clackPrompter({ channel: opts.channel, step: opts.step });
+  const confirm = opts.confirm ?? defaultConfirm;
+  const open = opts.openUrl ?? defaultOpenUrl;
   let inputs = opts.inputs;
   // Offer to reuse credentials already in .env before the engine prompts for them.
-  if (opts.reuse && prompter.confirm) {
-    const reused = await reuseFromEnv(skillDir, projectRoot, inputs ?? {}, prompter.confirm.bind(prompter));
+  if (opts.reuse) {
+    const reused = await reuseFromEnv(skillDir, projectRoot, inputs ?? {}, confirm);
     if (Object.keys(reused).length) inputs = { ...inputs, ...reused };
+  }
+  // The default operator policy derives from the skill document itself
+  // (gatePolicy keys on directive lines) — read it once here; the engine reads
+  // the same file for the actual apply.
+  let md = '';
+  try {
+    md = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+  } catch {
+    // missing SKILL.md — the engine will produce an empty result anyway
   }
   return applySkill(skillDir, projectRoot, {
     inputs,
-    prompter,
+    resolveInput: opts.resolveInput ?? clackResolveInput({ channel: opts.channel, step: opts.step }),
+    onEvent: opts.onEvent ?? defaultOnEvent(md, confirm, open),
     exec: opts.exec ?? hostExec(projectRoot),
     execStream: opts.execStream ?? hostExecStream(projectRoot),
     resolveRemote: opts.resolveRemote ?? channelsRemote(projectRoot),
     skipEffects: opts.skipEffects,
-    reporter: opts.reporter ?? spinnerReporter(),
   });
 }
 
