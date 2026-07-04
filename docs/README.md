@@ -6,7 +6,7 @@ The files in this directory are original design documents and developer referenc
 
 | This directory | Documentation site |
 |---|---|
-| [SPEC.md](SPEC.md) | [Architecture](https://docs.nanoclaw.dev/concepts/architecture) |
+| [SPEC.md](SPEC.md) — historical v1 spec (see [architecture.md](architecture.md) for v2) | [Architecture](https://docs.nanoclaw.dev/concepts/architecture) |
 | [SECURITY.md](SECURITY.md) | [Security model](https://docs.nanoclaw.dev/concepts/security) |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | [Introduction](https://docs.nanoclaw.dev/introduction) |
 | [docker-sandboxes.md](docker-sandboxes.md) | [Docker Sandboxes](https://docs.nanoclaw.dev/advanced/docker-sandboxes) |
