@@ -98,7 +98,7 @@ Paste your public base URL (https://…, no trailing path) — e.g. https://abcd
 
 Tell the user:
 
-```nc:operator open:https://portal.azure.com
+```nc:operator
 Create the Azure AD app registration:
 1. In https://portal.azure.com, search "App registrations" → "New registration".
 2. Name it (e.g. "NanoClaw").
@@ -129,8 +129,8 @@ Create the client secret:
 4. COPY THE VALUE NOW — Azure only shows it once (the Value column, not the Secret ID).
 ```
 
-```nc:prompt app_password secret min:20
-Paste the client secret Value — Certificates & secrets (shown only once).
+```nc:prompt app_password secret validate:^.{20,}$
+Paste the client secret Value — Certificates & secrets (shown only once, at least 20 characters).
 ```
 
 ### Store the credentials
@@ -170,7 +170,7 @@ Tell the user (finish every Azure step above before continuing — the package
 built next bakes in the app registration, so the Azure app and bot must already
 exist):
 
-```nc:operator gate
+```nc:operator
 Enable the Microsoft Teams channel on the bot:
 1. Open your Azure Bot resource → Channels.
 2. Click Microsoft Teams → Accept terms → Apply.
@@ -200,7 +200,7 @@ pnpm exec tsx setup/channels/teams-manifest-build.ts --app-id "{{app_id}}" --url
 Tell the user (do this before the restart below — the service should come up with
 the app already sideloaded):
 
-```nc:operator gate
+```nc:operator
 Sideload the generated app package into Teams:
 1. Open Microsoft Teams → Apps → Manage your apps → Upload an app.
 2. Click "Upload a custom app" (or "Upload for me or my teams").

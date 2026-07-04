@@ -122,8 +122,8 @@ The bot can only DM you once it shares a server with you. If you didn't already
 invite it via the OAuth2 URL Generator while setting up the app, do it now: add
 the bot to a server you're also in (a personal server is fine). Tell the user:
 
-```nc:operator open:https://discord.com/oauth2/authorize?client_id={{application_id}}&scope=bot&permissions=2147584064
-Open the invite link and add the bot to a server you're also in (a personal server works fine) — the bot can only DM you once you share a server. If you already invited it while setting up the app, you can skip this.
+```nc:operator
+Open the invite link — https://discord.com/oauth2/authorize?client_id={{application_id}}&scope=bot&permissions=2147584064 — and add the bot to a server you're also in (a personal server works fine); the bot can only DM you once you share a server. If you already invited it while setting up the app, you can skip this.
 ```
 
 ## Resolve your DM channel

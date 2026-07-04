@@ -131,8 +131,8 @@ digits to the bot from the chat you want to register, and the live adapter
 matches them. Open the bot first so you're on the right screen when the code
 appears. Tell the user:
 
-```nc:operator open:https://t.me/{{bot_username}}
-Open @{{bot_username}} in Telegram now and keep it on screen — a 4-digit pairing code is about to appear in this terminal. When it does, send just those 4 digits to the bot as a message (in a group chat with Group Privacy on, prefix them with @{{bot_username}}). A wrong guess is rejected and a fresh code is issued automatically.
+```nc:operator
+Open @{{bot_username}} (https://t.me/{{bot_username}}) in Telegram now and keep it on screen — a 4-digit pairing code is about to appear in this terminal. When it does, send just those 4 digits to the bot as a message (in a group chat with Group Privacy on, prefix them with @{{bot_username}}). A wrong guess is rejected and a fresh code is issued automatically.
 ```
 
 Run the pairing handshake. It prints the code, streams "waiting…" and wrong-code
