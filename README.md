@@ -165,7 +165,7 @@ Key files:
 
 **Why Docker?**
 
-Docker provides cross-platform support (macOS, Linux and Windows via WSL2) and a mature ecosystem. For additional isolation, [Docker Sandboxes](docs/docker-sandboxes.md) run each container inside a micro VM.
+Docker provides cross-platform support (macOS, Linux and Windows via WSL2) and a mature ecosystem. For additional isolation, Docker Sandboxes run each container inside a micro VM.
 
 **Can I run this on Linux or Windows?**
 
