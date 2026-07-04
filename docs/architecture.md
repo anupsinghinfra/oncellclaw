@@ -556,7 +556,7 @@ const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const GMAIL_CREDS = process.env.GMAIL_CREDENTIALS_PATH;
 ```
 
-Shared config (DATA_DIR, TIMEZONE, MAX_CONCURRENT_CONTAINERS) stays in `config.ts`. Channel/skill-specific config stays in the module that uses it.
+Shared config (DATA_DIR, TIMEZONE) stays in `config.ts`. Channel/skill-specific config stays in the module that uses it.
 
 ### Code Style
 

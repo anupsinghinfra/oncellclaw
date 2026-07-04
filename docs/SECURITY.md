@@ -1,5 +1,10 @@
 # NanoClaw Security Model
 
+> The canonical, continuously-verified version of this model lives at
+> [docs.nanoclaw.dev/concepts/security](https://docs.nanoclaw.dev/concepts/security).
+> This in-repo copy can drift; if the two disagree, verify against
+> `src/container-runner.ts` (`buildMounts`).
+
 ## Trust Model
 
 Privilege is **user-level**, persisted in the `user_roles` table (owner /
@@ -39,7 +44,6 @@ spawn. For the default (Claude) provider these are:
 | `/workspace/agent/container.json` | group `container.json` | RO | Container config — readable, not writable |
 | `/workspace/agent/CLAUDE.md` | composed `CLAUDE.md` | RO | Regenerated every spawn; agent edits would be clobbered |
 | `/workspace/agent/.claude-fragments` | group `.claude-fragments/` | RO | Composer skill/MCP fragments |
-| `/workspace/global` | `groups/global/` | RO | Shared global memory |
 | `/app/CLAUDE.md` | `container/CLAUDE.md` | RO | Shared base doc imported by the composed entry point |
 | `/home/node/.claude` | `data/v2-sessions/<group>/.claude-shared/` | RW | Claude state, settings, skill symlinks |
 | `/app/src` | `container/agent-runner/src/` | RO | Shared agent-runner source (same for all groups) |
@@ -51,7 +55,13 @@ The config mounts (`container.json`, `CLAUDE.md`, `.claude-fragments`) are
 read its config but cannot modify it. The project root is **never mounted**: the
 container only ever sees the paths above plus any provider-contributed mounts
 (e.g. an OpenCode XDG dir). Host application source (`src/`, `dist/`,
-`package.json`) is not reachable.
+`package.json`) is not reachable. There is no per-group split for a "main"
+group — every agent group's mounts are built the same way.
+
+The old `groups/global/` shared-memory mount no longer exists; that content
+was folded into `container/CLAUDE.md`, which every group already gets
+read-only at `/app/CLAUDE.md` (see `migrateGroupsToClaudeLocal` in
+`src/claude-md-compose.ts`).
 
 **Additional-mount allowlist** — extra mounts from a group's container config
 are validated against an allowlist at `~/.config/nanoclaw/mount-allowlist.json`,
