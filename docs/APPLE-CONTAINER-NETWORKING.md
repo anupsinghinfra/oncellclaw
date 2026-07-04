@@ -1,3 +1,5 @@
+> **v1-historical.** NanoClaw v2 hardcodes Docker as its container runtime (`src/container-runtime.ts`); there is no Apple Container runtime seam. This guide is kept for reference only.
+
 # Apple Container Networking Setup (macOS 26)
 
 Apple Container's vmnet networking requires manual configuration for containers to access the internet. Without this, containers can communicate with the host but cannot reach external services (DNS, HTTPS, APIs).

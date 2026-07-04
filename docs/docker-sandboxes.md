@@ -1,3 +1,5 @@
+> **v1-historical.** This guide describes the NanoClaw v1 setup (`--is-main`, `store/`, `setup/index.ts`, `/dev/null` shadow mounts) and does not match the v2 architecture. Kept for reference only.
+
 # Running NanoClaw in Docker Sandboxes (Manual Setup)
 
 This guide walks through setting up NanoClaw inside a [Docker Sandbox](https://docs.docker.com/ai/sandboxes/) from scratch — no install script, no pre-built fork. You'll clone the upstream repo, apply the necessary patches, and have agents running in full hypervisor-level isolation.
