@@ -44,33 +44,29 @@
 //        a non-zero exit bounces to an agent (degrade, not crash) and, via the
 //        run-health gate, blocks the dangerous side effects that follow it (a
 //        restart, a pairing/QR step, a wire). An unresolved {{var}} defers.
-//   prompt <var> [secret] [validate:<re>] [flags:<re-flags>] [min:<n>]
-//          [normalize:trim|rstrip-slash|lower] [error:<msg>] [reuse:<ENV_KEY>]
+//   prompt <var> [secret] [validate:<re>] [flags:<re-flags>]
+//          [normalize:trim|rstrip-slash|lower] [reuse:<ENV_KEY>]
 //        body: the question → binds {{var}}                       skip if satisfied
-//        validate:<re> is a regex the interactive prompter enforces (e.g.
-//        validate:^xoxb- to require a Slack bot token); `inputs` bypass it.
+//        validate:<re> is a regex enforced AT BIND for EVERY value — `inputs` and
+//        interactive answers alike (e.g. validate:^xoxb- to require a Slack bot
+//        token); a mismatch leaves the var unbound and records a deferred entry.
+//        A minimum length is regex-encoded (e.g. validate:^.{20,}$).
 //        flags:<re-flags> are regex flags applied to validate (e.g. flags:i → a
-//        case-insensitive scheme match). min:<n> is a minimum length the prompter
-//        enforces (re-asks if shorter; `inputs` bypass it). error:<msg> overrides
-//        the message shown on a validation miss (single token — no spaces).
-//        normalize:<how> deterministically transforms the value AT BIND — for BOTH
-//        `inputs` and interactive answers — one of trim | rstrip-slash | lower.
+//        case-insensitive scheme match). normalize:<how> deterministically
+//        transforms the value AT BIND, before validate — for BOTH `inputs` and
+//        interactive answers — one of trim | rstrip-slash | lower.
 //        reuse:<ENV_KEY> lets a re-run offer an existing .env value for a credential
 //        a HELPER SCRIPT owns (written by effect:external, not nc:env-set) — the
 //        masked reuse offer the env-set→ENV_KEY inference can't otherwise see.
-//   operator [gate] [open:<url>]  body: instructions for the human operator  output-only
+//   operator                body: instructions for the human operator     output-only
 //        The SKILL.md is addressed to the coding agent; `operator` delineates the
 //        parts meant for the HUMAN (e.g. clicking through the Slack UI). Lead it
 //        with agent-facing prose like "Tell the user:" so the agent relays it;
 //        the engine renders the body to the operator ({{vars}} substituted in).
-//        open:<url> additionally opens that URL in the operator's browser after
-//        rendering — a deep-link to the page the steps describe ({{vars}} render,
-//        e.g. a captured application_id in a Discord invite). gate turns the block
-//        into a human BARRIER: after rendering, the engine waits on a confirm
-//        before the following side-effecting directives run (a manifest build, a
-//        restart), so a manual UI step is finished first. Both are pure polish —
-//        a stripped fence leaves the same prose, and a prompter without
-//        open/confirm (headless/programmatic) simply skips them.
+//        The block carries NO presentation attrs: a URL to visit lives in the
+//        body prose (a consumer may offer to open it), and whether a consumer
+//        pauses for confirmation before the next side effect is derived from
+//        document structure (scripts/skill-policy.ts), never authored here.
 //   env-set                 body: `KEY=value` ({{var}} allowed)       set-if-absent
 //   env-sync                (no body) `.env` → data/env/env           idempotent copy
 //   json-merge into:<file> key:<field>  body: a JSON object          push-if-absent
@@ -86,6 +82,14 @@
 // deferred — so one skill can express mutually-exclusive branches (e.g. a local
 // vs remote install mode) in document order while still running fully
 // programmatically from `inputs`.
+//
+// Removed presentation attrs — `min:`/`error:` on prompt, `open:`/`gate` on
+// operator, `label:`/`on-fail:` on any directive — are lint ERRORS, so stale
+// authorship fails loudly instead of silently no-oping. Their jobs moved:
+// length checks into validate: regexes, miss messages derive from the question
+// prose, URLs live in the operator body, gating and step labels derive from
+// document structure (scripts/skill-policy.ts / the preceding heading), and the
+// failure hint is always the surrounding prose.
 //
 // Usage: pnpm exec tsx scripts/skill-directives.ts <SKILL.md>
 
@@ -261,8 +265,12 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
             flag(d, `prompt flags:${flags} are not valid regex flags`);
           }
         }
-        if (typeof d.attrs.min === 'string' && !/^\d+$/.test(d.attrs.min)) {
-          flag(d, `prompt min:${d.attrs.min} must be a non-negative integer`);
+        // Removed presentation attrs — reject loudly (they would silently no-op).
+        if (d.attrs.min !== undefined) {
+          flag(d, 'prompt min: was removed — encode the length in validate:, e.g. min:20 → validate:^.{20,}$');
+        }
+        if (d.attrs.error !== undefined) {
+          flag(d, 'prompt error: was removed — the validation-miss message derives from the question prose');
         }
         if (typeof d.attrs.normalize === 'string' && !['trim', 'rstrip-slash', 'lower'].includes(d.attrs.normalize)) {
           flag(d, `prompt normalize:${d.attrs.normalize} must be one of trim|rstrip-slash|lower`);
@@ -274,20 +282,27 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
       }
       case 'operator':
         if (d.body.length === 0) flag(d, 'operator requires instructions for the human in its body');
-        if (typeof d.attrs.open === 'string' && d.attrs.open.trim() === '') flag(d, 'operator open: requires a URL');
+        // Removed presentation attrs — reject loudly (they would silently no-op).
+        if (d.attrs.open !== undefined) {
+          flag(d, 'operator open: was removed — put the URL in the body prose (a consumer offers to open it)');
+        }
+        if (d.args.includes('gate') || d.attrs.gate !== undefined) {
+          flag(d, 'operator gate was removed — the human barrier is derived from document structure, never authored');
+        }
         break;
+    }
+    // Removed on every directive: label: (labels are heading-derived only) and
+    // on-fail: (the failure hint is always the surrounding prose).
+    if (d.attrs.label !== undefined) {
+      flag(d, 'label: was removed — step labels derive from the preceding heading');
+    }
+    if (d.attrs['on-fail'] !== undefined) {
+      flag(d, 'on-fail: was removed — the failure hint is always the surrounding prose');
     }
     // A consumer can only reference a variable an earlier prompt captured, or an
     // earlier `run capture:<var>` bound from a command's output.
     for (const ref of referencedVars(d)) {
       if (!defined.has(ref)) flag(d, `references {{${ref}}} but no earlier nc:prompt or nc:run capture defined it`);
-    }
-    // An operator's open:<url> may interpolate earlier-defined {{vars}} (e.g. a
-    // captured application_id in a Discord invite link); validate them like body refs.
-    if (d.kind === 'operator' && typeof d.attrs.open === 'string') {
-      for (const m of d.attrs.open.matchAll(VAR_REF)) {
-        if (!defined.has(m[1])) flag(d, `open:${d.attrs.open} references {{${m[1]}}} but no earlier nc:prompt or nc:run capture defined it`);
-      }
     }
     // A `when:<var>=<value>` guard references an earlier-defined var by bare name.
     if (typeof d.attrs.when === 'string') {
@@ -344,6 +359,41 @@ export function lintReferenceFloor(markdown: string): Problem[] {
   }];
 }
 
+/**
+ * A WARN-ONLY gate-ambiguity check — never an error, never blocks a build. The
+ * driver's natural-barrier policy (scripts/skill-policy.ts) keys an operator's
+ * pause decision off the next guard-compatible directive; an UNGUARDED operator
+ * treats every following directive as compatible, so when the directives
+ * immediately after it are `when:`-guarded and span more than one branch value,
+ * the static decision keys off a directive that may be runtime-skipped (e.g.
+ * unguarded operator → `prompt when:mode=remote` → `run when:mode=local`:
+ * policy says no-confirm, but at runtime mode=local skips the prompt). No
+ * in-tree skill authors this; warn so new authorship guards the operator (or
+ * restructures) instead of getting a silently wrong barrier. The scan stops at
+ * the first unguarded directive — that one always runs, so no ambiguity past it.
+ */
+export function lintGateAmbiguity(directives: Directive[]): Problem[] {
+  const problems: Problem[] = [];
+  for (let i = 0; i < directives.length; i++) {
+    const d = directives[i];
+    if (d.kind !== 'operator' || typeof d.attrs.when === 'string') continue;
+    const branches = new Set<string>();
+    for (let j = i + 1; j < directives.length; j++) {
+      const g = directives[j].attrs.when;
+      if (typeof g !== 'string') break;
+      branches.add(g);
+    }
+    if (branches.size > 1) {
+      problems.push({
+        line: d.line,
+        kind: 'gate-ambiguity',
+        message: `unguarded nc:operator followed by when:-guarded directives spanning ${branches.size} branch values (${[...branches].join(', ')}) — the barrier decision may key off a runtime-skipped directive; guard the operator or restructure`,
+      });
+    }
+  }
+  return problems;
+}
+
 // CLI
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   let path = process.argv[2];
@@ -355,10 +405,10 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const md = readFileSync(path, 'utf8');
   const directives = parseDirectives(md);
   const problems = validate(directives, { chatVersion: resolveChatCoreVersion(process.cwd()) });
-  // Reference-floor warnings are advisory only — printed for the author, never
-  // folded into the exit code (a missing ## Troubleshooting is a smell, not a
-  // gate). Exit stays driven solely by `validate` problems.
-  const warnings = lintReferenceFloor(md);
+  // Warnings (gate ambiguity, reference floor) are advisory only — printed for
+  // the author, never folded into the exit code (a smell, not a gate). Exit
+  // stays driven solely by `validate` problems.
+  const warnings = [...lintGateAmbiguity(directives), ...lintReferenceFloor(md)];
   for (const w of warnings) console.error(`warning: ${w.kind} (line ${w.line}): ${w.message}`);
   console.log(JSON.stringify({ directives, problems, warnings }, null, 2));
   process.exit(problems.length ? 1 : 0);

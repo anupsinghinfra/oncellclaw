@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { parseDirectives, validate, promptVar, resolveChatCoreVersion, lintReferenceFloor } from './skill-directives.js';
+import { parseDirectives, validate, promptVar, resolveChatCoreVersion, lintReferenceFloor, lintGateAmbiguity } from './skill-directives.js';
 
 // Guards the structured-directive format against the converted add-slack skill:
 // red if the conversion drifts (a directive dropped/renamed) or the parser breaks.
@@ -244,17 +244,16 @@ describe('when: guard + multi-field capture', () => {
   });
 });
 
-describe('prompt PromptOpts attrs (flags/min/normalize/error/reuse)', () => {
-  it('parses flags/min/normalize/reuse into attrs alongside the var + secret flag', () => {
+describe('prompt attrs (flags/normalize/reuse)', () => {
+  it('parses flags/normalize/reuse into attrs alongside the var + secret flag', () => {
     const md = [
-      '```nc:prompt server_url secret validate:^https?:// flags:i min:8 normalize:rstrip-slash reuse:IMESSAGE_SERVER_URL',
+      '```nc:prompt server_url secret validate:^https?:// flags:i normalize:rstrip-slash reuse:IMESSAGE_SERVER_URL',
       'URL?',
       '```',
     ].join('\n');
     const [d] = parseDirectives(md);
     expect(promptVar(d)).toBe('server_url'); // the var, not `secret`
     expect(d.attrs.flags).toBe('i');
-    expect(d.attrs.min).toBe('8');
     expect(d.attrs.normalize).toBe('rstrip-slash');
     expect(d.attrs.reuse).toBe('IMESSAGE_SERVER_URL');
     expect(validate([d])).toEqual([]); // a well-formed prompt with all attrs lints clean
@@ -263,11 +262,6 @@ describe('prompt PromptOpts attrs (flags/min/normalize/error/reuse)', () => {
   it('accepts validate:<re> combined with flags:i (a case-insensitive regex is still valid)', () => {
     const md = ['```nc:prompt u validate:^https?:// flags:i', 'URL?', '```'].join('\n');
     expect(validate(parseDirectives(md))).toEqual([]);
-  });
-
-  it('flags a non-numeric min:', () => {
-    const md = ['```nc:prompt u min:lots', 'q', '```'].join('\n');
-    expect(validate(parseDirectives(md)).some((p) => /min:lots must be a non-negative integer/.test(p.message))).toBe(true);
   });
 
   it('flags an unknown normalize: value', () => {
@@ -322,35 +316,113 @@ describe('lintReferenceFloor (warn-only reference floor)', () => {
   });
 });
 
-describe('operator open: + gate attrs', () => {
-  it('parses open:<url> into attrs and the bare gate flag into args', () => {
-    const md = ['```nc:prompt bot', 'Bot?', '```', '```nc:operator gate open:https://t.me/{{bot}}', 'Open @{{bot}}.', '```'].join('\n');
-    const ds = parseDirectives(md);
-    const op = ds.find((d) => d.kind === 'operator')!;
-    expect(op.attrs.open).toBe('https://t.me/{{bot}}'); // the full URL (first colon splits the key, not the scheme)
-    expect(op.args).toContain('gate'); // bare flag → args, not attrs
-    expect(validate(ds)).toEqual([]); // {{bot}} defined by the earlier prompt → lints clean
+// Grammar diet: the six removed presentation attrs are hard lint ERRORS so
+// stale authorship fails loudly instead of silently no-oping. Each error points
+// at the attr's replacement (validate: regex, question prose, body prose,
+// document structure, the preceding heading, the surrounding prose).
+describe('removed presentation attrs are lint errors', () => {
+  it('rejects operator open: — the URL belongs in the body prose', () => {
+    const md = ['```nc:operator open:https://portal.azure.com', 'Visit https://portal.azure.com and click through.', '```'].join('\n');
+    const probs = validate(parseDirectives(md));
+    expect(probs.some((p) => /operator open: was removed — put the URL in the body prose/.test(p.message))).toBe(true);
   });
 
-  it('lints clean when an open: URL interpolates an earlier-captured var (the Discord invite case)', () => {
-    const md = [
-      '```nc:run capture:application_id=.id effect:fetch',
-      'curl -sf https://example/app',
-      '```',
-      '```nc:operator open:https://discord.com/oauth2/authorize?client_id={{application_id}}&scope=bot',
-      'Open the invite link.',
-      '```',
-    ].join('\n');
+  it('rejects the bare operator gate flag — the barrier is structure-derived', () => {
+    const md = ['```nc:operator gate', 'Finish the UI steps.', '```'].join('\n');
+    const probs = validate(parseDirectives(md));
+    expect(probs.some((p) => /operator gate was removed — the human barrier is derived from document structure/.test(p.message))).toBe(true);
+  });
+
+  it('rejects prompt min: — length is regex-encoded now', () => {
+    const md = ['```nc:prompt app_password secret min:20', 'Paste the client secret.', '```'].join('\n');
+    const probs = validate(parseDirectives(md));
+    expect(probs.some((p) => /prompt min: was removed — encode the length in validate:/.test(p.message))).toBe(true);
+  });
+
+  it('rejects prompt error: — the miss message derives from the question prose', () => {
+    const md = ['```nc:prompt token error:bad-token', 'Paste the token.', '```'].join('\n');
+    const probs = validate(parseDirectives(md));
+    expect(probs.some((p) => /prompt error: was removed — the validation-miss message derives from the question prose/.test(p.message))).toBe(true);
+  });
+
+  it('rejects label: on any directive — labels are heading-derived only', () => {
+    const md = ['```nc:run effect:build label:build', 'pnpm run build', '```'].join('\n');
+    const probs = validate(parseDirectives(md));
+    expect(probs.some((p) => /label: was removed — step labels derive from the preceding heading/.test(p.message))).toBe(true);
+  });
+
+  it('rejects on-fail: on any directive — the hint is always the surrounding prose', () => {
+    const md = ['```nc:run effect:test on-fail:rerun', 'pnpm test', '```'].join('\n');
+    const probs = validate(parseDirectives(md));
+    expect(probs.some((p) => /on-fail: was removed — the failure hint is always the surrounding prose/.test(p.message))).toBe(true);
+  });
+
+  it('still accepts a plain operator block (body-only, no attrs)', () => {
+    const md = ['```nc:prompt bot', 'Bot?', '```', '```nc:operator', 'Open @{{bot}} and press Start.', '```'].join('\n');
     expect(validate(parseDirectives(md))).toEqual([]);
   });
+});
 
-  it('flags an operator open: URL referencing an undefined var', () => {
-    const md = ['```nc:operator open:https://x/{{nope}}', 'Open it.', '```'].join('\n');
-    expect(validate(parseDirectives(md)).some((p) => /open:.*references \{\{nope\}\}/.test(p.message))).toBe(true);
+// lintGateAmbiguity is a WARN-ONLY check (never an error, never blocks): an
+// UNGUARDED operator followed by when:-guarded directives spanning more than
+// one branch value keys its natural-barrier decision off a directive that may
+// be runtime-skipped — the static policy cannot know which branch runs.
+describe('lintGateAmbiguity (warn-only unguarded-operator/multi-branch)', () => {
+  const branchy = [
+    '```nc:prompt mode', 'local or remote?', '```',
+    '```nc:operator', 'Get ready.', '```',
+    '```nc:prompt server_url when:mode=remote', 'URL?', '```',
+    '```nc:run effect:external when:mode=local', './configure.sh', '```',
+  ].join('\n');
+
+  it('warns on an unguarded operator followed by guards spanning two branch values', () => {
+    const warnings = lintGateAmbiguity(parseDirectives(branchy));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].kind).toBe('gate-ambiguity');
+    expect(warnings[0].line).toBe(4); // the operator's opening fence
+    expect(warnings[0].message).toMatch(/mode=remote/);
+    expect(warnings[0].message).toMatch(/mode=local/);
   });
 
-  it('flags an empty operator open:', () => {
-    const md = ['```nc:operator open:', 'Do a thing.', '```'].join('\n');
-    expect(validate(parseDirectives(md)).some((p) => /operator open: requires a URL/.test(p.message))).toBe(true);
+  it('the warning is not a validate() error — the skill still lints clean', () => {
+    expect(validate(parseDirectives(branchy))).toEqual([]);
+  });
+
+  it('is silent when the operator itself is guarded (mutually-exclusive branches gate on their own next action)', () => {
+    const md = [
+      '```nc:prompt mode', 'local or remote?', '```',
+      '```nc:operator when:mode=local', 'Get ready.', '```',
+      '```nc:prompt server_url when:mode=remote', 'URL?', '```',
+      '```nc:run effect:external when:mode=local', './configure.sh', '```',
+    ].join('\n');
+    expect(lintGateAmbiguity(parseDirectives(md))).toEqual([]);
+  });
+
+  it('is silent when the following guards all share one branch value', () => {
+    const md = [
+      '```nc:prompt mode', 'local or remote?', '```',
+      '```nc:operator', 'Get ready.', '```',
+      '```nc:prompt server_url when:mode=remote', 'URL?', '```',
+      '```nc:prompt api_key when:mode=remote', 'Key?', '```',
+    ].join('\n');
+    expect(lintGateAmbiguity(parseDirectives(md))).toEqual([]);
+  });
+
+  it('stops scanning at the first unguarded directive (it always runs — no ambiguity past it)', () => {
+    const md = [
+      '```nc:prompt mode', 'local or remote?', '```',
+      '```nc:operator', 'Get ready.', '```',
+      '```nc:run effect:build', 'pnpm run build', '```',
+      '```nc:prompt server_url when:mode=remote', 'URL?', '```',
+      '```nc:run effect:external when:mode=local', './configure.sh', '```',
+    ].join('\n');
+    expect(lintGateAmbiguity(parseDirectives(md))).toEqual([]);
+  });
+
+  it('never warns on the in-tree channel skills (none author the pattern)', () => {
+    for (const ch of ['add-slack', 'add-discord', 'add-telegram', 'add-teams', 'add-whatsapp', 'add-signal', 'add-imessage']) {
+      const md = readFileSync(`.claude/skills/${ch}/SKILL.md`, 'utf8');
+      expect(lintGateAmbiguity(parseDirectives(md))).toEqual([]);
+    }
   });
 });
