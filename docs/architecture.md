@@ -131,8 +131,6 @@ The host is an orchestrator:
 1. **Spawn** — when wakeUpAgent is called and no container exists for the session
 2. **Idle kill** — when a container has no unprocessed messages for some timeout period
 
-There is currently no global concurrency cap enforced — the `MAX_CONCURRENT_CONTAINERS` constant in `src/config.ts` is defined but not read anywhere, so one container may run per active session with no ceiling.
-
 When a container spins up, the agent-runner immediately starts polling its session DB. Messages are already there waiting.
 
 ## Media Handling
