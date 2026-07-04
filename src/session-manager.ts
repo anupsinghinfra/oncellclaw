@@ -211,6 +211,16 @@ export function writeSessionMessage(
     onWake?: 0 | 1;
   },
 ): void {
+  // Documented reset: operators `rm -rf` a session folder to clear a stuck
+  // session. The sessions row survives, so the next message takes the
+  // existing-session path and lands here with a missing inbound.db — the open
+  // below would throw and the message would be logged-and-dropped forever.
+  // Re-provision the folder + DBs (initSessionFolder is idempotent) so the
+  // documented reset actually re-provisions instead of killing the chat.
+  if (!fs.existsSync(inboundDbPath(agentGroupId, sessionId))) {
+    initSessionFolder(agentGroupId, sessionId);
+  }
+
   // Extract base64 attachment data, save to inbox, replace with file paths
   const content = extractAttachmentFiles(agentGroupId, sessionId, message.id, message.content);
 
