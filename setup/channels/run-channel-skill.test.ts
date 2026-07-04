@@ -44,8 +44,10 @@ describe('runChannelSkill adapter (Option A)', () => {
       resolveRemote: () => 'origin',
       agentName: 'Nano',
       role: 'owner',
-      // the secrets + handle a human would supply; the skill resolves platform_id
-      inputs: { bot_token: 'xoxb-x', signing_secret: 's', owner_handle: 'U1' },
+      // the secrets + handle a human would supply; the skill resolves platform_id.
+      // Values are valid-shaped for the prompts' validate: regexes — validate-at-bind
+      // now enforces them on `inputs` too (they used to bypass validation).
+      inputs: { bot_token: 'xoxb-x', signing_secret: '0123456789abcdef', owner_handle: 'U12345678' },
       wire: (a) => {
         wired.push(a);
         return true;
@@ -59,7 +61,7 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(wired).toHaveLength(1);
     expect(wired[0]).toMatchObject({
       channel: 'slack',
-      userId: 'slack:U1', // channel + owner_handle
+      userId: 'slack:U12345678', // channel + owner_handle
       platformId: 'slack:D0SLACK', // captured from conversations.open
       displayName: 'Bob Smith',
       agentName: 'Nano',
@@ -103,7 +105,7 @@ describe('runChannelSkill adapter (Option A)', () => {
         public_url: 'https://acme.example',
         app_id: '12345678-1234-1234-1234-123456789abc',
         app_type: 'MultiTenant',
-        app_password: 'sekret',
+        app_password: 'a-much-longer-app-password', // 20+ chars — valid for the declared shape
       },
       wire: (a) => {
         wired.push(a);
@@ -213,7 +215,7 @@ describe('backGate (first-prompt back-to-channel-selection)', () => {
       resolveRemote: () => 'origin',
       agentName: 'Nano',
       role: 'owner',
-      inputs: { bot_token: 'xoxb-x', signing_secret: 's', owner_handle: 'U1' },
+      inputs: { bot_token: 'xoxb-x', signing_secret: '0123456789abcdef', owner_handle: 'U12345678' },
       wire: (a) => {
         wired.push(a);
         return true;
