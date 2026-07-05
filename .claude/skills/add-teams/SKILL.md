@@ -112,11 +112,17 @@ Paste the public https:// base URL that forwards to this machine's port 3000 (no
 
 ### Install the Teams CLI
 
-Pinned like every dependency; the CLI is only exercised at setup time but stays
-useful for later maintenance (endpoint updates, RSC grants, secret rotation).
+Installed globally with npm — not as a workspace dependency — deliberately:
+the CLI's credential store (keytar) is a native module whose install script
+must run to fetch its prebuilt binary, and pnpm's supply-chain policy blocks
+dependency build scripts — a workspace install leaves the sign-in unable to
+persist. The global install matches Microsoft's own instruction and keeps the
+workspace policy intact. Pinned; re-running is a no-op. (If npm reports
+EACCES here, your global prefix needs root — prefer a user-level Node like
+nvm, or `npm config set prefix ~/.npm-global`.)
 
-```nc:dep when:have_creds=no
-@microsoft/teams.cli@3.0.2
+```nc:run effect:external when:have_creds=no
+npm install -g @microsoft/teams.cli@3.0.2
 ```
 
 ### Sign in to Microsoft 365
@@ -130,11 +136,11 @@ step below verifies persistence by re-reading the session from a fresh
 process after login. In an interactive terminal the login opens a browser;
 on a headless box (SSH) it prints a device code — open
 microsoft.com/devicelogin on any machine and enter it. If this step fails,
-run `pnpm exec teams login` then `pnpm exec teams status` by hand: status
-must say logged in, or the cache is not persisting.
+run `teams login` then `teams status` by hand: status must say logged in, or
+the cache is not persisting (see Troubleshooting).
 
 ```nc:run effect:step when:have_creds=no
-pnpm exec teams login && pnpm exec teams status --json 2>/dev/null | grep -q '"loggedIn": true' && printf '=== NANOCLAW SETUP: TEAMS-LOGIN ===\nSTATUS: success\n=== END ===\n'
+teams login && teams status --json 2>/dev/null | grep -q '"loggedIn": true' && printf '=== NANOCLAW SETUP: TEAMS-LOGIN ===\nSTATUS: success\n=== END ===\n'
 ```
 
 ### Create the bot
@@ -149,7 +155,7 @@ self-hosted assistant; for a bot other Microsoft 365 tenants can install, see
 bot name in Teams.
 
 ```nc:run effect:external when:have_creds=no capture:app_id=.credentials.CLIENT_ID,app_password=.credentials.CLIENT_SECRET,app_tenant_id=.credentials.TENANT_ID,teams_app_id=.teamsAppId,install_link=.installLink validate:^.+$
-pnpm exec teams app create --name "NanoClaw" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience myOrg --json
+teams app create --name "NanoClaw" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience myOrg --json
 ```
 
 ### Store the credentials
@@ -176,7 +182,7 @@ Tell the user:
 ```nc:operator when:have_creds=no
 Install the bot into Teams:
 1. Open {{install_link}} — Teams opens with the app's install dialog. Click Add.
-2. If you need the link again later, run: pnpm exec teams app get {{teams_app_id}} --install-link
+2. If you need the link again later, run: teams app get {{teams_app_id}} --install-link
 3. If Teams refuses with a custom-app-upload error, a tenant admin must enable sideloading: Teams Admin Center > Teams apps > Setup policies > Global > "Upload custom apps" = On.
 Once the app shows up in your Teams sidebar (or app list), continue.
 ```
@@ -230,7 +236,7 @@ tenant can install it). For a bot any tenant can install, create it without
 env pairing — `MultiTenant` with **no** tenant ID:
 
 ```bash
-pnpm exec teams app create --name "NanoClaw" --endpoint "https://your-domain/webhook/teams"
+teams app create --name "NanoClaw" --endpoint "https://your-domain/webhook/teams"
 ```
 
 ```bash
@@ -299,13 +305,13 @@ bot, grant the resource-specific-consent (RSC) permissions directly — no
 manifest edit, no re-upload; the app version is bumped automatically:
 
 ```bash
-pnpm exec teams app rsc add <teams-app-id> ChannelMessage.Read.Group --type Application
-pnpm exec teams app rsc add <teams-app-id> ChatMessage.Read.Chat --type Application
+teams app rsc add <teams-app-id> ChannelMessage.Read.Group --type Application
+teams app rsc add <teams-app-id> ChatMessage.Read.Chat --type Application
 ```
 
 Then update/reinstall the app in the team so the new permissions get consented.
 (`<teams-app-id>` is the Teams App ID shown in the install step — recover it
-any time with `pnpm exec teams app list`, or find the app at
+any time with `teams app list`, or find the app at
 https://dev.teams.microsoft.com/apps.)
 
 On the manual path, regenerate the package with RSC baked in and sideload it
@@ -319,7 +325,7 @@ pnpm exec tsx setup/channels/teams-manifest-build.ts --app-id YOUR_APP_ID --url 
 
 ### "Upload a custom app" is missing / sideloading blocked
 
-`pnpm exec teams status` shows whether sideloading is enabled at both tenant
+`teams status` shows whether sideloading is enabled at both tenant
 and user level; the login output prints the same check.
 
 - **Tenant level off**: Teams Admin Center → **Teams apps** → **Setup
@@ -334,23 +340,35 @@ Business / EDU / developer tenant.
 
 ### Create fails immediately with `AUTH_REQUIRED` after a successful sign-in
 
-The sign-in didn't persist: each `teams` command is a separate process, and on
-Linux the token cache needs libsecret — without it the CLI silently falls back
-to an in-memory cache that dies with the login process. Symptom check:
-`pnpm exec teams status` says logged out right after a login succeeded. Fix:
-`sudo apt-get install -y libsecret-1-0` (Debian/Ubuntu), sign in again, confirm
-`teams status` shows logged in, then re-run this skill.
+The sign-in didn't persist: each `teams` command is a separate process, and
+when the CLI's credential store can't load it silently falls back to an
+in-memory cache that dies with the login process. Symptom check:
+`teams status` says logged out right after a login succeeded. Two causes:
+
+- **CLI installed as a pnpm workspace dependency**: pnpm's supply-chain policy
+  skips dependency build scripts, so keytar (the CLI's native credential
+  store) never gets its binary and the whole store fails to load. Use the
+  global npm install this skill performs — and `pnpm uninstall
+  @microsoft/teams.cli` if a workspace copy lingers, so `teams` resolves to
+  the global one.
+- **libsecret missing (Linux)**: keytar links against it at load time. Fix:
+  `sudo apt-get install -y libsecret-1-0` (Debian/Ubuntu). On a headless box
+  with no keyring daemon the CLI then falls back to a plaintext cache file
+  (with a warning) — expected.
+
+After fixing, sign in again and confirm `teams status` shows logged in, then
+re-run this skill.
 
 ### Bot never receives messages
 
 1. The app is actually installed in Teams — if setup was interrupted before
    the install step, nothing got installed. Recover the install link:
-   `pnpm exec teams app list` shows the Teams App ID, then
-   `pnpm exec teams app get <teams-app-id> --install-link`.
+   `teams app list` shows the Teams App ID, then
+   `teams app get <teams-app-id> --install-link`.
 2. The tunnel is up and the messaging endpoint matches it — the endpoint must
    be `https://<your-domain>/webhook/teams`, and your tunnel (e.g.
    `ngrok http 3000`) must be forwarding to this machine's port 3000. Check
-   with `pnpm exec teams app doctor <teams-app-id>` (CLI-created bots) or Azure
+   with `teams app doctor <teams-app-id>` (CLI-created bots) or Azure
    Bot → **Configuration** (manual path).
 3. The adapter started: `grep -i teams logs/nanoclaw.log | tail`.
 4. The credentials are in `.env` (`TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`,
@@ -359,7 +377,7 @@ to an in-memory cache that dies with the login process. Symptom check:
 ### Tunnel URL changed
 
 Point the bot at the new endpoint:
-`pnpm exec teams app update <teams-app-id> --endpoint "https://new-domain/webhook/teams"`
+`teams app update <teams-app-id> --endpoint "https://new-domain/webhook/teams"`
 (manual path: Azure Bot → Configuration → Messaging endpoint).
 
 ### `Unauthorized` / 401 from Azure Bot Service
@@ -370,7 +388,7 @@ Either the credential pairing is wrong, or the secret is dead:
   `MultiTenant` must have **no** tenant ID set. A mismatch authenticates
   against the wrong authority and every send/receive 401s.
 - **Secret**: expired or mispasted. Rotate with
-  `pnpm exec teams app auth secret create <teams-app-id>` (or Azure portal →
+  `teams app auth secret create <teams-app-id>` (or Azure portal →
   Certificates & secrets), update `TEAMS_APP_PASSWORD` in `.env`, and restart.
 
 ### Rotate or recreate credentials

@@ -26,8 +26,9 @@ Remove `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_APP_TENANT_ID`, and `TEAMS_A
 sign out first (skip if the CLI was never installed):
 
 ```bash
-pnpm exec teams logout
-pnpm uninstall @chat-adapter/teams @microsoft/teams.cli
+teams logout
+npm uninstall -g @microsoft/teams.cli
+pnpm uninstall @chat-adapter/teams
 ```
 
 ## 4. Remove local artifacts
