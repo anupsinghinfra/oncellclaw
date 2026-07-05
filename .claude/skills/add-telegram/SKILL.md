@@ -102,9 +102,6 @@ Paste the bot token from BotFather (looks like `123456:ABC-DEF...`).
 ```nc:env-set
 TELEGRAM_BOT_TOKEN={{bot_token}}
 ```
-```nc:env-sync
-```
-
 Confirm the token works and capture the bot's handle — `getMe` returns the bot
 account and fails here if the token is bad. You'll use the handle to open the
 right chat just before pairing:

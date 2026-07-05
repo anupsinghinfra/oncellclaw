@@ -86,7 +86,7 @@ Capture the service account JSON, then write it. `prompt` only *asks* and binds
 the answer to a name; a separate directive consumes it — so the same prompt
 could feed `ncl` or the OneCLI vault instead of `.env` by swapping only the
 consumer. Here it goes to `.env` (set-if-absent — a value you've already filled
-in is never overwritten) as a single-line string, then syncs to the container:
+in is never overwritten) as a single-line string:
 
 ```nc:prompt gchat_credentials secret
 Paste the service account JSON as a single line — the key file you downloaded, e.g. `{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}`.
@@ -94,9 +94,6 @@ Paste the service account JSON as a single line — the key file you downloaded,
 ```nc:env-set
 GCHAT_CREDENTIALS={{gchat_credentials}}
 ```
-```nc:env-sync
-```
-
 ### Webhook server
 
 The Chat SDK bridge automatically starts a shared webhook server on port 3000

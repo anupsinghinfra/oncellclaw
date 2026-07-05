@@ -142,8 +142,6 @@ function selfStatus(d: Directive, root: string): { status: StepStatus; detail: s
         ? { status: 'apply', detail: `set ${missing.join(', ')} in .env` }
         : { status: 'skip', detail: `${keys.join(', ')} already set` };
     }
-    case 'env-sync':
-      return { status: 'apply', detail: 'sync .env → data/env/env' };
     case 'json-merge': {
       const into = String(d.attrs.into ?? '');
       const key = String(d.attrs.key ?? '');
@@ -668,10 +666,6 @@ async function applyOne(
       }
       break;
     }
-    case 'env-sync':
-      mkdirSync(join(root, 'data/env'), { recursive: true });
-      copyFileSync(join(root, '.env'), join(root, 'data/env/env'));
-      break;
     case 'json-merge': {
       const into = String(d.attrs.into);
       const key = String(d.attrs.key);

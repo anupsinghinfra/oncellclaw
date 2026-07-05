@@ -68,7 +68,6 @@
 //        pauses for confirmation before the next side effect is derived from
 //        document structure (scripts/skill-policy.ts), never authored here.
 //   env-set                 body: `KEY=value` ({{var}} allowed)       set-if-absent
-//   env-sync                (no body) `.env` → data/env/env           idempotent copy
 //   json-merge into:<file> key:<field>  body: a JSON object          push-if-absent
 //
 // `append` without `at:` adds to EOF; with `at:<marker>` it inserts before the
@@ -113,7 +112,12 @@ export interface Problem {
 const FENCE = /^```(\S.*)?$/;
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const VAR_REF = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
-const KNOWN = new Set(['copy', 'append', 'dep', 'run', 'prompt', 'operator', 'env-set', 'env-sync', 'json-merge']);
+const KNOWN = new Set(['copy', 'append', 'dep', 'run', 'prompt', 'operator', 'env-set', 'json-merge']);
+// Retired directives get a targeted lint error (not just "unknown") so an
+// author knows the removal was deliberate and what to do instead.
+const RETIRED: Record<string, string> = {
+  'env-sync': 'nc:env-sync was retired — nothing reads the data/env/env mirror (and it copied live tokens); delete the fence, the adapter reads .env directly',
+};
 const PROMPT_FLAGS = new Set(['secret']);
 
 export function parseDirectives(markdown: string): Directive[] {
@@ -203,7 +207,8 @@ export function validate(directives: Directive[], ctx?: { chatVersion?: string }
   const defined = new Set<string>();
   const flag = (d: Directive, message: string) => problems.push({ line: d.line, kind: d.kind, message });
   for (const d of directives) {
-    if (!KNOWN.has(d.kind)) flag(d, `unknown directive nc:${d.kind}`);
+    if (RETIRED[d.kind]) flag(d, RETIRED[d.kind]);
+    else if (!KNOWN.has(d.kind)) flag(d, `unknown directive nc:${d.kind}`);
     switch (d.kind) {
       case 'dep':
         for (const spec of d.body) {

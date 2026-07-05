@@ -19,7 +19,6 @@ describe('skill-directives parser, on the converted add-slack', () => {
       'prompt', // credentials: capture bot token
       'prompt', // credentials: capture signing secret
       'env-set', // credentials: write captured values to .env
-      'env-sync', // credentials: sync to container
       'operator', // credentials: event-delivery walkthrough
       'prompt', // resolve: owner member id (owner_handle)
       'run', // resolve: validate token (auth.test) — fast-fail before the restart
@@ -184,6 +183,15 @@ describe('append at:<marker> attribute', () => {
   it('still validates an append that carries at: (to + a line are all it needs)', () => {
     const md = ['```nc:append to:setup/index.ts at:nanoclaw:setup-steps', "  codex: () => import('./codex.js'),", '```'].join('\n');
     expect(validate(parseDirectives(md))).toEqual([]);
+  });
+});
+
+describe('retired directives', () => {
+  it('flags nc:env-sync with a targeted retirement error, not a generic unknown', () => {
+    const probs = validate(parseDirectives(['```nc:env-sync', '```'].join('\n')));
+    expect(probs).toHaveLength(1);
+    expect(probs[0].message).toMatch(/retired/);
+    expect(probs[0].message).toMatch(/data\/env\/env/);
   });
 });
 

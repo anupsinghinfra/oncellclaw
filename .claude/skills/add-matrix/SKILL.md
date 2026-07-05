@@ -180,11 +180,6 @@ Option B only — the access token from Element Settings > Help & About, or from
 MATRIX_ACCESS_TOKEN={{access_token}}
 ```
 
-Then sync `.env` into the container:
-
-```nc:env-sync
-```
-
 ## Next Steps
 
 If you're in the middle of `/setup`, return to the setup flow now.

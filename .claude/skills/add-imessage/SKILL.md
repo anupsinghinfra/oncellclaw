@@ -159,12 +159,6 @@ bash setup/channels/imessage-configure.sh local
 bash setup/channels/imessage-configure.sh remote "{{server_url}}" "{{api_key}}"
 ```
 
-Once the keys for your mode are written, sync `.env` to the container (the host
-mounts `data/env/env`):
-
-```nc:env-sync
-```
-
 ## Restart
 
 Restart the service so it loads the iMessage adapter and the credentials you

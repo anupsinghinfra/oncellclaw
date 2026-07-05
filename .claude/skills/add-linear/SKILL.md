@@ -135,9 +135,6 @@ LINEAR_WEBHOOK_SECRET={{linear_webhook_secret}}
 LINEAR_TEAM_KEY={{linear_team_key}}
 LINEAR_BOT_USERNAME={{linear_bot_username}}
 ```
-```nc:env-sync
-```
-
 If you went the Personal API key route, add this line to `.env` instead of the
 OAuth pair (agent posts as you, your own comments are filtered):
 

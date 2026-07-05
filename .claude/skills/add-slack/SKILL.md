@@ -87,9 +87,6 @@ Paste the Signing Secret — Basic Information.
 SLACK_BOT_TOKEN={{bot_token}}
 SLACK_SIGNING_SECRET={{signing_secret}}
 ```
-```nc:env-sync
-```
-
 The bridge serves the webhook on port 3000 at `/webhook/slack` automatically; to
 receive replies, that port must be reachable from the internet and registered
 with Slack. Tell the user:

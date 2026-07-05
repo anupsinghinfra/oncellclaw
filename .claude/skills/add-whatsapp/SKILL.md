@@ -169,9 +169,6 @@ shouldn't be prefixed with its name. Record that (skipped for a shared number):
 ```nc:env-set when:number_kind=dedicated
 ASSISTANT_HAS_OWN_NUMBER=true
 ```
-```nc:env-sync when:number_kind=dedicated
-```
-
 Resolve the conversation address as the WhatsApp JID for the number you chat
 from — the linked number for a shared account, or the dedicated number you just
 gave. Run the one matching the choice above:

@@ -315,7 +315,7 @@ For each `nc:operator` directive at line L, `gatePolicy` computes
    and double-confirm — the exact bug the teams parity table below forbids.)
 3. Next compatible directive is a `prompt` → **no confirm** (the prompt is the barrier).
 4. No such directive (end of document) → **no confirm** (a final handoff block, e.g. teams `:228`).
-5. Anything else (`run`, `copy`, `dep`, `append`, `env-set`, `env-sync`, `json-merge`) →
+5. Anything else (`run`, `copy`, `dep`, `append`, `env-set`, `json-merge`) →
    **confirm** after rendering. Confirm wording is derived from the barrier's
    *flavor* — the next compatible directive's effect: `effect:step` →
    readiness phrasing (`"Ready? The next step starts immediately."` — the block

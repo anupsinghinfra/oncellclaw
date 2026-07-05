@@ -88,7 +88,7 @@ Capture the four values, then write them. `prompt` only *asks* and binds the
 answer to a name; a separate directive consumes it — so the same prompts could
 feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
 Here they go to `.env` (set-if-absent — a value you've already filled in is
-never overwritten) and sync to the container:
+never overwritten):
 
 ```nc:prompt access_token secret
 Paste the System User access token — WhatsApp > API Setup, with `whatsapp_business_messaging` permission.
@@ -108,9 +108,6 @@ WHATSAPP_PHONE_NUMBER_ID={{phone_number_id}}
 WHATSAPP_APP_SECRET={{app_secret}}
 WHATSAPP_VERIFY_TOKEN={{verify_token}}
 ```
-```nc:env-sync
-```
-
 ### Webhook server
 
 The Chat SDK bridge automatically starts a shared webhook server on port 3000

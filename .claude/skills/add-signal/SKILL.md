@@ -118,9 +118,6 @@ it into the container env:
 ```nc:env-set
 SIGNAL_ACCOUNT={{platform_id}}
 ```
-```nc:env-sync
-```
-
 ## Restart
 
 Restart the service so it loads the Signal adapter and binds the account you just

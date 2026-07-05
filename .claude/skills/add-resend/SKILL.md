@@ -84,7 +84,7 @@ Capture the secrets, then write them. `prompt` only *asks* and binds the answer
 to a name; a separate directive consumes it — so the same prompts could feed
 `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer. Here
 they go to `.env` (set-if-absent — a value you've already filled in is never
-overwritten) and sync to the container:
+overwritten):
 
 ```nc:prompt api_key secret
 Paste the Resend API key — API Keys, starts with `re_`.
@@ -104,9 +104,6 @@ RESEND_FROM_ADDRESS={{from_address}}
 RESEND_FROM_NAME={{from_name}}
 RESEND_WEBHOOK_SECRET={{webhook_secret}}
 ```
-```nc:env-sync
-```
-
 ## Connect yourself
 
 Because email is direct-addressable, the bot can write to you first — so wire

@@ -65,7 +65,7 @@ function guardOf(d: Directive): { v: string; value: string } | undefined {
  *   3. Next compatible directive is a `prompt` → no confirm (the prompt is the
  *      barrier — the human can't paste a token before doing the steps).
  *   4. No such directive (end of document) → no confirm (a final handoff block).
- *   5. Anything else (`run`, `copy`, `dep`, `append`, `env-set`, `env-sync`,
+ *   5. Anything else (`run`, `copy`, `dep`, `append`, `env-set`,
  *      `json-merge`) → confirm, with the flavor derived from that barrier
  *      directive's effect (`effect:step` → readiness, else completed).
  *

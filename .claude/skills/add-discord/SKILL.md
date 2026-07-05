@@ -96,17 +96,13 @@ curl -sf https://discord.com/api/v10/oauth2/applications/@me -H "Authorization: 
 
 Store the token and the two derived credentials — the adapter reads them from
 `.env` and fails to start without `DISCORD_PUBLIC_KEY` and `DISCORD_APPLICATION_ID`
-(set-if-absent, so a value you've already filled in is never overwritten) — and
-sync them to the container:
+(set-if-absent, so a value you've already filled in is never overwritten):
 
 ```nc:env-set
 DISCORD_BOT_TOKEN={{bot_token}}
 DISCORD_APPLICATION_ID={{application_id}}
 DISCORD_PUBLIC_KEY={{public_key}}
 ```
-```nc:env-sync
-```
-
 ## Restart
 
 Restart the service so it loads the Discord adapter and the credentials you just

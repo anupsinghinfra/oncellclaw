@@ -96,7 +96,7 @@ Capture the three values, then write them. `prompt` only *asks* and binds the
 answer to a name; a separate directive consumes it — so the same prompts could
 feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
 Here they go to `.env` (set-if-absent — a value you've already filled in is
-never overwritten) and sync to the container:
+never overwritten):
 
 ```nc:prompt github_token secret
 Paste the Fine-grained Personal Access Token for the bot account — starts with `github_pat_`.
@@ -112,9 +112,6 @@ GITHUB_TOKEN={{github_token}}
 GITHUB_WEBHOOK_SECRET={{webhook_secret}}
 GITHUB_BOT_USERNAME={{bot_username}}
 ```
-```nc:env-sync
-```
-
 `GITHUB_BOT_USERNAME` must match the bot account's GitHub username exactly. This is used for @-mention detection — the agent responds when someone writes `@your-bot-username` in a PR or issue comment.
 
 ## Wiring

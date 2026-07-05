@@ -85,7 +85,7 @@ Capture the two values, then write them. `prompt` only *asks* and binds the
 answer to a name; a separate directive consumes it — so the same prompts could
 feed `ncl` or the OneCLI vault instead of `.env` by swapping only the consumer.
 Here they go to `.env` (set-if-absent — a value you've already filled in is
-never overwritten) and sync to the container:
+never overwritten):
 
 ```nc:prompt bot_token secret
 Paste the Bot Access Token — from the Webex bot you created.
@@ -97,9 +97,6 @@ Paste the webhook secret you set for signature verification.
 WEBEX_BOT_TOKEN={{bot_token}}
 WEBEX_WEBHOOK_SECRET={{webhook_secret}}
 ```
-```nc:env-sync
-```
-
 ### Webhook server
 
 The Chat SDK bridge automatically starts a shared webhook server on port 3000

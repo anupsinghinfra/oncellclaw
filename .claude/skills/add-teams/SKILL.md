@@ -136,7 +136,7 @@ Paste the client secret Value — Certificates & secrets (shown only once, at le
 ### Store the credentials
 
 The adapter reads these from `.env` (set-if-absent, so a value you've already
-filled in is never overwritten) and syncs them to the container.
+filled in is never overwritten).
 `TEAMS_APP_TENANT_ID` is written only for a Single Tenant app; Multi Tenant
 doesn't need it.
 
@@ -148,9 +148,6 @@ TEAMS_APP_TYPE={{app_type}}
 ```nc:env-set when:app_type=SingleTenant
 TEAMS_APP_TENANT_ID={{app_tenant_id}}
 ```
-```nc:env-sync
-```
-
 ### Create the Azure Bot resource
 
 Tell the user:
@@ -339,7 +336,7 @@ Business / EDU / developer tenant.
 
 1. The tunnel is up and the messaging endpoint matches it: Azure Bot → **Configuration** → **Messaging endpoint** must be `https://<your-domain>/api/webhooks/teams`, and your tunnel (e.g. `ngrok http 3000`) must be forwarding to this machine's port 3000.
 2. The adapter started: `grep -i teams logs/nanoclaw.log | tail`.
-3. The credentials are in `.env` and synced to `data/env/env` (re-run the env-sync step if not).
+3. The credentials are in `.env` (`TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_APP_TYPE`).
 
 ### `Unauthorized` / 401 from Azure Bot Service
 
