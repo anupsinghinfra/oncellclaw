@@ -44,7 +44,7 @@ import './github.js';
 Pinned to an exact version — the supply-chain policy rejects ranges and `latest`:
 
 ```nc:dep
-@chat-adapter/github@4.26.0
+@chat-adapter/github@4.29.0
 ```
 
 ### 4. Build and validate

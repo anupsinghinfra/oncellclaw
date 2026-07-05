@@ -13,7 +13,8 @@ import {
   updateContainerConfigScalars,
   updateContainerConfigJson,
 } from '../../db/container-configs.js';
-import type { ContainerConfigRow } from '../../types.js';
+import { createAgentFromTemplate } from '../../templates/create-agent.js';
+import type { AgentGroup, ContainerConfigRow } from '../../types.js';
 import { registerResource } from '../crud.js';
 
 /** Deserialize JSON columns for display. */
@@ -62,17 +63,24 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
-  // `create` and `delete` are custom (below): generic `create` inserts a bare
-  // agent_groups row but never the container_config a working group needs, and
-  // the generic single-table DELETE violates FK constraints (#2525).
+  // `create` and `delete` are custom (below): create needs a `--template`
+  // branch, and the generic create inserts a bare agent_groups row but never
+  // the container_config a working group needs; the generic single-table
+  // DELETE violates FK constraints (#2525).
   operations: { list: 'open', get: 'open', update: 'approval' },
   customOperations: {
     create: {
       access: 'approval',
       description:
         'Create (or return the existing) agent group with its container config. Idempotent on --folder. ' +
-        'Use --folder <slug> and --name <display name>. Workspace files are scaffolded on first spawn.',
+        'With --template <ref>, stamp from a local template under templates/ (MCP servers + instructions ' +
+        '+ skills). Use --folder <slug> and --name <display name>. Workspace files are scaffolded on first spawn.',
       handler: async (args) => {
+        if (args.template) {
+          return createAgentFromTemplate(String(args.template), {
+            name: args.name ? String(args.name) : undefined,
+          });
+        }
         const folder = args.folder as string;
         if (!folder) throw new Error('--folder is required');
         const name = (args.name as string) ?? folder;
