@@ -135,15 +135,18 @@ dependency build scripts — a workspace install leaves the sign-in unable to
 persist. The global install matches Microsoft's own instruction and keeps the
 workspace policy intact. Pinned; re-running is a no-op. (If npm reports
 EACCES here, your global prefix needs root — prefer a user-level Node like
-nvm, or `npm config set prefix ~/.npm-global`.)
+nvm, or `npm config set prefix ~/.npm-global`.) `--loglevel=error` because
+npm runs inside a pnpm script here and warns about every pnpm config var it
+inherits — pure noise; real errors still print.
 
 ```nc:run effect:external when:have_creds=no
-npm install -g @microsoft/teams.cli@3.0.2
+npm install -g @microsoft/teams.cli@3.0.2 --loglevel=error
 ```
 
 npm's global bin directory is not reliably on PATH (custom prefixes rarely
 are), so every step below calls the CLI by its absolute path,
-`$(npm prefix -g)/bin/teams`. Where this document says to run `teams …` by
+`$(npm prefix -g)/bin/teams` (stderr of the prefix lookup silenced — same
+pnpm-config noise as above). Where this document says to run `teams …` by
 hand, use that path too if plain `teams` isn't found.
 
 ### Sign in to Microsoft 365
@@ -152,7 +155,11 @@ Every `teams` command is a separate process, so the sign-in must survive into
 the next one via the CLI's on-disk token cache. On Linux that cache needs the
 libsecret library — without it the session silently evaporates when the login
 process exits, and the create step fails with `AUTH_REQUIRED`. Install it
-first on Linux: `sudo apt-get install -y libsecret-1-0` (Debian/Ubuntu). The
+first on Linux: `sudo apt-get install -y libsecret-1-0` (Debian/Ubuntu). A
+"libsecret not found — token cache will be stored unencrypted" warning on a
+headless box is expected and harmless even WITH libsecret installed: there is
+no keyring daemon to talk to, so the CLI uses its plaintext cache file, which
+persists fine (encryption-at-rest is all you give up). The
 step below verifies persistence by re-reading the session from a fresh
 process after login. In an interactive terminal the login opens a browser;
 on a headless box (SSH) it prints a device code — open
@@ -161,7 +168,7 @@ run `teams login` then `teams status` by hand: status must say logged in, or
 the cache is not persisting (see Troubleshooting).
 
 ```nc:run effect:step when:have_creds=no
-"$(npm prefix -g)/bin/teams" login && "$(npm prefix -g)/bin/teams" status --json 2>/dev/null | grep -q '"loggedIn": true' && printf '=== NANOCLAW SETUP: TEAMS-LOGIN ===\nSTATUS: success\n=== END ===\n'
+"$(npm prefix -g 2>/dev/null)/bin/teams" login && "$(npm prefix -g 2>/dev/null)/bin/teams" status --json 2>/dev/null | grep -q '"loggedIn": true' && printf '=== NANOCLAW SETUP: TEAMS-LOGIN ===\nSTATUS: success\n=== END ===\n'
 ```
 
 ### Create the bot
@@ -177,11 +184,11 @@ prompt is only asked when the credentials probe answered no, so with existing
 credentials both variants are skipped.
 
 ```nc:run effect:external when:tenant=single capture:app_id=.credentials.CLIENT_ID,app_password=.credentials.CLIENT_SECRET,app_tenant_id=.credentials.TENANT_ID,teams_app_id=.teamsAppId,install_link=.installLink validate:^.+$
-"$(npm prefix -g)/bin/teams" app create --name "{{app_name}}" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience myOrg --json
+"$(npm prefix -g 2>/dev/null)/bin/teams" app create --name "{{app_name}}" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience myOrg --json
 ```
 
 ```nc:run effect:external when:tenant=multi capture:app_id=.credentials.CLIENT_ID,app_password=.credentials.CLIENT_SECRET,teams_app_id=.teamsAppId,install_link=.installLink validate:^.+$
-"$(npm prefix -g)/bin/teams" app create --name "{{app_name}}" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience multipleOrgs --json
+"$(npm prefix -g 2>/dev/null)/bin/teams" app create --name "{{app_name}}" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience multipleOrgs --json
 ```
 
 ### Store the credentials
