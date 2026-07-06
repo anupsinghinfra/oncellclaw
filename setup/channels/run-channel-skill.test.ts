@@ -210,7 +210,7 @@ describe('runChannelSkill adapter (Option A)', () => {
         return { ok: true, fields: { STATUS: 'success' } };
       },
       resolveRemote: () => 'origin',
-      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw', tenant: 'single' },
+      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw' },
       confirm: async (m) => {
         log.push(`confirm:${m}`);
         return true;
@@ -226,7 +226,7 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(steps.some((c) => c.includes('/bin/teams" login'))).toBe(true);
     expect(log.some((c) => c.startsWith('exec:') && c.includes(' login'))).toBe(false);
     // …create got the collected public URL on the real /webhook/teams route,
-    // and the prompted name + tenant choice landed as --name/--sign-in-audience…
+    // the prompted name, and the unconditional single-tenant default…
     expect(log.some((c) => c.includes('--endpoint "https://acme.example/webhook/teams"'))).toBe(true);
     expect(log.some((c) => c.includes('--name "NanoClaw"') && c.includes('--sign-in-audience myOrg'))).toBe(true);
     // …the captured credentials landed in .env with the safe SingleTenant pairing…
@@ -249,49 +249,6 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(fullyApplied(res)).toBe(true);
   });
 
-  // The multi-tenant leg of the tenant branch: tenant=multi must pick the
-  // multipleOrgs create variant and the MultiTenant env pairing, which omits
-  // TEAMS_APP_TENANT_ID entirely — writing it would flip the adapter to the
-  // wrong authority (the 401 pairing rule the document itself states).
-  it('Teams multi-tenant: tenant=multi drives the multipleOrgs create and the tenant-ID-free env pairing', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'rcs-teams-multi-'));
-    mkdirSync(join(root, 'src/channels'), { recursive: true });
-    writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
-    writeFileSync(join(root, '.env'), '');
-    writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
-
-    const log: string[] = [];
-    const res = await runSkill('.claude/skills/add-teams', {
-      projectRoot: root,
-      exec: (c) => {
-        log.push(c);
-        if (c.includes('TEAMS_APP_ID=.')) return 'no'; // the have_creds probe
-        if (c.includes(' app create ')) {
-          // TENANT_ID is still present in the CLI's JSON (the creating tenant) —
-          // the multi branch simply must not capture or store it.
-          return JSON.stringify({
-            teamsAppId: 'tapp-456',
-            installLink: 'https://teams.microsoft.com/l/app/tapp-456?installAppPackage=true',
-            credentials: { CLIENT_ID: 'client-456', CLIENT_SECRET: 'secret-456', TENANT_ID: 'tenant-456' },
-          });
-        }
-      },
-      execStream: async () => ({ ok: true, fields: { STATUS: 'success' } }),
-      resolveRemote: () => 'origin',
-      // app_name with a space also exercises the prompt's validate charset.
-      inputs: { public_url: 'https://acme.example', app_name: 'Acme Bot', tenant: 'multi' },
-      confirm: async () => true,
-      openUrl: async () => undefined,
-    });
-
-    expect(log.some((c) => c.includes('--name "Acme Bot"') && c.includes('--sign-in-audience multipleOrgs'))).toBe(true);
-    expect(log.some((c) => c.includes('--sign-in-audience myOrg'))).toBe(false); // the single variant was skipped
-    const env = readFileSync(join(root, '.env'), 'utf8');
-    expect(env).toContain('TEAMS_APP_ID=client-456');
-    expect(env).toContain('TEAMS_APP_TYPE=MultiTenant');
-    expect(env).not.toContain('TEAMS_APP_TENANT_ID');
-    expect(fullyApplied(res)).toBe(true);
-  });
 
   // The engine reads `.claude/skills/add-<channel>/SKILL.md` relative to cwd (the
   // repo root in tests — same as the real add-slack the test above drives), so a
