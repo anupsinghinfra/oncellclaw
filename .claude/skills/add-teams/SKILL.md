@@ -110,6 +110,22 @@ reach this machine's webhook server (port 3000, configurable via
 Paste the public https:// base URL that forwards to this machine's port 3000 (no trailing path) — e.g. https://abcd1234.ngrok.io from `ngrok http 3000`.
 ```
 
+### App name and tenant
+
+Two more choices belong to the human before anything is created. The name is
+used everywhere at once: the Entra app registration, the bot, and the Teams
+app are all created under it. There is no client-secret name to pick on this
+path — the CLI generates the secret itself (Entra displayName `default`,
+2-year expiry); rotating it later is in [Troubleshooting](#troubleshooting).
+
+```nc:prompt app_name when:have_creds=no validate:^[\sA-Za-z0-9._-]{1,30}$ normalize:trim
+What should the bot be called? One name covers the Entra app registration, the bot, and the Teams app (letters, digits, spaces, . _ -; max 30 characters) — e.g. NanoClaw.
+```
+
+```nc:prompt tenant when:have_creds=no validate:^(single|multi)$ normalize:lower
+Who should be able to install the bot — answer "single" (only your own Microsoft 365 tenant; the safe default for a self-hosted assistant) or "multi" (any Microsoft 365 tenant).
+```
+
 ### Install the Teams CLI
 
 Installed globally with npm — not as a workspace dependency — deliberately:
@@ -153,30 +169,41 @@ the cache is not persisting (see Troubleshooting).
 One command registers the Entra app, generates a client secret (Graph can take
 ~30s to see the new app — the CLI retries), registers a Teams-managed bot, and
 uploads the app package to the Teams Developer Portal. It needs the sign-in
-from the previous step (`AUTH_REQUIRED` means run that first). The bot is
-created single-tenant (`--sign-in-audience myOrg`) — the safe default for a
-self-hosted assistant; for a bot other Microsoft 365 tenants can install, see
-[Alternatives](#alternatives). Change `--name` first if you want a different
-bot name in Teams.
+from the previous step (`AUTH_REQUIRED` means run that first). The tenant
+answer picks the variant — they differ only in `--sign-in-audience`, and the
+single-tenant one also captures the tenant ID (which the multi-tenant `.env`
+pairing must omit). A `when:tenant=…` guard implies a fresh create: the tenant
+prompt is only asked when the credentials probe answered no, so with existing
+credentials both variants are skipped.
 
-```nc:run effect:external when:have_creds=no capture:app_id=.credentials.CLIENT_ID,app_password=.credentials.CLIENT_SECRET,app_tenant_id=.credentials.TENANT_ID,teams_app_id=.teamsAppId,install_link=.installLink validate:^.+$
-"$(npm prefix -g)/bin/teams" app create --name "NanoClaw" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience myOrg --json
+```nc:run effect:external when:tenant=single capture:app_id=.credentials.CLIENT_ID,app_password=.credentials.CLIENT_SECRET,app_tenant_id=.credentials.TENANT_ID,teams_app_id=.teamsAppId,install_link=.installLink validate:^.+$
+"$(npm prefix -g)/bin/teams" app create --name "{{app_name}}" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience myOrg --json
+```
+
+```nc:run effect:external when:tenant=multi capture:app_id=.credentials.CLIENT_ID,app_password=.credentials.CLIENT_SECRET,teams_app_id=.teamsAppId,install_link=.installLink validate:^.+$
+"$(npm prefix -g)/bin/teams" app create --name "{{app_name}}" --endpoint "{{public_url}}/webhook/teams" --sign-in-audience multipleOrgs --json
 ```
 
 ### Store the credentials
 
 The adapter reads these from `.env` (set-if-absent — a value you've already
-filled in is never overwritten). The pairing matters: `SingleTenant` requires
-`TEAMS_APP_TENANT_ID`, and a multi-tenant app must instead set
-`TEAMS_APP_TYPE=MultiTenant` with **no** tenant ID — a mismatch makes the
-adapter authenticate against the wrong authority and every message fails with
-a 401 from Bot Framework.
+filled in is never overwritten). The pairing matters, and the tenant branch
+encodes it: `SingleTenant` requires `TEAMS_APP_TENANT_ID`, and a multi-tenant
+app must instead set `TEAMS_APP_TYPE=MultiTenant` with **no** tenant ID — a
+mismatch makes the adapter authenticate against the wrong authority and every
+message fails with a 401 from Bot Framework.
 
-```nc:env-set when:have_creds=no
+```nc:env-set when:tenant=single
 TEAMS_APP_ID={{app_id}}
 TEAMS_APP_PASSWORD={{app_password}}
 TEAMS_APP_TENANT_ID={{app_tenant_id}}
 TEAMS_APP_TYPE=SingleTenant
+```
+
+```nc:env-set when:tenant=multi
+TEAMS_APP_ID={{app_id}}
+TEAMS_APP_PASSWORD={{app_password}}
+TEAMS_APP_TYPE=MultiTenant
 ```
 
 ### Install the app in Teams
@@ -233,31 +260,14 @@ once you've DM'd the bot, wire this channel with `/init-first-agent` (or
 
 ## Alternatives
 
-### Multi-tenant bot
-
-The Credentials flow above creates a single-tenant bot (only your Microsoft 365
-tenant can install it). For a bot any tenant can install, create it without
-`--sign-in-audience` (the CLI defaults to multi-tenant) and store the matching
-env pairing — `MultiTenant` with **no** tenant ID:
-
-```bash
-teams app create --name "NanoClaw" --endpoint "https://your-domain/webhook/teams"
-```
-
-```bash
-TEAMS_APP_ID=<CLIENT_ID from the CLI output>
-TEAMS_APP_PASSWORD=<CLIENT_SECRET from the CLI output>
-TEAMS_APP_TYPE=MultiTenant
-```
-
-Run interactively, the CLI ends with an install menu — pick **Install in Teams**.
-
 ### Manual Azure portal path
 
 For tenants where the Teams Developer Portal is blocked. Unlike the CLI path,
 the Azure Bot resource in step 3 requires an active **Azure subscription**.
 This is the classic walk; every value it produces maps onto the same `.env`
-keys.
+keys. The choices are the human's here just as on the CLI path — ask before
+creating anything: the app registration name, single vs multi tenant, a
+client secret description, and (this path only) a separate Azure Bot handle.
 
 1. **App registration**: in https://portal.azure.com, search "App registrations"
    → "New registration". Name it (e.g. "NanoClaw"); Supported account types:
