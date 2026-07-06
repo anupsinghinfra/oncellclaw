@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runSkill, hostExec, hostExecStream, labelOrdinals, promptValidator, clackResolveInput, type RunSkillOptions } from './skill-driver.js';
+import { runSkill, hostExec, hostExecStream, labelOrdinals, literalChoices, promptValidator, clackResolveInput, type RunSkillOptions } from './skill-driver.js';
 import { fullyApplied, type ApplyEvent } from '../../scripts/skill-apply.js';
 
 // Shared test state for the clack + claude-handoff mocks (hoisted so the vi.mock
@@ -15,6 +15,7 @@ const ce = vi.hoisted(() => ({
   handoffSpy: vi.fn(async (_ctx: { channel: string; step: string; stepDescription: string }) => true),
   answers: [] as string[],
   lastValidate: { fn: undefined as undefined | ((v: string) => string | Error | void | undefined) },
+  lastSelectOptions: { values: undefined as undefined | string[] },
 }));
 
 // Keep isHelpEscape + validateWithHelpEscape real (clackResolveInput uses them);
@@ -32,7 +33,11 @@ vi.mock('@clack/prompts', async (importActual) => {
     ce.lastValidate.fn = o?.validate;
     return ce.answers.shift() ?? '';
   };
-  return { ...actual, text: vi.fn(fromQueue), password: vi.fn(fromQueue) };
+  const fromQueueSelect = async (o: { options: Array<{ value: string }> }): Promise<string> => {
+    ce.lastSelectOptions.values = o.options.map((x) => x.value);
+    return ce.answers.shift() ?? o.options[0].value;
+  };
+  return { ...actual, text: vi.fn(fromQueue), password: vi.fn(fromQueue), select: vi.fn(fromQueueSelect) };
 });
 
 // A small SKILL.md exercising the three things the driver wires: an operator
@@ -125,6 +130,13 @@ describe('thin skill driver', () => {
   it('hostExec returns stdout so a capture run can bind it', () => {
     const root = mkdtempSync(join(tmpdir(), 'driver-cap-'));
     expect(String(hostExec(root)('echo D0CHANNEL')).trim()).toBe('D0CHANNEL');
+  });
+
+  it('hostExec recomposes a failure as `exit <code>: <first stderr line>` with the full stderr kept below', () => {
+    const root = mkdtempSync(join(tmpdir(), 'driver-fail-'));
+    const run = (): string => hostExec(root)('echo "boom: first line" >&2; echo "stack line two" >&2; exit 7');
+    expect(run).toThrow(/^exit 7: boom: first line/); // one-line consumers read this
+    expect(run).toThrow(/stack line two/); // full stderr survives for the agentTask reason
   });
 
   it('hostExecStream runs a step and captures the terminal status block fields (for effect:step)', async () => {
@@ -379,6 +391,18 @@ describe('thin skill driver', () => {
     }
   });
 
+  it('clackResolveInput renders an either/or validate as an arrow-key select over the literal choices', async () => {
+    ce.answers = ['webhook'];
+    ce.lastSelectOptions.values = undefined;
+    const ans = await clackResolveInput()('connection', {
+      question: 'How should Slack deliver events?',
+      secret: false,
+      validate: '^(socket|webhook)$',
+    });
+    expect(ans).toBe('webhook');
+    expect(ce.lastSelectOptions.values).toEqual(['socket', 'webhook']); // the options came from the regex
+  });
+
   it('clackResolveInput passes a normal answer straight through — no handoff', async () => {
     ce.handoffSpy.mockClear();
     ce.answers = ['just-a-token'];
@@ -399,6 +423,27 @@ describe('thin skill driver', () => {
     // describes the expected shape, so no authored error: string exists anymore
     expect(ci!('ftp://example.com')).toBe(`That doesn't match the expected format. ${question}`);
     expect(promptValidator(undefined, undefined, question)).toBeUndefined(); // no regex ⇒ no validator
+  });
+});
+
+// An either/or `nc:prompt` renders as a select — the choices come from the
+// validate regex itself (no grammar addition). Only a fully-anchored
+// pure-literal alternation qualifies; anything with real regex syntax stays a
+// text prompt (SSF-003).
+describe('literalChoices (either/or prompt → select)', () => {
+  it('extracts the choices from a pure-literal alternation', () => {
+    expect(literalChoices('^(socket|webhook)$')).toEqual(['socket', 'webhook']);
+    expect(literalChoices('^(qr|pairing-code)$')).toEqual(['qr', 'pairing-code']);
+    expect(literalChoices('^(SingleTenant|MultiTenant)$')).toEqual(['SingleTenant', 'MultiTenant']);
+  });
+
+  it('leaves prefixes, format unions, and non-alternations as text prompts', () => {
+    expect(literalChoices('^xoxb-')).toBeNull(); // unanchored prefix
+    expect(literalChoices('^https?://')).toBeNull(); // regex metachars
+    expect(literalChoices('^(\\+\\d{8,15}|[^\\s@]+@[^\\s@]+\\.[^\\s@]+)$')).toBeNull(); // imessage phone|email union
+    expect(literalChoices('^[0-9a-zA-Z-]+$')).toBeNull(); // char class, no alternation
+    expect(literalChoices('^(solo)$')).toBeNull(); // one option is not a choice
+    expect(literalChoices(undefined)).toBeNull();
   });
 });
 
