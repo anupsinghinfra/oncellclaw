@@ -198,6 +198,16 @@ TEAMS_APP_TENANT_ID={{app_tenant_id}}
 TEAMS_APP_TYPE=SingleTenant
 ```
 
+### Who owns this bot
+
+The account signed into the Teams CLI is the account that just created the
+bot — that human is the owner the wiring step needs. Its identity comes from
+the CLI session, so this runs before the sign-out step below:
+
+```nc:run effect:fetch when:have_creds=no capture:owner_upn=.username,owner_aad_id=.userObjectId validate:^.+$
+"$(npm prefix -g 2>/dev/null)/bin/teams" status --json 2>/dev/null
+```
+
 ### Install the app in Teams
 
 The app package is already uploaded — no manifest zip, no manual sideload.
@@ -211,17 +221,66 @@ Install the bot into Teams:
 Once the app shows up in your Teams sidebar (or app list), continue.
 ```
 
+### Open the owner DM
+
+Same move as Slack's `conversations.open` and Discord's `users/@me/channels`:
+create the bot↔owner 1:1 conversation proactively with the bot's own
+credentials, so the assistant messages the human first — nobody has to DM the
+bot to bootstrap it. This only works now that the app is installed (the step
+above); if Microsoft hasn't finished propagating the install yet, the create
+below can fail once — re-running the skill is safe.
+
+First a Bot Framework token from the app credentials:
+
+```nc:run effect:fetch when:have_creds=no capture:bot_token validate:^eyJ
+curl -sf -X POST "https://login.microsoftonline.com/{{app_tenant_id}}/oauth2/v2.0/token" --data-urlencode "grant_type=client_credentials" --data-urlencode "client_id={{app_id}}" --data-urlencode "client_secret={{app_password}}" --data-urlencode "scope=https://api.botframework.com/.default" | jq -er '.access_token'
+```
+
+Create the 1:1 conversation (the AAD object id from the CLI session is a
+valid member id; `smba.trafficmanager.net/teams` is the global service URL —
+the same default the adapter itself uses):
+
+```nc:run effect:fetch when:have_creds=no capture:conversation_id validate:^.+$
+curl -sf -X POST "https://smba.trafficmanager.net/teams/v3/conversations" -H "Authorization: Bearer {{bot_token}}" -H "Content-Type: application/json" -d '{"bot":{"id":"28:{{app_id}}"},"members":[{"id":"{{owner_aad_id}}","name":"","role":"user"}],"tenantId":"{{app_tenant_id}}","channelData":{"tenant":{"id":"{{app_tenant_id}}"}},"isGroup":false}' | jq -er '.id'
+```
+
+The adapter identifies inbound senders by their Bot Framework `29:` id, not
+the AAD id — the owner must be wired under that handle or their replies
+would not be recognized. The conversation's member list has it, and selecting
+by the AAD id doubles as an identity cross-check:
+
+```nc:run effect:fetch when:have_creds=no capture:owner_handle=.id,owner_name=.name validate:^.+$
+curl -sf "https://smba.trafficmanager.net/teams/v3/conversations/{{conversation_id}}/members" -H "Authorization: Bearer {{bot_token}}" | jq -er '[.[] | select(.aadObjectId == "{{owner_aad_id}}")][0] | {id, name}'
+```
+
+Compose the platform id exactly as the adapter encodes thread ids
+(`teams:{b64url conversation}:{b64url service url}`):
+
+```nc:run when:have_creds=no capture:platform_id validate:^teams:
+node -e 'const c=process.argv[1];const s="https://smba.trafficmanager.net/teams/";console.log("teams:"+Buffer.from(c).toString("base64url")+":"+Buffer.from(s).toString("base64url"))' "{{conversation_id}}"
+```
+
+Tell the user who the wiring targets — if this isn't them, they should stop
+here and wire manually with `/manage-channels` instead:
+
+```nc:operator when:have_creds=no
+The bot will be wired to {{owner_name}} ({{owner_upn}}) — the account that created it — and the assistant's first message will arrive in that account's Teams DMs. If that's not you, stop here (Ctrl-C) and wire manually with /manage-channels later.
+```
+
 ### Sign out of the Teams CLI
 
-The Microsoft 365 session was only needed to create the bot — the running
-adapter authenticates with the app credentials in `.env`, never with your
-account. On a headless box that session is a plaintext token file, so it
-doesn't stay on disk once setup is done. Idempotent (already signed out is a
-no-op). Any `teams …` command you run later — the Troubleshooting recovery
-commands, `teams app rsc add`, an endpoint update — just needs a fresh
-`teams login` first (a ~30-second device code).
+The Microsoft 365 session was only needed to create the bot and identify its
+owner — the running adapter authenticates with the app credentials in
+`.env`, never with your account. On a headless box that session is a
+plaintext token file, which is worth removing unless you plan more `teams …`
+commands (rotate secret, endpoint update, RSC — each just needs a fresh
+`teams login`, a ~30-second device code):
 
-```nc:run effect:external when:have_creds=no
+```nc:prompt signout when:have_creds=no validate:^(yes|no)$ normalize:lower
+Sign out of the Teams CLI now? The bot doesn't need this login to run. Answer "yes" to sign out (recommended on shared/headless boxes) or "no" to stay signed in for later teams CLI commands.
+```
+
+```nc:run effect:external when:signout=yes
 "$(npm prefix -g 2>/dev/null)/bin/teams" logout
 ```
 
@@ -236,20 +295,29 @@ bash setup/lib/restart.sh
 
 ## Finish wiring
 
-Unlike Discord or Slack, a Teams bot's platform ID isn't known until you DM the
-bot for the first time — the adapter derives it from the inbound activity. So
-this skill installs the adapter and stops here; the setup wizard's closing
-"What's left" note carries the one remaining action. Applying this skill
-outside the wizard? Tell the user just this: **DM the bot once ("hi" is
-fine), then run `/init-first-agent` (or `/manage-channels`) with your coding
-agent.** Under the hood, that first inbound makes the router auto-create the
-messaging group row in `data/v2.db` — the row the wiring needs.
+On a fresh create, [Open the owner DM](#open-the-owner-dm) already resolved
+everything the wire needs — `owner_handle` (the owner's `29:` id) and
+`platform_id` (the bot↔owner DM). The setup wizard wires automatically from
+those and the welcome message lands in the owner's Teams DMs. Applying this
+skill outside the wizard? Run the same wire yourself:
+
+```bash
+pnpm exec tsx scripts/init-first-agent.ts --channel teams --user-id "teams:<owner_handle>" --platform-id "<platform_id>" --display-name "<the human's name>" --agent-name "<assistant name>" --role owner
+```
+
+**Fallback (re-runs, or the DM-open failed):** with credentials already in
+`.env` the resolve steps are skipped, so there is nothing new to wire — the
+first run's wiring still stands. If the install was never wired at all, the
+DM-first path always works: DM the bot once ("hi" is fine) — the router
+auto-creates the messaging group row in `data/v2.db` from that first inbound
+— then run `/init-first-agent` (or `/manage-channels`) with your coding
+agent.
 
 ## Next Steps
 
-If you're in the middle of `/setup`, return to the setup flow now. Otherwise,
-once you've DM'd the bot, wire this channel with `/init-first-agent` (or
-`/manage-channels`).
+If you're in the middle of `/setup`, return to the setup flow now — it wires
+the owner automatically from the resolved values. Otherwise wire per
+[Finish wiring](#finish-wiring).
 
 ## Channel Info
 

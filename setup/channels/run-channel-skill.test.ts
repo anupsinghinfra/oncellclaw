@@ -75,14 +75,13 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(cmds.some((c) => c.startsWith('ncl '))).toBe(false);
   });
 
-  // Teams' platform_id only exists after the first inbound, so its SKILL.md
-  // installs + hands off and runChannelSkill is called with deferWire — it must
-  // run the skill but never reach the shared wire. The credentials flow is
-  // CLI-first and guarded by the have_creds probe: this fixture answers the
-  // probe with "yes" (credentials already in .env), so every creation step —
-  // the teams-login step, teams app create, the env writes, the install-link
-  // operator — is when:-skipped and the run drops straight through to restart.
-  it('deferWire (Teams): existing credentials skip the whole CLI create flow, never reach the shared wire', async () => {
+  // Teams wires inline only when a fresh create resolved the owner DM
+  // (wireIfResolved). This fixture answers the have_creds probe with "yes"
+  // (credentials already in .env), so every creation + resolve step — the
+  // teams-login step, teams app create, the env writes, the DM-open chain,
+  // the install-link operator — is when:-skipped, the wire inputs stay
+  // unresolved, and the run drops through to restart without wiring.
+  it('wireIfResolved (Teams): existing credentials skip the whole CLI create flow, never reach the shared wire', async () => {
     const root = mkdtempSync(join(tmpdir(), 'rcs-teams-'));
     mkdirSync(join(root, 'src/channels'), { recursive: true });
     writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
@@ -100,7 +99,7 @@ describe('runChannelSkill adapter (Option A)', () => {
       },
       resolveRemote: () => 'origin',
       reuse: false,
-      deferWire: true,
+      wireIfResolved: true,
       // The injectable interaction seams — the default handler consults them for
       // the URL offer and the natural-barrier confirms, so no real clack confirm
       // (which would hang in CI) and no real browser open is reached.
@@ -187,6 +186,10 @@ describe('runChannelSkill adapter (Option A)', () => {
     const opened: string[] = [];
     const steps: string[] = [];
 
+    // The DM-open chain's expected results. The exec mock returns each
+    // command's FINAL stdout (post-jq), matching what the engine captures.
+    const EXPECTED_PLATFORM_ID = `teams:${Buffer.from('a:1conv').toString('base64url')}:${Buffer.from('https://smba.trafficmanager.net/teams/').toString('base64url')}`;
+
     const res = await runSkill('.claude/skills/add-teams', {
       projectRoot: root,
       exec: (c) => {
@@ -207,13 +210,22 @@ describe('runChannelSkill adapter (Option A)', () => {
             },
           });
         }
+        // owner identity from the CLI session (status --json fence, plain exec)
+        if (c.includes('status --json')) {
+          return JSON.stringify({ loggedIn: true, username: 'dan@acme.example', tenantId: 'tenant-1', userObjectId: 'aad-owner-1' });
+        }
+        if (c.includes('login.microsoftonline.com')) return 'eyJfake.bot.token';
+        // /members is a sub-path of /v3/conversations — match it FIRST
+        if (c.includes('/members')) return JSON.stringify({ id: '29:owner-xyz', name: 'Dan Mill' });
+        if (c.includes('/v3/conversations')) return 'a:1conv';
+        if (c.includes('node -e')) return EXPECTED_PLATFORM_ID;
       },
       execStream: async (cmd) => {
         steps.push(cmd);
         return { ok: true, fields: { STATUS: 'success' } };
       },
       resolveRemote: () => 'origin',
-      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw' },
+      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw', signout: 'yes' },
       confirm: async (m) => {
         log.push(`confirm:${m}`);
         return true;
@@ -232,8 +244,14 @@ describe('runChannelSkill adapter (Option A)', () => {
     // the prompted name, and the unconditional single-tenant default…
     expect(log.some((c) => c.includes('--endpoint "https://acme.example/webhook/teams"'))).toBe(true);
     expect(log.some((c) => c.includes('--name "NanoClaw"') && c.includes('--sign-in-audience myOrg'))).toBe(true);
-    // …the M365 session was signed out once the bot existed (the adapter runs
-    // on the .env app credentials; the plaintext token cache must not linger)…
+    // …the DM-open chain resolved the wire inputs: the owner's 29: id from the
+    // conversation members (selected by AAD id) and the adapter-encoded
+    // platform id from the created conversation…
+    expect(res.vars.owner_handle).toBe('29:owner-xyz');
+    expect(res.vars.owner_name).toBe('Dan Mill');
+    expect(res.vars.platform_id).toBe(EXPECTED_PLATFORM_ID);
+    // …the M365 session was signed out on the operator's "yes" (the adapter
+    // runs on the .env app credentials; staying signed in is now a choice)…
     expect(log.some((c) => c.includes('/bin/teams" logout'))).toBe(true);
     // …the captured credentials landed in .env with the safe SingleTenant pairing…
     const env = readFileSync(join(root, '.env'), 'utf8');
@@ -255,6 +273,64 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(fullyApplied(res)).toBe(true);
   });
 
+
+  // The resolved leg of wireIfResolved, driven with a minimal fixture skill
+  // (the real teams document needs a streaming exec runChannelSkill doesn't
+  // expose): when the skill binds owner_handle + platform_id, the adapter asks
+  // nothing extra (agentName/role injected) and reaches the shared wire with
+  // the composed teams user id.
+  const wireChannel = 'wiretest';
+  const wireSkillDir = join(process.cwd(), '.claude/skills', `add-${wireChannel}`);
+  afterEach(() => rmSync(wireSkillDir, { recursive: true, force: true }));
+
+  it('wireIfResolved: a run that resolves owner_handle + platform_id wires through init-first-agent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rcs-wiretest-'));
+    writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
+    writeFileSync(join(root, '.env'), '');
+    mkdirSync(wireSkillDir, { recursive: true });
+    writeFileSync(
+      join(wireSkillDir, 'SKILL.md'),
+      [
+        `# add ${wireChannel}`,
+        '',
+        '## Resolve',
+        '```nc:run capture:owner_handle effect:fetch',
+        'echo-owner',
+        '```',
+        '```nc:run capture:platform_id effect:fetch',
+        'echo-platform',
+        '```',
+        '',
+      ].join('\n'),
+    );
+
+    const wired: Array<Record<string, unknown>> = [];
+    await runChannelSkill(wireChannel, 'Dan Mill', {
+      projectRoot: root,
+      exec: (c) => {
+        if (c === 'echo-owner') return '29:owner-xyz\n';
+        if (c === 'echo-platform') return 'teams:enc-conv:enc-url\n';
+      },
+      resolveRemote: () => 'origin',
+      wireIfResolved: true,
+      agentName: 'Nano',
+      role: 'owner',
+      wire: (a) => {
+        wired.push(a);
+        return true;
+      },
+    });
+
+    expect(wired).toHaveLength(1);
+    expect(wired[0]).toMatchObject({
+      channel: wireChannel,
+      userId: `${wireChannel}:29:owner-xyz`,
+      platformId: 'teams:enc-conv:enc-url',
+      displayName: 'Dan Mill',
+      agentName: 'Nano',
+      role: 'owner',
+    });
+  });
 
   // The engine reads `.claude/skills/add-<channel>/SKILL.md` relative to cwd (the
   // repo root in tests — same as the real add-slack the test above drives), so a

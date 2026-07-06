@@ -555,9 +555,7 @@ async function main(): Promise<void> {
       }
       let result: void | typeof BACK_TO_CHANNEL_SELECTION;
       // Every channel now runs through the SKILL.md-driven flow — the whole
-      // connect+wire procedure lives in each add-<channel>/SKILL.md. Teams
-      // defers the wire (its platform_id only exists after the first inbound),
-      // so it installs + hands off rather than wiring inline.
+      // connect+wire procedure lives in each add-<channel>/SKILL.md.
       if (channelChoice === 'telegram') {
         result = await runChannelSkill('telegram', displayName!, { offerBack: true });
       } else if (channelChoice === 'discord') {
@@ -567,7 +565,10 @@ async function main(): Promise<void> {
       } else if (channelChoice === 'signal') {
         result = await runChannelSkill('signal', displayName!, { offerBack: true });
       } else if (channelChoice === 'teams') {
-        result = await runChannelSkill('teams', displayName!, { deferWire: true, offerBack: true });
+        // Fresh create resolves the owner DM proactively and wires inline (the
+        // welcome message reaches the human first); a drop-through re-run
+        // resolves nothing and falls back to the deferred-wire ending.
+        result = await runChannelSkill('teams', displayName!, { wireIfResolved: true, offerBack: true });
       } else if (channelChoice === 'slack') {
         result = await runChannelSkill('slack', displayName!, { offerBack: true });
       } else if (channelChoice === 'imessage') {
