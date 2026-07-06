@@ -246,11 +246,14 @@ curl -sf -X POST "https://smba.trafficmanager.net/teams/v3/conversations" -H "Au
 
 The adapter identifies inbound senders by their Bot Framework `29:` id, not
 the AAD id — the owner must be wired under that handle or their replies
-would not be recognized. The conversation's member list has it, and selecting
-by the AAD id doubles as an identity cross-check:
+would not be recognized. The conversation was created with exactly one
+member (the owner), so its member list is the owner by construction; the
+filter only guards against channels that list the bot itself (`28:` ids).
+(Don't select by `.aadObjectId` here — the field is not reliably present in
+this response and its GUID casing varies.)
 
 ```nc:run effect:fetch when:have_creds=no capture:owner_handle=.id,owner_name=.name validate:^.+$
-curl -sf "https://smba.trafficmanager.net/teams/v3/conversations/{{conversation_id}}/members" -H "Authorization: Bearer {{bot_token}}" | jq -er '[.[] | select(.aadObjectId == "{{owner_aad_id}}")][0] | {id, name}'
+curl -sf "https://smba.trafficmanager.net/teams/v3/conversations/{{conversation_id}}/members" -H "Authorization: Bearer {{bot_token}}" | jq -er '[.[] | select((.id // "") | startswith("28:") | not)][0] | {id, name: (.name // .givenName // "Teams user")}'
 ```
 
 Compose the platform id exactly as the adapter encodes thread ids
