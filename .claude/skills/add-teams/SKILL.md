@@ -238,15 +238,12 @@ bash setup/lib/restart.sh
 
 Unlike Discord or Slack, a Teams bot's platform ID isn't known until you DM the
 bot for the first time — the adapter derives it from the inbound activity. So
-this skill installs the adapter and stops here; you finish the wiring once the
-bot has seen its first message. Tell the user:
-
-```nc:operator
-The Teams adapter is live and the service is running. One thing is left: your Teams bot's platform ID (which NanoClaw needs to wire it to an agent group) only becomes known after you DM the bot for the first time. To finish:
-1. Find your bot in Teams (search by name, or via the app you just installed) and send it a message ("hi" is fine).
-2. Tail logs/nanoclaw.log for the inbound — the router auto-creates a row in messaging_groups in data/v2.db.
-3. Run scripts/init-first-agent.ts with --channel teams, the discovered platform_id, and your AAD user id — OR run /manage-channels to wire it interactively.
-```
+this skill installs the adapter and stops here; the setup wizard's closing
+"What's left" note carries the one remaining action. Applying this skill
+outside the wizard? Tell the user just this: **DM the bot once ("hi" is
+fine), then run `/init-first-agent` (or `/manage-channels`) with your coding
+agent.** Under the hood, that first inbound makes the router auto-create the
+messaging group row in `data/v2.db` — the row the wiring needs.
 
 ## Next Steps
 

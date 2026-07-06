@@ -28,17 +28,17 @@ function operatorBody(md: string, n: number): string {
 }
 
 describe('gatePolicy — §5.1 parity table (real skills)', () => {
-  it('teams: one gate — the install-in-Teams operator pauses before the restart', () => {
+  it('teams: one gate — the install-in-Teams operator pauses before the logout+restart', () => {
     // Operators in order (CLI-first flow): prerequisites, install-in-Teams
-    // (when:have_creds=no), final handoff.
+    // (when:have_creds=no). The final finish-wiring handoff is prose only —
+    // the setup wizard's closing "What's left" note carries it instead.
     const d = decisions(loadSkill('teams'));
-    expect(d).toHaveLength(3);
+    expect(d).toHaveLength(2);
     expect(d.map((g) => g.needsConfirm)).toEqual([
       false, // prereqs → prompt public_url (prompt is the barrier)
-      true, //  install-in-Teams → run effect:restart
-      false, // final handoff → end of document
+      true, //  install-in-Teams → run effect:external (logout) then restart
     ]);
-    // Completed-work flavor (restart, not effect:step).
+    // Completed-work flavor (external/restart, not effect:step).
     expect(d[1].flavor).toBe('completed');
   });
 
@@ -142,7 +142,6 @@ describe('extractOfferUrl — §5.2 inventory', () => {
     expect(operatorBody(md, 1)).toContain('{{install_link}}');
     expect(extractOfferUrl(operatorBody(md, 0))).toBeUndefined(); // prereqs
     expect(extractOfferUrl(operatorBody(md, 1))).toBeUndefined(); // install-in-Teams
-    expect(extractOfferUrl(operatorBody(md, 2))).toBeUndefined(); // final handoff
   });
 
   it('slack — the <your-public-host> placeholder is EXCLUDED (normative negative fixture)', () => {

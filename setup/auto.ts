@@ -678,7 +678,7 @@ async function main(): Promise<void> {
     // No welcome DM exists yet — the one remaining action is the last thing
     // on screen, in the same bright framed style as the "go say hi" banner.
     note(
-      `${brandBold('→')} ${k.bold('Finish wiring: DM your bot once, then run /init-first-agent (or /manage-channels).')}`,
+      `${brandBold('→')} ${k.bold('Finish wiring: DM your bot once, then run /init-first-agent (or /manage-channels) with your coding agent.')}`,
       "What's left",
     );
     p.outro(k.green("You're set — one DM to go."));
