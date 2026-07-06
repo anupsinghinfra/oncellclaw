@@ -642,6 +642,14 @@ async function main(): Promise<void> {
       p.outro(k.yellow('Almost there. A few things still need your attention.'));
       return;
     }
+    // Deferred wire (Teams): verify passes with zero groups because the
+    // platform id only exists after the first DM — remind, don't alarm.
+    if (res.terminal?.fields.WIRING === 'pending_first_dm') {
+      note(
+        '• Finish wiring: DM your bot once, then run /init-first-agent (or /manage-channels).',
+        "What's left",
+      );
+    }
   }
 
   const rows: [string, string][] = [
