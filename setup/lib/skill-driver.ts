@@ -282,7 +282,20 @@ export function hostExecStream(projectRoot: string): (cmd: string) => Promise<St
     new Promise((resolve) => {
       const child = spawn('bash', ['-c', cmd], {
         cwd: projectRoot,
-        env: { ...process.env, PATH: `${join(projectRoot, 'bin')}:${process.env.PATH ?? ''}` },
+        env: {
+          ...process.env,
+          PATH: `${join(projectRoot, 'bin')}:${process.env.PATH ?? ''}`,
+          // A step renders curated operator UI (a code card, a QR) — the host
+          // logger's info noise doesn't belong on the wizard screen, and it
+          // always emits ANSI so it can't be filtered by stream. Warnings and
+          // errors still pass. An operator-set LOG_LEVEL wins (debugging).
+          LOG_LEVEL: process.env.LOG_LEVEL ?? 'warn',
+          // The child's stdout is a pipe, so picocolors would strip its clack
+          // rendering to bare box chars that clash with the wizard theme.
+          // When the OPERATOR's terminal is a real TTY, the teed lines land
+          // there — force color so the child's card matches the parent.
+          ...(process.stdout.isTTY ? { FORCE_COLOR: '1' } : {}),
+        },
         stdio: ['inherit', 'pipe', 'pipe'],
       });
       const blocks: Array<{ fields: Record<string, string> }> = [];

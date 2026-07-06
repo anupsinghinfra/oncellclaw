@@ -148,6 +148,20 @@ describe('thin skill driver', () => {
     expect(out.fields.PLATFORM_ID).toBe('telegram:42');
   });
 
+  it('hostExecStream children run with LOG_LEVEL=warn — host logger info noise stays off the wizard', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'driver-loglevel-'));
+    const prev = process.env.LOG_LEVEL;
+    delete process.env.LOG_LEVEL; // simulate an operator who didn't set one
+    try {
+      const out = await hostExecStream(root)(
+        'echo "=== NANOCLAW SETUP: ENV ==="; echo "STATUS: success"; echo "LVL: $LOG_LEVEL"; echo "=== END ==="',
+      );
+      expect(out.fields.LVL).toBe('warn');
+    } finally {
+      if (prev !== undefined) process.env.LOG_LEVEL = prev;
+    }
+  });
+
   function reuseScratch(): { root: string; skill: string } {
     const root = mkdtempSync(join(tmpdir(), 'reuse-'));
     const skill = mkdtempSync(join(tmpdir(), 'reuse-skill-'));
