@@ -126,6 +126,9 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(log.some((c) => c.includes('pnpm add @chat-adapter/teams'))).toBe(true);
     expect(log.some((c) => c.includes('app create'))).toBe(false);
     expect(log.some((c) => c.includes('login'))).toBe(false);
+    // …no logout either — the drop-through path never signed in, and must not
+    // sign out a session the operator may be using for something else…
+    expect(log.some((c) => c.includes('logout'))).toBe(false);
     // …the Teams CLI install is also skipped (nothing to create)…
     expect(log.some((c) => c.includes('npm install -g @microsoft/teams.cli'))).toBe(false);
     // …the service still restarts (adapter + existing credentials load)…
@@ -229,6 +232,9 @@ describe('runChannelSkill adapter (Option A)', () => {
     // the prompted name, and the unconditional single-tenant default…
     expect(log.some((c) => c.includes('--endpoint "https://acme.example/webhook/teams"'))).toBe(true);
     expect(log.some((c) => c.includes('--name "NanoClaw"') && c.includes('--sign-in-audience myOrg'))).toBe(true);
+    // …the M365 session was signed out once the bot existed (the adapter runs
+    // on the .env app credentials; the plaintext token cache must not linger)…
+    expect(log.some((c) => c.includes('/bin/teams" logout'))).toBe(true);
     // …the captured credentials landed in .env with the safe SingleTenant pairing…
     const env = readFileSync(join(root, '.env'), 'utf8');
     expect(env).toContain('TEAMS_APP_ID=12345678-1234-1234-1234-123456789abc');

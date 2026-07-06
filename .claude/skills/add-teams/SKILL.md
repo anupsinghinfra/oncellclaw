@@ -215,6 +215,20 @@ Install the bot into Teams:
 Once the app shows up in your Teams sidebar (or app list), continue.
 ```
 
+### Sign out of the Teams CLI
+
+The Microsoft 365 session was only needed to create the bot — the running
+adapter authenticates with the app credentials in `.env`, never with your
+account. On a headless box that session is a plaintext token file, so it
+doesn't stay on disk once setup is done. Idempotent (already signed out is a
+no-op). Any `teams …` command you run later — the Troubleshooting recovery
+commands, `teams app rsc add`, an endpoint update — just needs a fresh
+`teams login` first (a ~30-second device code).
+
+```nc:run effect:external when:have_creds=no
+"$(npm prefix -g 2>/dev/null)/bin/teams" logout
+```
+
 ## Restart
 
 Restart the service so it loads the Teams adapter and the credentials you just
