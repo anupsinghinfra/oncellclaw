@@ -156,7 +156,10 @@ first on Linux: `sudo apt-get install -y libsecret-1-0` (Debian/Ubuntu). A
 "libsecret not found — token cache will be stored unencrypted" warning on a
 headless box is expected and harmless even WITH libsecret installed: there is
 no keyring daemon to talk to, so the CLI uses its plaintext cache file, which
-persists fine (encryption-at-rest is all you give up). The
+persists fine (encryption-at-rest is all you give up). The login output may
+also report "Azure CLI: not installed" — informational only; this flow
+creates a Teams-managed bot precisely so the Azure CLI is never needed (it
+only matters for `--azure` bots and the manual portal path). The
 step below verifies persistence by re-reading the session from a fresh
 process after login. In an interactive terminal the login opens a browser;
 on a headless box (SSH) it prints a device code — open
