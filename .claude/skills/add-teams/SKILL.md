@@ -97,7 +97,7 @@ Before creating anything, tell the user:
 ```nc:operator when:have_creds=no
 Confirm you have everything Teams setup needs:
 1. A Microsoft 365 account that can create Entra app registrations and upload custom apps (sideloading) — free personal Teams does NOT qualify; you need a Microsoft 365 Business / EDU / developer tenant.
-2. A way to expose an HTTPS endpoint that forwards to this machine's webhook port 3000 (ngrok, a Cloudflare Tunnel, or a reverse-proxied VPS). Start it now if it isn't running — e.g. `ngrok http 3000` — the create step needs the URL up front.
+2. A way to expose an HTTPS endpoint that forwards to this machine's webhook port 3000 (e.g. a Cloudflare Tunnel, or a reverse-proxied VPS). Start it now if it isn't running — e.g. `cloudflared tunnel --url http://localhost:3000` — the create step needs the URL up front.
 Note: the bot is created single-tenant (only your own Microsoft 365 tenant can install it) — the right default for a self-hosted assistant. If you need a bot other tenants can install, set it up manually via the Alternatives section of this skill instead.
 ```
 
@@ -108,7 +108,7 @@ reach this machine's webhook server (port 3000, configurable via
 `WEBHOOK_PORT`) at `/webhook/teams`.
 
 ```nc:prompt public_url when:have_creds=no validate:^https:// normalize:rstrip-slash
-Paste the public https:// base URL that forwards to this machine's port 3000 (no trailing path) — e.g. https://abcd1234.ngrok.io from `ngrok http 3000`.
+Paste the public https:// base URL that forwards to this machine's port 3000 (no trailing path) — e.g. https://your-tunnel.trycloudflare.com from `cloudflared tunnel --url http://localhost:3000`.
 ```
 
 ### App name
@@ -421,7 +421,8 @@ re-run this skill.
    `teams app get <teams-app-id> --install-link`.
 2. The tunnel is up and the messaging endpoint matches it — the endpoint must
    be `https://<your-domain>/webhook/teams`, and your tunnel (e.g.
-   `ngrok http 3000`) must be forwarding to this machine's port 3000. Check
+   `cloudflared tunnel --url http://localhost:3000`) must be forwarding to
+   this machine's port 3000. Check
    with `teams app doctor <teams-app-id>` (CLI-created bots) or Azure
    Bot → **Configuration** (manual path).
 3. The adapter started: `grep -i teams logs/nanoclaw.log | tail`.
