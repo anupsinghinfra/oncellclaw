@@ -588,6 +588,12 @@ async function main(): Promise<void> {
     }
   }
 
+  // Deferred wire (Teams): verify passes with zero groups because the
+  // platform id only exists after the first DM. Tracked here so the ENDING
+  // changes too — the last box must be the one remaining action, not a
+  // premature "your assistant is saying hi" (no welcome DM exists yet).
+  let wiringPending = false;
+
   if (!skip.has('verify')) {
     const res = await runQuietStep('verify', {
       running: 'Making sure everything works together…',
@@ -642,14 +648,7 @@ async function main(): Promise<void> {
       p.outro(k.yellow('Almost there. A few things still need your attention.'));
       return;
     }
-    // Deferred wire (Teams): verify passes with zero groups because the
-    // platform id only exists after the first DM — remind, don't alarm.
-    if (res.terminal?.fields.WIRING === 'pending_first_dm') {
-      note(
-        '• Finish wiring: DM your bot once, then run /init-first-agent (or /manage-channels).',
-        "What's left",
-      );
-    }
+    wiringPending = res.terminal?.fields.WIRING === 'pending_first_dm';
   }
 
   const rows: [string, string][] = [
@@ -675,7 +674,15 @@ async function main(): Promise<void> {
   phEmit('setup_completed', { duration_ms: Date.now() - RUN_START });
 
   const dmTarget = channelDmLabel(channelChoice);
-  if (dmTarget) {
+  if (wiringPending) {
+    // No welcome DM exists yet — the one remaining action is the last thing
+    // on screen, in the same bright framed style as the "go say hi" banner.
+    note(
+      `${brandBold('→')} ${k.bold('Finish wiring: DM your bot once, then run /init-first-agent (or /manage-channels).')}`,
+      "What's left",
+    );
+    p.outro(k.green("You're set — one DM to go."));
+  } else if (dmTarget) {
     // Bright framed banner (not dim) — the whole point of the feedback was
     // that the welcome-message signal was too easy to miss. Use p.note so it
     // renders with a visible box, cyan-bold the directive line, and put it
