@@ -149,14 +149,10 @@ hand, use that path too if plain `teams` isn't found.
 ### Sign in to Microsoft 365
 
 Every `teams` command is a separate process, so the sign-in must survive into
-the next one via the CLI's on-disk token cache. On Linux that cache needs the
-libsecret library — without it the session silently evaporates when the login
-process exits, and the create step fails with `AUTH_REQUIRED`. Install it
-first on Linux: `sudo apt-get install -y libsecret-1-0` (Debian/Ubuntu). A
-"libsecret not found — token cache will be stored unencrypted" warning on a
-headless box is expected and harmless even WITH libsecret installed: there is
-no keyring daemon to talk to, so the CLI uses its plaintext cache file, which
-persists fine (encryption-at-rest is all you give up). The login output may
+the next one via the CLI's on-disk token cache. A "libsecret not found —
+token cache will be stored unencrypted" warning here is safe to ignore: the
+CLI falls back to a plaintext cache file that persists fine, and setup signs
+the session out at the end anyway. The login output may
 also report "Azure CLI: not installed" — informational only; this flow
 creates a Teams-managed bot precisely so the Azure CLI is never needed (it
 only matters for `--azure` bots and the manual portal path). The
@@ -387,6 +383,11 @@ and user level; the login output prints the same check.
 Free personal Teams does not support sideloading at all — use a Microsoft 365
 Business / EDU / developer tenant.
 
+The login step's sideloading probe is **advisory** — policy edits can take
+hours to propagate and the probe has been seen flapping between runs on the
+same account. The authoritative test is whether the install link's Add
+actually works; only act on the probe if the install itself refuses.
+
 ### `teams: command not found`
 
 The CLI installed fine but npm's global bin directory isn't on your PATH — a
@@ -400,18 +401,14 @@ they invoke the absolute path.
 The sign-in didn't persist: each `teams` command is a separate process, and
 when the CLI's credential store can't load it silently falls back to an
 in-memory cache that dies with the login process. Symptom check:
-`teams status` says logged out right after a login succeeded. Two causes:
-
-- **CLI installed as a pnpm workspace dependency**: pnpm's supply-chain policy
-  skips dependency build scripts, so keytar (the CLI's native credential
-  store) never gets its binary and the whole store fails to load. Use the
-  global npm install this skill performs — and `pnpm uninstall
-  @microsoft/teams.cli` if a workspace copy lingers, so `teams` resolves to
-  the global one.
-- **libsecret missing (Linux)**: keytar links against it at load time. Fix:
-  `sudo apt-get install -y libsecret-1-0` (Debian/Ubuntu). On a headless box
-  with no keyring daemon the CLI then falls back to a plaintext cache file
-  (with a warning) — expected.
+`teams status` says logged out right after a login succeeded. The known
+cause: the **CLI was installed as a pnpm workspace dependency** — pnpm's
+supply-chain policy skips dependency build scripts, so keytar (the CLI's
+native credential store) never gets its binary and the whole store fails to
+load. Use the global npm install this skill performs — and `pnpm uninstall
+@microsoft/teams.cli` if a workspace copy lingers, so `teams` resolves to
+the global one. (The "libsecret not found → stored unencrypted" warning is
+NOT this failure — that fallback persists fine and is safe to ignore.)
 
 After fixing, sign in again and confirm `teams status` shows logged in, then
 re-run this skill.
