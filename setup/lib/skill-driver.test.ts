@@ -118,25 +118,25 @@ describe('thin skill driver', () => {
     expect(starts).toEqual([{ kind: 'run', label: 'Wire' }]);
   });
 
-  it('hostExec puts the project bin/ on PATH so a bare command resolves to it', () => {
+  it('hostExec puts the project bin/ on PATH so a bare command resolves to it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'driver-bin-'));
     mkdirSync(join(root, 'bin'));
     writeFileSync(join(root, 'bin/greet'), '#!/usr/bin/env bash\necho hi-from-bin\n');
     chmodSync(join(root, 'bin/greet'), 0o755);
-    const out = hostExec(root)('greet'); // bare name, not ./bin/greet
+    const out = await hostExec(root)('greet'); // bare name, not ./bin/greet
     expect(String(out).trim()).toBe('hi-from-bin');
   });
 
-  it('hostExec returns stdout so a capture run can bind it', () => {
+  it('hostExec returns stdout so a capture run can bind it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'driver-cap-'));
-    expect(String(hostExec(root)('echo D0CHANNEL')).trim()).toBe('D0CHANNEL');
+    expect(String(await hostExec(root)('echo D0CHANNEL')).trim()).toBe('D0CHANNEL');
   });
 
-  it('hostExec recomposes a failure as `exit <code>: <first stderr line>` with the full stderr kept below', () => {
+  it('hostExec recomposes a failure as `exit <code>: <first stderr line>` with the full stderr kept below', async () => {
     const root = mkdtempSync(join(tmpdir(), 'driver-fail-'));
-    const run = (): string => hostExec(root)('echo "boom: first line" >&2; echo "stack line two" >&2; exit 7');
-    expect(run).toThrow(/^exit 7: boom: first line/); // one-line consumers read this
-    expect(run).toThrow(/stack line two/); // full stderr survives for the agentTask reason
+    const run = (): Promise<string> => hostExec(root)('echo "boom: first line" >&2; echo "stack line two" >&2; exit 7');
+    await expect(run).rejects.toThrow(/^exit 7: boom: first line/); // one-line consumers read this
+    await expect(run).rejects.toThrow(/stack line two/); // full stderr survives for the agentTask reason
   });
 
   it('hostExecStream runs a step and captures the terminal status block fields (for effect:step)', async () => {

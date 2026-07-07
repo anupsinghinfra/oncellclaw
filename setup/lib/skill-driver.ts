@@ -244,29 +244,34 @@ async function reuseFromEnv(
  * `run capture:<var>` can bind it. Puts the project's `bin/` on PATH so a bare
  * `ncl …` in a wire directive resolves to `bin/ncl` even when it isn't
  * symlinked onto the operator's PATH.
+ *
+ * Async (spawn, not execSync) so the step spinner keeps animating: a sync exec
+ * blocks the event loop for the whole command and freezes every ticker in the
+ * process. A failure rejects with the FIRST line as the actionable summary —
+ * `exit <code>: <first stderr line>` — and the full stderr kept below, so
+ * one-line consumers (run-channel-skill's bounce warn) stay readable while the
+ * agentTask reason an agent fixes from still carries everything.
  */
-export function hostExec(projectRoot: string): (cmd: string) => string {
-  return (cmd) => {
-    try {
-      return execSync(cmd, {
+export function hostExec(projectRoot: string): (cmd: string) => Promise<string> {
+  return (cmd) =>
+    new Promise((resolve, reject) => {
+      const child = spawn('bash', ['-c', cmd], {
         cwd: projectRoot,
-        shell: '/bin/bash',
-        encoding: 'utf8',
         env: { ...process.env, PATH: `${join(projectRoot, 'bin')}:${process.env.PATH ?? ''}` },
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
-    } catch (e) {
-      // Recompose the failure so its FIRST line is the actionable summary —
-      // `exit <code>: <first stderr line>` — with the full stderr kept below.
-      // One-line consumers (run-channel-skill's bounce warn) stay readable;
-      // the agentTask reason an agent fixes from still carries everything.
-      // (execSync's own message leads with "Command failed: <cmd>", burying
-      // the error under the command text and a stack.)
-      const err = e as Partial<{ status: number | null; stderr: string | Buffer; message: string }>;
-      const stderr = String(err.stderr ?? '').trim();
-      const head = stderr.split('\n').map((l) => l.trim()).find(Boolean) ?? (err.message ?? String(e)).split('\n')[0];
-      throw new Error(`exit ${err.status ?? '?'}: ${head}${stderr ? `\n${stderr}` : ''}`);
-    }
-  };
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (c: Buffer) => { out += c.toString('utf8'); });
+      child.stderr.on('data', (c: Buffer) => { err += c.toString('utf8'); });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) return resolve(out);
+        const stderr = err.trim();
+        const head = stderr.split('\n').map((l) => l.trim()).find(Boolean) ?? 'command failed';
+        reject(new Error(`exit ${code ?? '?'}: ${head}${stderr ? `\n${stderr}` : ''}`));
+      });
+    });
 }
 
 /**
@@ -398,7 +403,7 @@ function defaultOnEvent(
       return;
     }
     // operator: note → URL offer → natural-barrier confirm.
-    p.note(e.text, 'Do this');
+    p.note(e.text, 'Your turn');
     const url = extractOfferUrl(e.text);
     if (url !== undefined && (await confirm(`Open ${url} in your browser?`))) await open(url);
     const gate = gates.get(e.line);
@@ -429,7 +434,7 @@ export interface RunSkillOptions {
    */
   resolveInput?: (name: string, meta: InputMeta) => Promise<string | undefined>;
   /** Defaults to `hostExec`. */
-  exec?: (cmd: string) => string | void;
+  exec?: (cmd: string) => string | void | Promise<string | void>;
   /** Defaults to `hostExecStream`. Streaming exec for `nc:run effect:step`. */
   execStream?: (cmd: string) => Promise<StepOutcome>;
   /** Defaults to the fork-aware channels-branch resolver. */
