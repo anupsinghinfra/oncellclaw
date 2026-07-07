@@ -273,58 +273,12 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(fullyApplied(res)).toBe(true);
   });
 
-  // A "no" at the wiring confirm plus a "skip" at the ID offer skips the whole
-  // DM-open chain: no Bot Framework token is fetched, no conversation is
-  // created, and the wire inputs stay unresolved — the wizard's deferred
-  // (DM-first) ending takes over. The create/install/env half still completes.
-  it('Teams fresh create, wiring declined + ID skipped: the DM-open chain never runs and nothing resolves', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'rcs-teams-decline-'));
-    mkdirSync(join(root, 'src/channels'), { recursive: true });
-    writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
-    writeFileSync(join(root, '.env'), '');
-    writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
-
-    const log: string[] = [];
-    const res = await runSkill('.claude/skills/add-teams', {
-      projectRoot: root,
-      exec: (c) => {
-        log.push(`exec:${c}`);
-        if (c.includes('TEAMS_APP_ID=.')) return 'no';
-        if (c.includes(' app create ')) {
-          return JSON.stringify({
-            teamsAppId: 'tapp-123',
-            installLink: 'https://teams.microsoft.com/l/app/tapp-123',
-            credentials: { CLIENT_ID: 'app-1', CLIENT_SECRET: 'a-much-longer-app-secret', TENANT_ID: 'tenant-1' },
-          });
-        }
-        if (c.includes('status --json')) {
-          return JSON.stringify({ loggedIn: true, username: 'dan@acme.example', userObjectId: 'aad-owner-1' });
-        }
-      },
-      execStream: async () => ({ ok: true, fields: { STATUS: 'success' } }),
-      resolveRemote: () => 'origin',
-      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw', wire_owner: 'no', wire_target: 'skip', signout: 'yes' },
-      confirm: async () => true,
-      openUrl: async () => {},
-    });
-
-    // The chain never started: no token fetch, no conversation create…
-    expect(log.some((c) => c.includes('login.microsoftonline.com'))).toBe(false);
-    expect(log.some((c) => c.includes('/v3/conversations'))).toBe(false);
-    // …the wire inputs stayed unresolved (wireIfResolved will defer)…
-    expect(res.vars.owner_handle).toBeUndefined();
-    expect(res.vars.platform_id).toBeUndefined();
-    // …while the credentials still landed and nothing bounced to an agent.
-    expect(readFileSync(join(root, '.env'), 'utf8')).toContain('TEAMS_APP_ID=app-1');
-    expect(res.agentTasks).toEqual([]);
-    expect(fullyApplied(res)).toBe(true);
-  });
-
-  // A "no" at the wiring confirm plus a provided Entra object ID rebinds the
-  // wiring target and re-enters the yes branch: the conversation is created
-  // with the PROVIDED id (not the CLI account's), and the wire inputs resolve
-  // to that person — the assistant messages the desired user first.
-  it('Teams fresh create, wiring a provided Entra object ID: the chain runs against the target user', async () => {
+  // A no at the wiring confirm then "other-account" collects a different
+  // user's Entra object ID, rebinds the wiring target, and re-enters the yes
+  // branch: the conversation is created with the PROVIDED id (not the CLI
+  // account's), and the wire inputs resolve to that person — the assistant
+  // messages the desired user first. There is no skip: someone is always wired.
+  it('Teams fresh create, wiring another account by Entra object ID: the chain runs against the target user', async () => {
     const root = mkdtempSync(join(tmpdir(), 'rcs-teams-target-'));
     mkdirSync(join(root, 'src/channels'), { recursive: true });
     writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
@@ -362,7 +316,7 @@ describe('runChannelSkill adapter (Option A)', () => {
         public_url: 'https://acme.example',
         app_name: 'NanoClaw',
         wire_owner: 'no',
-        wire_target: 'provide',
+        wire_target: 'other-account',
         target_aad_id: TARGET_AAD,
         signout: 'yes',
       },
@@ -378,6 +332,61 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(res.vars.owner_handle).toBe('29:target-xyz');
     expect(res.vars.owner_name).toBe('Desired Person');
     expect(res.vars.platform_id).toBe(EXPECTED_PLATFORM_ID);
+    expect(res.agentTasks).toEqual([]);
+    expect(fullyApplied(res)).toBe(true);
+  });
+
+  // A hesitant no recovered via "logged-in-account": the rebind flips the
+  // branch back to yes with the CLI account's own id — same outcome as a yes
+  // at the first ask, no ID ever typed or shown.
+  it('Teams fresh create, no then logged-in-account: the chain runs against the CLI account', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rcs-teams-loggedin-'));
+    mkdirSync(join(root, 'src/channels'), { recursive: true });
+    writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
+    writeFileSync(join(root, '.env'), '');
+    writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
+
+    const log: string[] = [];
+    const res = await runSkill('.claude/skills/add-teams', {
+      projectRoot: root,
+      exec: (c) => {
+        log.push(`exec:${c}`);
+        if (c.includes('TEAMS_APP_ID=.')) return 'no'; // probe first — it also contains "echo yes"
+        if (c.trim() === 'echo yes') return 'yes'; // the logged-in-account rebind
+        if (c.includes(' app create ')) {
+          return JSON.stringify({
+            teamsAppId: 'tapp-123',
+            installLink: 'https://teams.microsoft.com/l/app/tapp-123',
+            credentials: { CLIENT_ID: 'app-1', CLIENT_SECRET: 'a-much-longer-app-secret', TENANT_ID: 'tenant-1' },
+          });
+        }
+        if (c.includes('status --json')) {
+          return JSON.stringify({ loggedIn: true, username: 'dan@acme.example', userObjectId: 'aad-owner-1' });
+        }
+        if (c.includes('login.microsoftonline.com')) return 'eyJfake.bot.token';
+        if (c.includes('/members')) return JSON.stringify({ id: '29:owner-xyz', name: 'Dan Mill' });
+        if (c.includes('/v3/conversations')) return 'a:3conv';
+        if (c.includes('node -e')) return 'teams:b64:b64';
+      },
+      execStream: async () => ({ ok: true, fields: { STATUS: 'success' } }),
+      resolveRemote: () => 'origin',
+      inputs: {
+        public_url: 'https://acme.example',
+        app_name: 'NanoClaw',
+        wire_owner: 'no',
+        wire_target: 'logged-in-account',
+        signout: 'yes',
+      },
+      confirm: async () => true,
+      openUrl: async () => {},
+    });
+
+    // The conversation was created with the CLI account's own id…
+    const create = log.find((c) => c.includes('/v3/conversations') && !c.includes('/members'));
+    expect(create).toContain('aad-owner-1');
+    // …and the wire inputs resolved exactly as a first-ask yes would.
+    expect(res.vars.owner_handle).toBe('29:owner-xyz');
+    expect(res.vars.platform_id).toBe('teams:b64:b64');
     expect(res.agentTasks).toEqual([]);
     expect(fullyApplied(res)).toBe(true);
   });

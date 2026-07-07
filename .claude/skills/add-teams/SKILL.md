@@ -210,11 +210,11 @@ from the CLI session, so this runs before the sign-out step below:
 
 ### Confirm the wiring target
 
-Nothing is wired without a confirmed target. Show the human who was detected,
-then ask. A no shows their own Entra object ID (already captured from the CLI
-session) and offers entering an ID — theirs or a different Teams user's;
-skipping instead finishes setup unwired — the wizard's closing note then
-explains the DM-first path:
+Nothing is wired without a confirmed target, and someone is always wired —
+there is no skip. The account signed into the Teams CLI is often NOT the
+person setting up NanoClaw, so a no leads to a clarifying choice: wire the
+logged-in Teams user after all, or a different Teams user by Microsoft Entra
+object ID. Identities are shown by sign-in name, never a raw ID:
 
 ```nc:operator when:have_creds=no
 Detected the account that created the bot: {{owner_upn}}. Wiring the assistant to it means its first message arrives in that account's Teams DMs.
@@ -225,26 +225,29 @@ Wire the assistant to this account?
 ```
 
 ```nc:operator when:wire_owner=no
-This is your Teams user ID (Microsoft Entra object ID): {{owner_aad_id}}
-- To wire to this ID after all, choose "provide" and paste the ID shown above.
-- Want a different Teams user? Get their ID from entra.microsoft.com > Users > (person) > Overview > Object ID, or Teams admin center > Manage users, then choose "provide".
-- No ID at hand? Choose "skip" — setup finishes unwired, and the closing note explains how to wire with a single DM.
+You're currently logged in to Teams as {{owner_upn}}.
+- To wire the assistant to this logged-in Teams user, choose "logged-in-account".
+- To wire a different Teams user, get their Microsoft Entra object ID — found at entra.microsoft.com > Users > (person) > Overview > Object ID, or Teams admin center > Manage users — and choose "other-account". Once wired, the assistant messages them first.
 ```
 
-```nc:prompt wire_target when:wire_owner=no validate:^(provide|skip)$ normalize:lower
-Provide an Entra object ID now, or skip and wire after setup?
+```nc:prompt wire_target when:wire_owner=no validate:^(logged-in-account|other-account)$ normalize:lower
+Which Teams user should the assistant be wired to?
 ```
 
-```nc:prompt target_aad_id when:wire_target=provide validate:^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ normalize:trim
+```nc:prompt target_aad_id when:wire_target=other-account validate:^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ normalize:trim
 Paste the Microsoft Entra object ID of the Teams user to wire (a GUID like 00000000-0000-0000-0000-000000000000).
 ```
 
-A provided ID re-enters the exact same path as a yes above — rebind the
+Either choice re-enters the exact same path as a yes above — rebind the
 wiring target and flip the branch, so the link chain below needs no second
 copy per branch:
 
-```nc:run when:wire_target=provide capture:owner_aad_id=.aad,wire_owner=.wire validate:^.+$
+```nc:run when:wire_target=other-account capture:owner_aad_id=.aad,wire_owner=.wire validate:^.+$
 printf '{"aad":"%s","wire":"yes"}' "{{target_aad_id}}"
+```
+
+```nc:run when:wire_target=logged-in-account capture:wire_owner validate:^yes$
+echo yes
 ```
 
 ### Install the app in Teams
@@ -344,10 +347,9 @@ skill outside the wizard? Run the same wire yourself:
 pnpm exec tsx scripts/init-first-agent.ts --channel teams --user-id "teams:<owner_handle>" --platform-id "<platform_id>" --display-name "<the human's name>" --agent-name "<assistant name>" --role owner
 ```
 
-**Fallback (re-runs, a skipped wiring confirm, or the link step failed):**
-with credentials already in `.env` the resolve steps are skipped, so there is
-nothing new to wire — the first run's wiring still stands. If the install was
-never wired at all — including a deliberate skip at the confirm — the
+**Fallback (re-runs, or the link step failed):** with credentials already in
+`.env` the resolve steps are skipped, so there is nothing new to wire — the
+first run's wiring still stands. If the install was never wired at all, the
 DM-first path always works: DM the bot once ("hi" is fine) — the router
 auto-creates the messaging group row in `data/v2.db` from that first inbound
 — then run `/init-first-agent` (or `/manage-channels`) with your coding
