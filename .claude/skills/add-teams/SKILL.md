@@ -211,9 +211,10 @@ from the CLI session, so this runs before the sign-out step below:
 ### Confirm the wiring target
 
 Nothing is wired without a confirmed target. Show the human who was detected,
-then ask. A no offers wiring a **different** Teams user by Microsoft Entra
-object ID; skipping that too finishes setup unwired — the wizard's closing
-note then explains the DM-first path:
+then ask. A no shows their own Entra object ID (already captured from the CLI
+session) and offers entering an ID — theirs or a different Teams user's;
+skipping instead finishes setup unwired — the wizard's closing note then
+explains the DM-first path:
 
 ```nc:operator when:have_creds=no
 Detected the account that created the bot: {{owner_upn}}. Wiring the assistant to it means its first message arrives in that account's Teams DMs.
@@ -224,11 +225,14 @@ Wire the assistant to this account?
 ```
 
 ```nc:operator when:wire_owner=no
-To wire the assistant to a different Teams user (it messages them first), provide that person's Microsoft Entra object ID — found at entra.microsoft.com > Users > (person) > Overview > Object ID, or Teams admin center > Manage users. No ID at hand? Choose skip — setup finishes unwired, and the closing note explains how to wire with a single DM.
+This is your Teams user ID (Microsoft Entra object ID): {{owner_aad_id}}
+- To wire to this ID after all, choose "provide" and paste the ID shown above.
+- Want a different Teams user? Get their ID from entra.microsoft.com > Users > (person) > Overview > Object ID, or Teams admin center > Manage users, then choose "provide".
+- No ID at hand? Choose "skip" — setup finishes unwired, and the closing note explains how to wire with a single DM.
 ```
 
 ```nc:prompt wire_target when:wire_owner=no validate:^(provide|skip)$ normalize:lower
-Provide the Entra object ID now, or skip and wire after setup?
+Provide an Entra object ID now, or skip and wire after setup?
 ```
 
 ```nc:prompt target_aad_id when:wire_target=provide validate:^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ normalize:trim
