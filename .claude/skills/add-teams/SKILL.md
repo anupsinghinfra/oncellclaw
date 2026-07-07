@@ -97,7 +97,7 @@ Before creating anything, tell the user:
 ```nc:operator when:have_creds=no
 Confirm you have everything Teams setup needs:
 1. A Microsoft 365 account that can create Entra app registrations and upload custom apps (sideloading) — free personal Teams does NOT qualify; you need a Microsoft 365 Business / EDU / developer tenant.
-2. A way to expose an HTTPS endpoint that forwards to this machine's webhook port 3000 (e.g. a Cloudflare Tunnel, or a reverse-proxied VPS). Start it now if it isn't running — e.g. `cloudflared tunnel --url http://localhost:3000` — the create step needs the URL up front.
+2. A way to expose an HTTPS endpoint that forwards to this machine's webhook port 3000 (e.g. a Cloudflare Tunnel, or a reverse-proxied VPS). Start it now if it isn't running — e.g. `cloudflared tunnel --url http://localhost:3000` — the create step needs the URL up front. The next prompt asks for its public base URL: just the https:// origin, no trailing path.
 Note: the bot is created single-tenant (only your own Microsoft 365 tenant can install it) — the right default for a self-hosted assistant. If you need a bot other tenants can install, set it up manually via the Alternatives section of this skill instead.
 ```
 
@@ -108,7 +108,7 @@ reach this machine's webhook server (port 3000, configurable via
 `WEBHOOK_PORT`) at `/webhook/teams`.
 
 ```nc:prompt public_url when:have_creds=no validate:^https:// normalize:rstrip-slash
-Paste the public https:// base URL that forwards to this machine's port 3000 (no trailing path) — e.g. https://your-tunnel.trycloudflare.com from `cloudflared tunnel --url http://localhost:3000`.
+Paste your tunnel's public https:// URL — e.g. https://your-tunnel.trycloudflare.com
 ```
 
 ### App name
@@ -221,9 +221,10 @@ Install the bot into Teams:
 Once the app shows up in your Teams sidebar (or app list), continue.
 ```
 
-### Open the owner DM
+### Link the bot to your account
 
-Same move as Slack's `conversations.open` and Discord's `users/@me/channels`:
+Nothing to do in Teams yet — these are background API calls. Same move as
+Slack's `conversations.open` and Discord's `users/@me/channels`:
 create the bot↔owner 1:1 conversation proactively with the bot's own
 credentials, so the assistant messages the human first — nobody has to DM the
 bot to bootstrap it. This only works now that the app is installed (the step
@@ -280,7 +281,7 @@ commands (rotate secret, endpoint update, RSC — each just needs a fresh
 `teams login`, a ~30-second device code):
 
 ```nc:prompt signout when:have_creds=no validate:^(yes|no)$ normalize:lower
-Sign out of the Teams CLI now? The bot doesn't need this login to run. Answer "yes" to sign out (recommended on shared/headless boxes) or "no" to stay signed in for later teams CLI commands.
+Sign out of the Teams CLI now? The bot doesn't need this login to run — signing out is recommended on shared or headless boxes, and `teams login` gets you back any time.
 ```
 
 ```nc:run effect:external when:signout=yes
@@ -298,7 +299,7 @@ bash setup/lib/restart.sh
 
 ## Finish wiring
 
-On a fresh create, [Open the owner DM](#open-the-owner-dm) already resolved
+On a fresh create, [Link the bot to your account](#link-the-bot-to-your-account) already resolved
 everything the wire needs — `owner_handle` (the owner's `29:` id) and
 `platform_id` (the bot↔owner DM). The setup wizard wires automatically from
 those and the welcome message lands in the owner's Teams DMs. Applying this
@@ -308,7 +309,7 @@ skill outside the wizard? Run the same wire yourself:
 pnpm exec tsx scripts/init-first-agent.ts --channel teams --user-id "teams:<owner_handle>" --platform-id "<platform_id>" --display-name "<the human's name>" --agent-name "<assistant name>" --role owner
 ```
 
-**Fallback (re-runs, or the DM-open failed):** with credentials already in
+**Fallback (re-runs, or the link step failed):** with credentials already in
 `.env` the resolve steps are skipped, so there is nothing new to wire — the
 first run's wiring still stands. If the install was never wired at all, the
 DM-first path always works: DM the bot once ("hi" is fine) — the router
