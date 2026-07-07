@@ -210,10 +210,10 @@ from the CLI session, so this runs before the sign-out step below:
 
 ### Confirm the wiring target
 
-Nothing is wired without a yes here. Show the human who was detected, then
-ask — a no skips the whole [Link the bot to your account](#link-the-bot-to-your-account)
-chain, setup finishes unwired, and the note below explains how to wire the
-right person afterwards:
+Nothing is wired without a confirmed target. Show the human who was detected,
+then ask. A no offers wiring a **different** Teams user by Microsoft Entra
+object ID; skipping that too finishes setup unwired — the wizard's closing
+note then explains the DM-first path:
 
 ```nc:operator when:have_creds=no
 Detected the account that created the bot: {{owner_upn}}. Wiring the assistant to it means its first message arrives in that account's Teams DMs.
@@ -224,9 +224,23 @@ Wire the assistant to this account?
 ```
 
 ```nc:operator when:wire_owner=no
-Setup will finish without wiring. To wire the right Teams user afterwards:
-1. Easiest — no IDs needed: have that person DM the bot once in Teams ("hi" works). NanoClaw registers their identity and chat from that first message; then run /init-first-agent with your coding agent and pick them.
-2. To wire proactively instead (the assistant messages them first), your coding agent needs that person's Microsoft Entra object ID — found at entra.microsoft.com > Users > (person) > Overview > Object ID, or Teams admin center > Manage users. Hand it to /manage-channels.
+To wire the assistant to a different Teams user (it messages them first), provide that person's Microsoft Entra object ID — found at entra.microsoft.com > Users > (person) > Overview > Object ID, or Teams admin center > Manage users. No ID at hand? Choose skip — setup finishes unwired, and the closing note explains how to wire with a single DM.
+```
+
+```nc:prompt wire_target when:wire_owner=no validate:^(provide|skip)$ normalize:lower
+Provide the Entra object ID now, or skip and wire after setup?
+```
+
+```nc:prompt target_aad_id when:wire_target=provide validate:^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ normalize:trim
+Paste the Microsoft Entra object ID of the Teams user to wire (a GUID like 00000000-0000-0000-0000-000000000000).
+```
+
+A provided ID re-enters the exact same path as a yes above — rebind the
+wiring target and flip the branch, so the link chain below needs no second
+copy per branch:
+
+```nc:run when:wire_target=provide capture:owner_aad_id=.aad,wire_owner=.wire validate:^.+$
+printf '{"aad":"%s","wire":"yes"}' "{{target_aad_id}}"
 ```
 
 ### Install the app in Teams
@@ -245,8 +259,9 @@ Once the app shows up in your Teams sidebar (or app list), continue.
 ### Link the bot to your account
 
 Nothing to do in Teams yet — these are background API calls, and the whole
-chain runs only after the yes in
-[Confirm the wiring target](#confirm-the-wiring-target). Same move as
+chain runs only for a confirmed target from
+[Confirm the wiring target](#confirm-the-wiring-target) (the detected owner
+on a yes, or the provided Entra object ID). Same move as
 Slack's `conversations.open` and Discord's `users/@me/channels`:
 create the bot↔owner 1:1 conversation proactively with the bot's own
 credentials, so the assistant messages the human first — nobody has to DM the
@@ -325,10 +340,10 @@ skill outside the wizard? Run the same wire yourself:
 pnpm exec tsx scripts/init-first-agent.ts --channel teams --user-id "teams:<owner_handle>" --platform-id "<platform_id>" --display-name "<the human's name>" --agent-name "<assistant name>" --role owner
 ```
 
-**Fallback (re-runs, a no at the wiring confirm, or the link step failed):**
+**Fallback (re-runs, a skipped wiring confirm, or the link step failed):**
 with credentials already in `.env` the resolve steps are skipped, so there is
 nothing new to wire — the first run's wiring still stands. If the install was
-never wired at all — including a deliberate no at the confirm — the
+never wired at all — including a deliberate skip at the confirm — the
 DM-first path always works: DM the bot once ("hi" is fine) — the router
 auto-creates the messaging group row in `data/v2.db` from that first inbound
 — then run `/init-first-agent` (or `/manage-channels`) with your coding
