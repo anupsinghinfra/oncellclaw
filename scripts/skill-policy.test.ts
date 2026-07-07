@@ -29,18 +29,20 @@ function operatorBody(md: string, n: number): string {
 
 describe('gatePolicy — §5.1 parity table (real skills)', () => {
   it('teams: one gate — the install-in-Teams operator pauses before the DM-open fetches', () => {
-    // Operators in order (CLI-first flow): prerequisites, install-in-Teams
-    // (when:have_creds=no), the wiring-identity note. The finish-wiring
-    // handoff is prose only — the wizard wires inline from the resolved vars.
+    // Operators in order (CLI-first flow): prerequisites, the detected-owner
+    // note, the wire-declined note (when:wire_owner=no), install-in-Teams.
+    // The finish-wiring handoff is prose only — the wizard wires inline from
+    // the resolved vars.
     const d = decisions(loadSkill('teams'));
-    expect(d).toHaveLength(3);
+    expect(d).toHaveLength(4);
     expect(d.map((g) => g.needsConfirm)).toEqual([
       false, // prereqs → prompt public_url (prompt is the barrier)
+      false, // detected-owner note → prompt wire_owner (prompt is the barrier)
+      false, // wire-declined note → install operator (last operator of the chain carries the barrier)
       true, //  install-in-Teams → the DM-open effect:fetch chain
-      false, // identity note → prompt signout (prompt is the barrier)
     ]);
     // Completed-work flavor (fetch/external, not effect:step).
-    expect(d[1].flavor).toBe('completed');
+    expect(d[3].flavor).toBe('completed');
   });
 
   it('telegram: the pairing operator gains a readiness pause before the effect:step', () => {
@@ -140,10 +142,11 @@ describe('extractOfferUrl — §5.2 inventory', () => {
     // The install block's URL is {{install_link}} in the AUTHORED body — no
     // candidate matches here; the offer materializes at runtime from the
     // rendered body (proven in run-channel-skill.test.ts's fresh-create case).
-    expect(operatorBody(md, 1)).toContain('{{install_link}}');
+    expect(operatorBody(md, 3)).toContain('{{install_link}}');
     expect(extractOfferUrl(operatorBody(md, 0))).toBeUndefined(); // prereqs
-    expect(extractOfferUrl(operatorBody(md, 1))).toBeUndefined(); // install-in-Teams
-    expect(extractOfferUrl(operatorBody(md, 2))).toBeUndefined(); // wiring-identity note
+    expect(extractOfferUrl(operatorBody(md, 1))).toBeUndefined(); // detected-owner note
+    expect(extractOfferUrl(operatorBody(md, 2))).toBeUndefined(); // wire-declined note (entra link is schemeless on purpose)
+    expect(extractOfferUrl(operatorBody(md, 3))).toBeUndefined(); // install-in-Teams
   });
 
   it('slack — the <your-public-host> placeholder is EXCLUDED (normative negative fixture)', () => {

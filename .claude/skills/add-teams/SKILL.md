@@ -201,11 +201,32 @@ TEAMS_APP_TYPE=SingleTenant
 ### Who owns this bot
 
 The account signed into the Teams CLI is the account that just created the
-bot — that human is the owner the wiring step needs. Its identity comes from
-the CLI session, so this runs before the sign-out step below:
+bot — that human is the wiring target this flow suggests. Its identity comes
+from the CLI session, so this runs before the sign-out step below:
 
 ```nc:run effect:fetch when:have_creds=no capture:owner_upn=.username,owner_aad_id=.userObjectId validate:^.+$
 "$(npm prefix -g 2>/dev/null)/bin/teams" status --json 2>/dev/null
+```
+
+### Confirm the wiring target
+
+Nothing is wired without a yes here. Show the human who was detected, then
+ask — a no skips the whole [Link the bot to your account](#link-the-bot-to-your-account)
+chain, setup finishes unwired, and the note below explains how to wire the
+right person afterwards:
+
+```nc:operator when:have_creds=no
+Detected the account that created the bot: {{owner_upn}}. Wiring the assistant to it means its first message arrives in that account's Teams DMs.
+```
+
+```nc:prompt wire_owner when:have_creds=no validate:^(yes|no)$ normalize:lower
+Wire the assistant to this account?
+```
+
+```nc:operator when:wire_owner=no
+Setup will finish without wiring. To wire the right Teams user afterwards:
+1. Easiest — no IDs needed: have that person DM the bot once in Teams ("hi" works). NanoClaw registers their identity and chat from that first message; then run /init-first-agent with your coding agent and pick them.
+2. To wire proactively instead (the assistant messages them first), your coding agent needs that person's Microsoft Entra object ID — found at entra.microsoft.com > Users > (person) > Overview > Object ID, or Teams admin center > Manage users. Hand it to /manage-channels.
 ```
 
 ### Install the app in Teams
@@ -223,7 +244,9 @@ Once the app shows up in your Teams sidebar (or app list), continue.
 
 ### Link the bot to your account
 
-Nothing to do in Teams yet — these are background API calls. Same move as
+Nothing to do in Teams yet — these are background API calls, and the whole
+chain runs only after the yes in
+[Confirm the wiring target](#confirm-the-wiring-target). Same move as
 Slack's `conversations.open` and Discord's `users/@me/channels`:
 create the bot↔owner 1:1 conversation proactively with the bot's own
 credentials, so the assistant messages the human first — nobody has to DM the
@@ -233,7 +256,7 @@ below can fail once — re-running the skill is safe.
 
 First a Bot Framework token from the app credentials:
 
-```nc:run effect:fetch when:have_creds=no capture:bot_token validate:^eyJ
+```nc:run effect:fetch when:wire_owner=yes capture:bot_token validate:^eyJ
 curl -sf -X POST "https://login.microsoftonline.com/{{app_tenant_id}}/oauth2/v2.0/token" --data-urlencode "grant_type=client_credentials" --data-urlencode "client_id={{app_id}}" --data-urlencode "client_secret={{app_password}}" --data-urlencode "scope=https://api.botframework.com/.default" | jq -er '.access_token'
 ```
 
@@ -241,7 +264,7 @@ Create the 1:1 conversation (the AAD object id from the CLI session is a
 valid member id; `smba.trafficmanager.net/teams` is the global service URL —
 the same default the adapter itself uses):
 
-```nc:run effect:fetch when:have_creds=no capture:conversation_id validate:^.+$
+```nc:run effect:fetch when:wire_owner=yes capture:conversation_id validate:^.+$
 curl -sf -X POST "https://smba.trafficmanager.net/teams/v3/conversations" -H "Authorization: Bearer {{bot_token}}" -H "Content-Type: application/json" -d '{"bot":{"id":"28:{{app_id}}"},"members":[{"id":"{{owner_aad_id}}","name":"","role":"user"}],"tenantId":"{{app_tenant_id}}","channelData":{"tenant":{"id":"{{app_tenant_id}}"}},"isGroup":false}' | jq -er '.id'
 ```
 
@@ -253,22 +276,15 @@ filter only guards against channels that list the bot itself (`28:` ids).
 (Don't select by `.aadObjectId` here — the field is not reliably present in
 this response and its GUID casing varies.)
 
-```nc:run effect:fetch when:have_creds=no capture:owner_handle=.id,owner_name=.name validate:^.+$
+```nc:run effect:fetch when:wire_owner=yes capture:owner_handle=.id,owner_name=.name validate:^.+$
 curl -sf "https://smba.trafficmanager.net/teams/v3/conversations/{{conversation_id}}/members" -H "Authorization: Bearer {{bot_token}}" | jq -er '[.[] | select((.id // "") | startswith("28:") | not)][0] | {id, name: (.name // .givenName // "Teams user")}'
 ```
 
 Compose the platform id exactly as the adapter encodes thread ids
 (`teams:{b64url conversation}:{b64url service url}`):
 
-```nc:run when:have_creds=no capture:platform_id validate:^teams:
+```nc:run when:wire_owner=yes capture:platform_id validate:^teams:
 node -e 'const c=process.argv[1];const s="https://smba.trafficmanager.net/teams/";console.log("teams:"+Buffer.from(c).toString("base64url")+":"+Buffer.from(s).toString("base64url"))' "{{conversation_id}}"
-```
-
-Tell the user who the wiring targets — if this isn't them, they should stop
-here and wire manually with `/manage-channels` instead:
-
-```nc:operator when:have_creds=no
-The bot will be wired to {{owner_name}} ({{owner_upn}}) — the account that created it — and the assistant's first message will arrive in that account's Teams DMs. If that's not you, stop here (Ctrl-C) and wire manually with /manage-channels later.
 ```
 
 ### Sign out of the Teams CLI
@@ -309,9 +325,10 @@ skill outside the wizard? Run the same wire yourself:
 pnpm exec tsx scripts/init-first-agent.ts --channel teams --user-id "teams:<owner_handle>" --platform-id "<platform_id>" --display-name "<the human's name>" --agent-name "<assistant name>" --role owner
 ```
 
-**Fallback (re-runs, or the link step failed):** with credentials already in
-`.env` the resolve steps are skipped, so there is nothing new to wire — the
-first run's wiring still stands. If the install was never wired at all, the
+**Fallback (re-runs, a no at the wiring confirm, or the link step failed):**
+with credentials already in `.env` the resolve steps are skipped, so there is
+nothing new to wire — the first run's wiring still stands. If the install was
+never wired at all — including a deliberate no at the confirm — the
 DM-first path always works: DM the bot once ("hi" is fine) — the router
 auto-creates the messaging group row in `data/v2.db` from that first inbound
 — then run `/init-first-agent` (or `/manage-channels`) with your coding

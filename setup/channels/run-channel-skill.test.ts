@@ -225,7 +225,7 @@ describe('runChannelSkill adapter (Option A)', () => {
         return { ok: true, fields: { STATUS: 'success' } };
       },
       resolveRemote: () => 'origin',
-      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw', signout: 'yes' },
+      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw', wire_owner: 'yes', signout: 'yes' },
       confirm: async (m) => {
         log.push(`confirm:${m}`);
         return true;
@@ -245,7 +245,7 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(log.some((c) => c.includes('--endpoint "https://acme.example/webhook/teams"'))).toBe(true);
     expect(log.some((c) => c.includes('--name "NanoClaw"') && c.includes('--sign-in-audience myOrg'))).toBe(true);
     // …the DM-open chain resolved the wire inputs: the owner's 29: id from the
-    // conversation members (selected by AAD id) and the adapter-encoded
+    // conversation members (first non-bot member) and the adapter-encoded
     // platform id from the created conversation…
     expect(res.vars.owner_handle).toBe('29:owner-xyz');
     expect(res.vars.owner_name).toBe('Dan Mill');
@@ -269,6 +269,53 @@ describe('runChannelSkill adapter (Option A)', () => {
     expect(gateAt).toBeLessThan(restartAt);
     // …and the whole document applied with nothing deferred or bounced.
     expect(res.deferred).toEqual([]);
+    expect(res.agentTasks).toEqual([]);
+    expect(fullyApplied(res)).toBe(true);
+  });
+
+  // A "no" at the wiring confirm skips the whole DM-open chain: no Bot
+  // Framework token is fetched, no conversation is created, and the wire
+  // inputs stay unresolved — the wizard's deferred (DM-first) ending takes
+  // over. The create/install/env half still completes.
+  it('Teams fresh create, wiring declined: the DM-open chain never runs and nothing resolves', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rcs-teams-decline-'));
+    mkdirSync(join(root, 'src/channels'), { recursive: true });
+    writeFileSync(join(root, 'src/channels/index.ts'), '// barrel\n');
+    writeFileSync(join(root, '.env'), '');
+    writeFileSync(join(root, 'package.json'), '{"name":"scratch"}');
+
+    const log: string[] = [];
+    const res = await runSkill('.claude/skills/add-teams', {
+      projectRoot: root,
+      exec: (c) => {
+        log.push(`exec:${c}`);
+        if (c.includes('TEAMS_APP_ID=.')) return 'no';
+        if (c.includes(' app create ')) {
+          return JSON.stringify({
+            teamsAppId: 'tapp-123',
+            installLink: 'https://teams.microsoft.com/l/app/tapp-123',
+            credentials: { CLIENT_ID: 'app-1', CLIENT_SECRET: 'a-much-longer-app-secret', TENANT_ID: 'tenant-1' },
+          });
+        }
+        if (c.includes('status --json')) {
+          return JSON.stringify({ loggedIn: true, username: 'dan@acme.example', userObjectId: 'aad-owner-1' });
+        }
+      },
+      execStream: async () => ({ ok: true, fields: { STATUS: 'success' } }),
+      resolveRemote: () => 'origin',
+      inputs: { public_url: 'https://acme.example', app_name: 'NanoClaw', wire_owner: 'no', signout: 'yes' },
+      confirm: async () => true,
+      openUrl: async () => {},
+    });
+
+    // The chain never started: no token fetch, no conversation create…
+    expect(log.some((c) => c.includes('login.microsoftonline.com'))).toBe(false);
+    expect(log.some((c) => c.includes('/v3/conversations'))).toBe(false);
+    // …the wire inputs stayed unresolved (wireIfResolved will defer)…
+    expect(res.vars.owner_handle).toBeUndefined();
+    expect(res.vars.platform_id).toBeUndefined();
+    // …while the credentials still landed and nothing bounced to an agent.
+    expect(readFileSync(join(root, '.env'), 'utf8')).toContain('TEAMS_APP_ID=app-1');
     expect(res.agentTasks).toEqual([]);
     expect(fullyApplied(res)).toBe(true);
   });
