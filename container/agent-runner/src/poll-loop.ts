@@ -698,8 +698,7 @@ export function dispatchResultText(
 /**
  * Should this task-run result get the same-turn "your <message> block was
  * not delivered — use send_message" nudge? True at most once per turn
- * (mirrors the unwrappedNudged flag for chat turns). While true, the run-log
- * auto-append is DEFERRED to the retry's result so the fire logs exactly once.
+ * (mirrors the unwrappedNudged flag for chat turns).
  */
 export function shouldNudgeTaskBlocks(
   taskRun: boolean,
