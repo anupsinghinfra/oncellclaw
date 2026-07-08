@@ -113,6 +113,12 @@ describe('buildTeamsAppPackage', () => {
     expect(manifest.icons).toEqual({ outline: 'outline.png', color: 'color.png' });
   });
 
+  it('leaves no template placeholder values in the rendered manifest', () => {
+    const raw = entries[0].data.toString('utf8');
+    expect(raw).not.toContain('00000000-0000-0000-0000-000000000000');
+    expect(raw).not.toContain('nanoclaw.invalid');
+  });
+
   it('emits real PNGs for both icons', () => {
     expect(entries[1].data.subarray(0, 8).equals(PNG_SIG)).toBe(true);
     expect(entries[2].data.subarray(0, 8).equals(PNG_SIG)).toBe(true);
