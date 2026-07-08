@@ -73,26 +73,18 @@ export interface ChannelSkillOverrides extends Partial<RunSkillOptions> {
   /** The shared wire; defaults to init-first-agent. Injectable for tests. */
   wire?: (args: WireArgs) => Promise<boolean> | boolean;
   /**
-   * Skip the resolve+wire half. For a channel whose platform_id only exists
-   * after the first inbound (Teams): the SKILL.md installs the adapter and ends
-   * with an `nc:operator` handoff telling the operator to DM the bot and finish
-   * wiring later. No owner_handle/platform_id is expected, no agent name/role is
-   * asked, and init-first-agent is not run.
-   */
-  deferWire?: boolean;
-  /**
    * Wire only when the skill resolved owner_handle + platform_id this run
    * (Teams: the guarded DM-open steps only run on a fresh create). Resolved →
    * ask agent name/role and wire like any channel; unresolved (a drop-through
-   * re-run — the first run's wiring still stands) → behave like deferWire.
-   * The name/role prompts are deferred until after the skill run so the
-   * drop-through path asks nothing.
+   * re-run — the first run's wiring still stands) → skip the wire and let the
+   * SKILL's prose own the handoff. The name/role prompts are deferred until
+   * after the skill run so the drop-through path asks nothing.
    */
   wireIfResolved?: boolean;
   /**
    * Offer the "← Back to channel selection" gate as the very first prompt,
-   * before any side effect (agent-name/role prompts, the skill run, the wire —
-   * and the deferWire/Teams path too). On back, returns the
+   * before any side effect (agent-name/role prompts, the skill run, the
+   * wire). On back, returns the
    * `BACK_TO_CHANNEL_SELECTION` sentinel and does nothing else. Opt-in so
    * headless callers (and the existing tests) never see the extra prompt.
    */
@@ -109,7 +101,7 @@ export async function runChannelSkill(
   overrides: ChannelSkillOverrides = {},
 ): Promise<ChannelFlowResult> {
   // First-prompt back gate — the very first thing, before any side effect
-  // (agent-name/role prompts, the skill run, the wire; covers deferWire too).
+  // (agent-name/role prompts, the skill run, the wire).
   // Opt-in via offerBack so headless callers + existing tests are unaffected.
   if (overrides.offerBack) {
     const label = channel.charAt(0).toUpperCase() + channel.slice(1);
@@ -119,10 +111,10 @@ export async function runChannelSkill(
 
   const projectRoot = overrides.projectRoot ?? process.cwd();
   const failWith = overrides.fail ?? fail;
-  // The agent name + role are wire inputs — skip the prompts when the wire is
-  // deferred, and defer them past the skill run in wireIfResolved mode (only a
-  // fresh create resolves the wire inputs; a drop-through re-run asks nothing).
-  const askLater = overrides.deferWire || overrides.wireIfResolved;
+  // The agent name + role are wire inputs — in wireIfResolved mode, defer the
+  // prompts past the skill run (only a fresh create resolves the wire inputs;
+  // a drop-through re-run asks nothing).
+  const askLater = overrides.wireIfResolved;
   let agentName = askLater ? '' : overrides.agentName ?? (await resolveAgentName());
   let role = askLater ? undefined : overrides.role ?? (await askOperatorRole(channel));
 
@@ -170,9 +162,6 @@ export async function runChannelSkill(
   // Identity confirmation captured by the skill (e.g. add-slack's auth.test).
   if (res.vars.connected_as) p.log.success(`Connected to ${channel} as ${res.vars.connected_as}.`);
 
-  // Deferred wire (Teams): the SKILL's prose owns the rest. Done here.
-  if (overrides.deferWire) return;
-
   const ownerHandle = res.vars.owner_handle;
   const platformId = res.vars.platform_id;
   if (overrides.wireIfResolved && (!ownerHandle || !platformId)) {
@@ -194,8 +183,7 @@ export async function runChannelSkill(
   }
 
   // Shared wire — the same procedure for every channel. role is defined here:
-  // it's only undefined in deferWire mode (returned above) or an unresolved
-  // wireIfResolved run (also returned above).
+  // it's only undefined in an unresolved wireIfResolved run (returned above).
   const wire = overrides.wire ?? initFirstAgent;
   const ok = await wire({ channel, userId: `${channel}:${ownerHandle}`, platformId, displayName, agentName, role: role! });
   if (!ok) {

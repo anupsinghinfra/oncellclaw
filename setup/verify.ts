@@ -259,7 +259,8 @@ export async function run(_args: string[]): Promise<void> {
  * Channels whose wiring only completes after the first inbound message —
  * the platform id doesn't exist until the bot is DM'd, so setup ends with
  * the channel configured but no group wired. Kept in lockstep with the
- * deferWire call sites in setup/auto.ts.
+ * wireIfResolved call site in setup/auto.ts (its unresolved drop-through
+ * leaves the channel configured but unwired).
  */
 export const DEFER_WIRE_CHANNELS = new Set(['teams']);
 
