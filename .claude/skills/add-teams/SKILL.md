@@ -198,6 +198,18 @@ TEAMS_APP_TENANT_ID={{app_tenant_id}}
 TEAMS_APP_TYPE=SingleTenant
 ```
 
+### Set the app icons
+
+The CLI-created app ships with placeholder icons; this swaps in the NanoClaw
+mascot (the same PNGs the manual-path package bakes into its zip), so the
+install dialog below already shows it. Cosmetic — a failure is logged and
+skipped, never blocking setup. Re-runnable any time while signed in to the
+Teams CLI:
+
+```nc:run effect:external when:have_creds=no
+"$(npm prefix -g 2>/dev/null)/bin/teams" app update {{teams_app_id}} --color-icon setup/assets/teams/color.png --outline-icon setup/assets/teams/outline.png --json || echo "Icon update failed — cosmetic only, continuing."
+```
+
 ### Who owns this bot
 
 The account signed into the Teams CLI is the account that just created the

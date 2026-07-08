@@ -124,6 +124,7 @@ describe('runChannelSkill adapter (Option A)', () => {
     // the adapter install ran, but no bot was created and no login step fired…
     expect(log.some((c) => c.includes('pnpm add @chat-adapter/teams'))).toBe(true);
     expect(log.some((c) => c.includes('app create'))).toBe(false);
+    expect(log.some((c) => c.includes('app update'))).toBe(false); // icon step is creation-side too
     expect(log.some((c) => c.includes('login'))).toBe(false);
     // …no logout either — the drop-through path never signed in, and must not
     // sign out a session the operator may be using for something else…
@@ -244,6 +245,16 @@ describe('runChannelSkill adapter (Option A)', () => {
     // the prompted name, and the unconditional single-tenant default…
     expect(log.some((c) => c.includes('--endpoint "https://acme.example/webhook/teams"'))).toBe(true);
     expect(log.some((c) => c.includes('--name "NanoClaw"') && c.includes('--sign-in-audience myOrg'))).toBe(true);
+    // …the mascot icons were applied to the created app (captured teams app id,
+    // both committed assets) before the install-link operator…
+    expect(
+      log.some(
+        (c) =>
+          c.includes(' app update tapp-123') &&
+          c.includes('--color-icon setup/assets/teams/color.png') &&
+          c.includes('--outline-icon setup/assets/teams/outline.png'),
+      ),
+    ).toBe(true);
     // …the DM-open chain resolved the wire inputs: the owner's 29: id from the
     // conversation members (first non-bot member) and the adapter-encoded
     // platform id from the created conversation…
