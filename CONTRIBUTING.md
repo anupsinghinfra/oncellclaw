@@ -151,6 +151,8 @@ Test your contribution on a fresh clone before submitting. For skills, run the s
 | Simplification | `PR: Refactor` |
 | Documentation | `PR: Docs` |
 
+PRs opened by core team members are additionally labeled `core-team` automatically — no checkbox needed.
+
 ### PR description
 
 Keep it concise. Remove any template sections that don't apply. The description should cover:
