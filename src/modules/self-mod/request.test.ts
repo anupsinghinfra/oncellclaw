@@ -4,17 +4,23 @@
  * The approval card is the only thing an admin sees before approving a
  * request that lets an agent point NanoClaw at an arbitrary MCP server
  * (command + args + env, executed on approve — see apply.ts). The card must
- * show every field that will actually be applied, and bad input must be
- * rejected before an approval row is even created — an admin should never
- * see a card for a malformed request.
+ * show every field that will actually be applied — JSON-encoded, invisibles
+ * escaped, fenced, secret-shaped values redacted to a byte-count + sha256
+ * fingerprint (applied verbatim from the payload) — and bad input (types,
+ * counts, oversized payloads or cards) must be rejected before an approval
+ * row is even created.
  *
  * Real central DB (matches reason-capture.test.ts's approach); delivery
  * adapter is a fake that records the card payload so the rendered question
  * text can be asserted on directly.
  */
+import { createHash } from 'node:crypto';
 import * as fs from 'fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { Adapter, AdapterPostableMessage, RawMessage } from 'chat';
+
+import { createChatSdkBridge } from '../../channels/chat-sdk-bridge.js';
 import { initTestDb, closeDb, runMigrations } from '../../db/index.js';
 import { createAgentGroup } from '../../db/agent-groups.js';
 import { createMessagingGroup } from '../../db/messaging-groups.js';
@@ -25,7 +31,7 @@ import { upsertUser } from '../permissions/db/users.js';
 import { upsertUserDm } from '../permissions/db/user-dms.js';
 import { grantRole } from '../permissions/db/user-roles.js';
 import type { Session } from '../../types.js';
-import { handleAddMcpServer } from './request.js';
+import { escapeInvisibles, handleAddMcpServer } from './request.js';
 
 vi.mock('../../container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +46,10 @@ vi.mock('../../session-manager.js', async () => {
   const actual = await vi.importActual<typeof import('../../session-manager.js')>('../../session-manager.js');
   return { ...actual, writeSessionMessage: vi.fn() };
 });
+
+vi.mock('../../webhook-server.js', () => ({
+  registerWebhookAdapter: vi.fn(),
+}));
 
 const TEST_DIR = '/tmp/nanoclaw-test-mcp-approval';
 const DM_CHANNEL = 'slack';
@@ -112,8 +122,24 @@ afterEach(() => {
 
 /** The `question` text of the most recently delivered approval card. */
 function lastQuestion(): string {
-  expect(delivered).toHaveLength(1);
-  return (JSON.parse(delivered[0].content) as { question: string }).question;
+  expect(delivered.length).toBeGreaterThan(0);
+  return (JSON.parse(delivered[delivered.length - 1].content) as { question: string }).question;
+}
+
+/** The text of the most recent agent-facing note written via writeSessionMessage. */
+function lastNotifyText(): string {
+  const call = vi.mocked(writeSessionMessage).mock.calls.at(-1)!;
+  return (JSON.parse(call[2].content) as { text: string }).text;
+}
+
+/** Assert the handler rejected: no card delivered, no row, agent notified with a failure. */
+function expectRejected(): string {
+  expect(delivered).toHaveLength(0);
+  expect(getPendingApprovalsByAction('add_mcp_server')).toHaveLength(0);
+  expect(vi.mocked(writeSessionMessage)).toHaveBeenCalled();
+  const text = lastNotifyText();
+  expect(text).toMatch(/add_mcp_server failed/);
+  return text;
 }
 
 describe('add_mcp_server approval card', () => {
@@ -160,32 +186,226 @@ describe('add_mcp_server approval card', () => {
     );
 
     const question = lastQuestion();
-    // Header + name + command + args + env — payload content adds no lines.
-    expect(question.split('\n').length).toBe(5);
+    // Header + opening fence + name + command + args + env + closing fence —
+    // payload content adds no lines.
+    expect(question.split('\n').length).toBe(7);
     // Embedded newlines surface as visible \n escapes.
     expect(question).toContain('ok\\nenv: (none)');
     expect(question).toContain('bar\\ncommand:');
   });
 
+  it('keeps markdown links and backticks inert inside a single intact fence', async () => {
+    await handleAddMcpServer(
+      {
+        name: 'safe',
+        command: 'node',
+        args: ['```\nfake fence', '[click me](https://evil.example)'],
+        env: { X: 'a`b' },
+      },
+      session,
+    );
+
+    const question = lastQuestion();
+    // Exactly one opening and one closing fence — every payload backtick is
+    // escaped, so the payload can never close the fence.
+    expect(question.split('```')).toHaveLength(3);
+    expect(question).toContain('\\u0060');
+    // The link text is present, but only inside the fence (fence opens
+    // before it and closes after it).
+    const linkIdx = question.indexOf('[click me](https://evil.example)');
+    expect(linkIdx).toBeGreaterThan(question.indexOf('```'));
+    expect(linkIdx).toBeLessThan(question.lastIndexOf('```'));
+  });
+
+  it('renders bidi, zero-width, and BOM characters as visible escapes', async () => {
+    await handleAddMcpServer(
+      {
+        name: 'safe',
+        command: 'node',
+        args: ['a\u202eb', 'c\u200bd'],
+        env: { K: 'x\ufeffy' },
+      },
+      session,
+    );
+
+    const question = lastQuestion();
+    for (const raw of ['\u202e', '\u200b', '\ufeff']) {
+      expect(question).not.toContain(raw);
+    }
+    expect(question).toContain('\\u202e');
+    expect(question).toContain('\\u200b');
+    expect(question).toContain('\\ufeff');
+  });
+});
+
+describe('add_mcp_server validation', () => {
   it('rejects a non-string element in args before creating an approval', async () => {
     await handleAddMcpServer({ name: 'bad', command: 'node', args: ['ok', 123] }, session);
-
-    expect(delivered).toHaveLength(0);
-    expect(getPendingApprovalsByAction('add_mcp_server')).toHaveLength(0);
-    expect(vi.mocked(writeSessionMessage)).toHaveBeenCalled();
-    const call = vi.mocked(writeSessionMessage).mock.calls.at(-1)!;
-    const text = (JSON.parse(call[2].content) as { text: string }).text;
-    expect(text).toMatch(/add_mcp_server failed/);
+    expectRejected();
   });
 
   it('rejects a non-record env before creating an approval', async () => {
     await handleAddMcpServer({ name: 'bad', command: 'node', env: ['not', 'a', 'record'] }, session);
+    expectRejected();
+  });
 
+  it('accepts 32 args and rejects 33', async () => {
+    await handleAddMcpServer(
+      { name: 'ok', command: 'node', args: Array.from({ length: 32 }, (_, i) => `a${i}`) },
+      session,
+    );
+    expect(delivered).toHaveLength(1);
+
+    delivered = [];
+    await handleAddMcpServer(
+      { name: 'bad', command: 'node', args: Array.from({ length: 33 }, (_, i) => `a${i}`) },
+      session,
+    );
     expect(delivered).toHaveLength(0);
-    expect(getPendingApprovalsByAction('add_mcp_server')).toHaveLength(0);
-    expect(vi.mocked(writeSessionMessage)).toHaveBeenCalled();
-    const call = vi.mocked(writeSessionMessage).mock.calls.at(-1)!;
-    const text = (JSON.parse(call[2].content) as { text: string }).text;
-    expect(text).toMatch(/add_mcp_server failed/);
+    expect(lastNotifyText()).toMatch(/max 32 args/);
+  });
+
+  it('accepts 32 env vars and rejects 33', async () => {
+    const envOf = (n: number): Record<string, string> =>
+      Object.fromEntries(Array.from({ length: n }, (_, i) => [`K${i}`, 'v']));
+
+    await handleAddMcpServer({ name: 'ok', command: 'node', env: envOf(32) }, session);
+    expect(delivered).toHaveLength(1);
+
+    delivered = [];
+    await handleAddMcpServer({ name: 'bad', command: 'node', env: envOf(33) }, session);
+    expect(delivered).toHaveLength(0);
+    expect(lastNotifyText()).toMatch(/max 32 env vars/);
+  });
+
+  it('accepts a card of exactly 1500 bytes and rejects one byte over', async () => {
+    // Measure the fixed overhead with an empty filler arg, then pad the arg
+    // (pure ASCII: 1 char = 1 byte) so the rendered question lands exactly
+    // on the cap.
+    await handleAddMcpServer({ name: 'n', command: 'c', args: [''] }, session);
+    const base = Buffer.byteLength(lastQuestion(), 'utf8');
+    const filler = 'a'.repeat(1500 - base);
+
+    delivered = [];
+    await handleAddMcpServer({ name: 'n', command: 'c', args: [filler] }, session);
+    expect(delivered).toHaveLength(1);
+    expect(Buffer.byteLength(lastQuestion(), 'utf8')).toBe(1500);
+
+    delivered = [];
+    await handleAddMcpServer({ name: 'n', command: 'c', args: [`${filler}a`] }, session);
+    expect(delivered).toHaveLength(0);
+    expect(lastNotifyText()).toMatch(/1500 bytes/);
+  });
+
+  it('accepts a payload of exactly 16384 bytes and rejects one byte over', async () => {
+    // A secret-shaped filler renders as a tiny redaction placeholder, so the
+    // raw payload can hit its cap without tripping the 1500-byte card cap.
+    // Measure the fixed overhead with the bare prefix, then pad (ASCII:
+    // 1 char = 1 byte in the JSON encoding).
+    await handleAddMcpServer({ name: 'n', command: 'c', args: ['sk-'] }, session);
+    const base = Buffer.byteLength(JSON.stringify({ name: 'n', command: 'c', args: ['sk-'], env: {} }), 'utf8');
+    const filler = `sk-${'a'.repeat(16384 - base)}`;
+
+    delivered = [];
+    await handleAddMcpServer({ name: 'n', command: 'c', args: [filler] }, session);
+    expect(delivered).toHaveLength(1);
+
+    delivered = [];
+    await handleAddMcpServer({ name: 'n', command: 'c', args: [`${filler}a`] }, session);
+    expect(delivered).toHaveLength(0);
+    expect(lastNotifyText()).toMatch(/16384 bytes/);
+  });
+});
+
+describe('add_mcp_server secret redaction', () => {
+  function redactedForm(value: string): string {
+    const digest = createHash('sha256').update(value).digest('hex').slice(0, 8);
+    return `<redacted: ${Buffer.byteLength(value, 'utf8')} bytes, sha256 ${digest}>`;
+  }
+
+  it('redacts secret-shaped values on the card but keeps them verbatim in the payload', async () => {
+    const keyMatched = 'hunter2-secret-value'; // secret by env KEY (GITHUB_TOKEN)
+    const valueMatched = 'sk-abc123def456'; // secret by VALUE prefix under an innocuous key
+    const argSecret = 'ghp_deadbeefcafe1234'; // secret by VALUE prefix in args
+    await handleAddMcpServer(
+      {
+        name: 'safe',
+        command: 'node',
+        args: ['--token', argSecret],
+        env: { GITHUB_TOKEN: keyMatched, HARMLESS: valueMatched, NODE_OPTIONS: '--require /x.js' },
+      },
+      session,
+    );
+
+    const question = lastQuestion();
+    for (const secret of [keyMatched, valueMatched, argSecret]) {
+      expect(question).not.toContain(secret);
+      expect(question).toContain(redactedForm(secret));
+    }
+    // Non-secret values stay fully visible.
+    expect(question).toContain('--require /x.js');
+    expect(question).toContain('--token');
+
+    // The approval payload carries the verbatim values — applied unchanged.
+    const rows = getPendingApprovalsByAction('add_mcp_server');
+    expect(rows).toHaveLength(1);
+    const payload = JSON.parse(rows[0].payload) as {
+      args: string[];
+      env: Record<string, string>;
+    };
+    expect(payload.args).toEqual(['--token', argSecret]);
+    expect(payload.env.GITHUB_TOKEN).toBe(keyMatched);
+    expect(payload.env.HARMLESS).toBe(valueMatched);
+  });
+});
+
+describe('escapeInvisibles', () => {
+  it('escapes every bidi, zero-width, and separator character as \\uXXXX', () => {
+    const invisibles = '\u202a\u202e\u2066\u2069\u200e\u200f\u061c\u200b\u200c\u200d\u2060\ufeff\u2028\u2029`';
+    const out = escapeInvisibles(invisibles);
+    for (const c of invisibles) expect(out).not.toContain(c);
+    expect(out).toBe(
+      '\\u202a\\u202e\\u2066\\u2069\\u200e\\u200f\\u061c\\u200b\\u200c\\u200d\\u2060\\ufeff\\u2028\\u2029\\u0060',
+    );
+  });
+
+  it('leaves ordinary text untouched', () => {
+    expect(escapeInvisibles('hello world -y evil [link](https://x)')).toBe('hello world -y evil [link](https://x)');
+  });
+});
+
+describe('add_mcp_server card through the chat-sdk bridge', () => {
+  it('delivers CardText with the fence intact and escapes still visible', async () => {
+    await handleAddMcpServer(
+      {
+        name: 'safe',
+        command: 'node',
+        args: ['```\nfake fence', 'a\u202eb'],
+        env: { X: 'y`z' },
+      },
+      session,
+    );
+    const cardContent = JSON.parse(delivered[0].content) as Record<string, unknown>;
+
+    const posts: Array<{ threadId: string; message: AdapterPostableMessage }> = [];
+    const bridge = createChatSdkBridge({
+      adapter: {
+        name: 'stub',
+        postMessage: async (threadId: string, message: AdapterPostableMessage): Promise<RawMessage<unknown>> => {
+          posts.push({ threadId, message });
+          return { id: 'msg-stub', threadId, raw: {} };
+        },
+      } as unknown as Adapter,
+      supportsThreads: false,
+    });
+    await bridge.deliver('slack:C1', null, { kind: 'chat-sdk', content: cardContent });
+
+    expect(posts).toHaveLength(1);
+    const msg = posts[0].message as { card?: { children?: Array<{ type?: string; content?: string }> } };
+    const text = msg.card?.children?.find((c) => c.type === 'text')?.content ?? '';
+    expect(text.split('```')).toHaveLength(3);
+    expect(text).toContain('\\u0060');
+    expect(text).not.toContain('\u202e');
+    expect(text).toContain('\\u202e');
   });
 });
