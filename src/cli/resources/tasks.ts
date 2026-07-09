@@ -607,7 +607,8 @@ registerResource({
         `  DO: print the JSON as the very last line, exit 0, keep data small (a summary, not a dump).\n` +
         `  DON'T: print anything after the JSON, prompt for input, or rely on state from previous runs.\n` +
         `  Always test with bash -c '<script>' before scheduling.\n` +
-        `  Persist state between fires under the group workspace (e.g. a last-seen id file).\n\n` +
+        `  Persist state between fires under the group workspace (e.g. a last-seen id file).\n` +
+        `  Use good judgement on whether to share with the user the script (only if they are technical), a description of the script condition, or whether there's no need.\n\n` +
         `Frequency limit: recurrences more frequent than ${MAX_DAILY_FIRES} fires/day are refused unless the task\n` +
         `carries a --script gate (the script decides whether each fire needs you — a gated fire that\n` +
         `finds nothing costs zero tokens) or you pass --dangerously-override-recurrence-limit after\n` +

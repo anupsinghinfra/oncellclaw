@@ -18,6 +18,8 @@ ncl tasks cancel ping-a25c      # or --all as a kill switch
 ncl tasks delete ping-a25c
 ```
 
+Use good judgement on whether it's appropriate to check in with the user about the task prompt before task creation, and if so, whether to share verbatim or a description of it.
+
 `--process-after` accepts UTC timestamps or naive local timestamps interpreted in the instance timezone (shown in the `<context timezone="..."/>` header).
 
 Run `ncl tasks create --help` for schedules, options, and pre-task gate scripts (checks that run before you wake).
