@@ -63,6 +63,17 @@ export async function handleInstallPackages(content: Record<string, unknown>, se
   });
 }
 
+/** True if `value` is an array of strings. */
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === 'string');
+}
+
+/** True if `value` is a plain object mapping string keys to string values. */
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return Object.values(value).every((v) => typeof v === 'string');
+}
+
 export async function handleAddMcpServer(content: Record<string, unknown>, session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) {
@@ -71,21 +82,36 @@ export async function handleAddMcpServer(content: Record<string, unknown>, sessi
   }
   const serverName = content.name as string;
   const command = content.command as string;
-  if (!serverName || !command) {
+  if (typeof serverName !== 'string' || !serverName || typeof command !== 'string' || !command) {
     notifyAgent(session, 'add_mcp_server failed: name and command are required.');
     return;
   }
+  if (content.args !== undefined && !isStringArray(content.args)) {
+    notifyAgent(session, 'add_mcp_server failed: args must be an array of strings.');
+    return;
+  }
+  if (content.env !== undefined && !isStringRecord(content.env)) {
+    notifyAgent(session, 'add_mcp_server failed: env must be a map of string keys to string values.');
+    return;
+  }
+
+  const args = (content.args as string[] | undefined) || [];
+  const env = (content.env as Record<string, string> | undefined) || {};
+
+  // JSON-encode each field so boundaries are exact and embedded newlines
+  // render as visible \n escapes — payload content can never add lines to
+  // the card or spoof another field.
   await requestApproval({
     session,
     agentName: agentGroup.name,
     action: 'add_mcp_server',
-    payload: {
-      name: serverName,
-      command,
-      args: (content.args as string[]) || [],
-      env: (content.env as Record<string, string>) || {},
-    },
+    payload: { name: serverName, command, args, env },
     title: 'Add MCP Request',
-    question: `Agent "${agentGroup.name}" is attempting to add a new MCP server:\n${serverName} (${command})`,
+    question:
+      `Agent "${agentGroup.name}" is attempting to add a new MCP server:\n` +
+      `name: ${JSON.stringify(serverName)}\n` +
+      `command: ${JSON.stringify(command)}\n` +
+      `args: ${JSON.stringify(args)}\n` +
+      `env: ${JSON.stringify(env)}`,
   });
 }
