@@ -17,14 +17,15 @@
  *        via ANSI escapes so the terminal doesn't fill up with stale codes.
  *      - WHATSAPP_AUTH_PAIRING_CODE (one-shot): centred code card.
  *   6. Read store/auth/creds.json → extract the authenticated (bot) phone
- *   7. Kick the service so the adapter picks up the new credentials
- *   8. Dedicated: ask for the operator's personal number (the one they'll
+ *   7. Dedicated: ask for the operator's personal number (the one they'll
  *      chat from) and write ASSISTANT_HAS_OWN_NUMBER=true so outbound
  *      replies aren't prefixed. Entering the bot's own number routes back
  *      through the interception screen. Shared: chat number = bot number
- *   9. Ask for the messaging-agent name (defaulting to "Nano"); persist it
+ *   8. Ask for the messaging-agent name (defaulting to "Nano"); persist it
  *      as ASSISTANT_NAME so the adapter's outbound prefix matches. Shared
  *      mode also offers an @<name>-only engage pattern for the self-chat
+ *   9. Kick the service — AFTER the env writes, since the adapter reads
+ *      ASSISTANT_HAS_OWN_NUMBER / ASSISTANT_NAME once at module load
  *  10. Wire the agent via scripts/init-first-agent.ts; the existing welcome
  *      DM path delivers the greeting through the adapter
  *
@@ -113,8 +114,6 @@ export async function runWhatsAppChannel(displayName: string): Promise<ChannelFl
     );
   }
 
-  await restartService();
-
   let chatPhone = botPhone;
   if (mode === 'dedicated') {
     chatPhone = await askChatPhone(botPhone);
@@ -139,6 +138,11 @@ export async function runWhatsAppChannel(displayName: string): Promise<ChannelFl
   writeEnvVar('ASSISTANT_NAME', agentName);
 
   const engagePattern = mode === 'shared' ? await askSelfChatEngage(agentName) : undefined;
+
+  // Restart only after ASSISTANT_HAS_OWN_NUMBER / ASSISTANT_NAME land in
+  // .env — the adapter computes its shared/dedicated mode and name once at
+  // module load, so restarting earlier would leave it running with defaults.
+  await restartService();
 
   const platformId = `${chatPhone}@s.whatsapp.net`;
 
@@ -495,7 +499,7 @@ function readAuthedPhone(): string {
 
 async function restartService(): Promise<void> {
   const s = p.spinner();
-  s.start('Restarting NanoClaw so it sees your WhatsApp credentials…');
+  s.start('Restarting NanoClaw so it sees your WhatsApp credentials and settings…');
   const start = Date.now();
   const platform = process.platform;
   try {
