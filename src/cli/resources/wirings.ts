@@ -1,8 +1,11 @@
-import { resolveWiringDefaults } from '../../channels/channel-defaults.js';
-import { getChannelDefaults, hasDeclaredChannelDefaults } from '../../channels/channel-registry.js';
+import {
+  resolveWiringDefaults,
+  validateEngageAgainstChannel,
+  type EngageValues,
+} from '../../channels/channel-defaults.js';
+import { hasDeclaredChannelDefaults } from '../../channels/channel-registry.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { ensureAgentDestinationForWiring, getMessagingGroup } from '../../db/messaging-groups.js';
-import { log } from '../../log.js';
 import type { MessagingGroup, MessagingGroupAgent } from '../../types.js';
 import { registerResource } from '../crud.js';
 import { projectDestinationsToSessions } from './destinations.js';
@@ -19,56 +22,6 @@ function normalizeThreads(v: unknown): number {
   if (v === true || v === 'true' || v === '1' || v === 1) return 1;
   if (v === false || v === 'false' || v === '0' || v === 0) return 0;
   throw new Error(`--threads must be true or false, got "${v}"`);
-}
-
-interface EngageValues {
-  engage_mode?: unknown;
-  engage_pattern?: unknown;
-  threads?: unknown;
-}
-
-/**
- * Cross-column validation against the channel's declaration. Runs on create
- * AND on update (against the merged row, so a partial update can't produce a
- * combination create would reject). May mutate `w.engage_mode`: the
- * mention-sticky→mention coercion when the effective thread policy is off —
- * sticky engagement is keyed on per-thread session existence, so without
- * thread ids it would engage once and never disengage.
- *
- * Declaration-derived checks are gated on hasDeclaredChannelDefaults: stale
- * (undeclared) adapters keep the legacy lenient behavior — the fallback
- * declaration is permissive on mentions but its threads value is false when
- * no adapter is live, which would wrongly coerce offline-created wirings.
- */
-function validateEngageAgainstChannel(w: EngageValues, mg: MessagingGroup): void {
-  if (
-    w.engage_mode === 'pattern' &&
-    (w.engage_pattern === undefined || w.engage_pattern === null || w.engage_pattern === '')
-  ) {
-    throw new Error(`engage_mode 'pattern' requires --engage-pattern (use "." to match every message)`);
-  }
-  if (w.engage_mode !== 'mention' && w.engage_mode !== 'mention-sticky') return;
-
-  const channelKey = mg.instance ?? mg.channel_type;
-  if (!hasDeclaredChannelDefaults(channelKey, mg.channel_type)) return;
-
-  const decl = getChannelDefaults(channelKey, mg.channel_type);
-  if (decl.mentions === 'never') {
-    throw new Error(
-      `engage_mode '${w.engage_mode}' can never engage on channel '${channelKey}' — its adapter declares mentions: 'never' (no mention signal is emitted; use --engage-mode pattern)`,
-    );
-  }
-  if (w.engage_mode === 'mention-sticky') {
-    const ctx = mg.is_group === 1 ? decl.group : decl.dm;
-    const threads = w.threads === undefined || w.threads === null ? ctx.threads : w.threads !== 0;
-    if (!threads) {
-      log.warn('mention-sticky requires thread ids — coerced to mention', {
-        channel: channelKey,
-        messagingGroupId: mg.id,
-      });
-      w.engage_mode = 'mention';
-    }
-  }
 }
 
 registerResource({
