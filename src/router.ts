@@ -321,7 +321,12 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     // collide with the reserved 'system:%' session namespace
     // (src/db/sessions.ts) — they are platform-native identifiers, and this
     // is the only place an inbound thread id enters session resolution.
-    const threadsEnabled = resolveThreadPolicy(agent.threads ?? null, channelDefaults, mg.is_group === 1, supportsThreads);
+    const threadsEnabled = resolveThreadPolicy(
+      agent.threads ?? null,
+      channelDefaults,
+      mg.is_group === 1,
+      supportsThreads,
+    );
     const effectiveThreadId = threadsEnabled ? event.threadId : null;
 
     const engages = evaluateEngage(agent, messageText, isMention, mg, effectiveThreadId);
