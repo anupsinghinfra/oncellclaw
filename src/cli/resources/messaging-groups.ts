@@ -1,5 +1,6 @@
 import { resolveUnknownSenderPolicy } from '../../channels/channel-defaults.js';
 import { hasDeclaredChannelDefaults } from '../../channels/channel-registry.js';
+import { log } from '../../log.js';
 import { registerResource } from '../crud.js';
 
 registerResource({
@@ -71,7 +72,12 @@ registerResource({
     const channelKey = (values.instance as string | undefined) ?? channelType;
     // Static 'strict' stays the no-declaration fallback: a trunk update alone
     // must not change ncl's creation defaults for stale (undeclared) adapters.
-    if (!hasDeclaredChannelDefaults(channelKey, channelType)) return;
+    if (!hasDeclaredChannelDefaults(channelKey, channelType)) {
+      log.warn(
+        `messaging-group create: channel '${channelKey}' has no declared defaults (adapter not installed or stale) — using legacy static defaults`,
+      );
+      return;
+    }
     // is_group carries its static default (0) only after this hook runs, so
     // treat "not provided" as the same DM context the static default means.
     const isGroup = Number(values.is_group ?? 0) === 1;

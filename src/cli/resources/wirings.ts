@@ -6,6 +6,7 @@ import {
 import { hasDeclaredChannelDefaults } from '../../channels/channel-registry.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { ensureAgentDestinationForWiring, getMessagingGroup } from '../../db/messaging-groups.js';
+import { log } from '../../log.js';
 import type { MessagingGroup, MessagingGroupAgent } from '../../types.js';
 import { registerResource } from '../crud.js';
 import { projectDestinationsToSessions } from './destinations.js';
@@ -113,13 +114,19 @@ registerResource({
     // Undeclared (stale) channels: leave engage_mode unset so the static
     // 'mention' default applies afterwards — a trunk update alone must not
     // change ncl's creation defaults for adapters without a declaration.
-    if (values.engage_mode === undefined && hasDeclaredChannelDefaults(channelKey, mg.channel_type)) {
-      const ag = getAgentGroup(String(values.agent_group_id));
-      if (!ag) throw new Error(`agent group not found: ${values.agent_group_id}`);
-      const resolved = resolveWiringDefaults(channelKey, mg.is_group === 1, ag.name, mg.channel_type);
-      values.engage_mode = resolved.engage_mode;
-      if (values.engage_pattern === undefined && resolved.engage_pattern !== null) {
-        values.engage_pattern = resolved.engage_pattern;
+    if (values.engage_mode === undefined) {
+      if (hasDeclaredChannelDefaults(channelKey, mg.channel_type)) {
+        const ag = getAgentGroup(String(values.agent_group_id));
+        if (!ag) throw new Error(`agent group not found: ${values.agent_group_id}`);
+        const resolved = resolveWiringDefaults(channelKey, mg.is_group === 1, ag.name, mg.channel_type);
+        values.engage_mode = resolved.engage_mode;
+        if (values.engage_pattern === undefined && resolved.engage_pattern !== null) {
+          values.engage_pattern = resolved.engage_pattern;
+        }
+      } else {
+        log.warn(
+          `wiring create: channel '${channelKey}' has no declared defaults (adapter not installed or stale) — using legacy static defaults`,
+        );
       }
     }
     validateEngageAgainstChannel(values, mg);
@@ -129,6 +136,17 @@ registerResource({
     if (updates.threads !== undefined) updates.threads = normalizeThreads(updates.threads);
 
     const merged: EngageValues = { ...current, ...updates };
+    // Legacy rows can be engage_mode='pattern' with a NULL pattern (the
+    // router treats that as match-all). Don't reject unrelated updates to
+    // them — only enforce the pairing when the pattern fields change.
+    if (
+      updates.engage_mode === undefined &&
+      updates.engage_pattern === undefined &&
+      merged.engage_mode === 'pattern' &&
+      (merged.engage_pattern === undefined || merged.engage_pattern === null)
+    ) {
+      merged.engage_pattern = '.';
+    }
     validateEngageAgainstChannel(merged, mg);
     // Carry the sticky→mention coercion (if any) back into the update set.
     if (merged.engage_mode !== (updates.engage_mode ?? current.engage_mode)) {

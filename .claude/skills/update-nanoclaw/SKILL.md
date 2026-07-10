@@ -295,10 +295,12 @@ land. If the user's install has Slack, Discord, or WhatsApp, tell them:
    behavior for a specific wiring, override it per wiring:
    `ncl wirings update <wiring-id> --threads true`.
 2. **Shared-identity channels stop raising stranger approval cards.** On
-   channels where the linked account is the operator's personal identity
-   (WhatsApp personal-number mode, iMessage, WeChat), the adapter no longer
-   emits a mention signal — messages to that identity address the human, so
-   unknown senders no longer auto-create messaging groups or fire
+   channels where the linked account is the operator's personal identity, the
+   mechanics differ by channel: WhatsApp personal-number mode suppresses the
+   mention signal entirely (no auto-created messaging groups, no cards);
+   iMessage and WeChat still emit DM mention signals — stranger DMs still
+   auto-create `messaging_groups` rows — but their declared `strict` policy
+   makes those rows drop unknown senders silently instead of raising
    channel-registration cards to the admin.
 
 **WhatsApp installs on a shared/personal number should re-run `/add-whatsapp`**

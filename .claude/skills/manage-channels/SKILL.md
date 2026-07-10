@@ -118,7 +118,7 @@ For separate agents, also ask for a folder name and optionally a different assis
 
 When adding another group/chat on an already-configured platform (e.g. a second Telegram group):
 
-1. **Telegram:** ask the isolation question first to determine intent (`wire-to:<folder>` for an existing agent, `new-agent:<folder>` for a fresh one). Run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent <intent>`, show the `CODE` from the `PAIR_TELEGRAM_CODE` status block, and tell the user to post `@<botname> CODE` in the target group (or DM the bot for a private chat). Wait for the final `PAIR_TELEGRAM` block. The inbound interceptor has already created the `messaging_groups` row with `unknown_sender_policy = 'strict'` and upserted the paired user — `register` only needs to add the wiring:
+1. **Telegram:** ask the isolation question first to determine intent (`wire-to:<folder>` for an existing agent, `new-agent:<folder>` for a fresh one). Run `pnpm exec tsx setup/index.ts --step pair-telegram -- --intent <intent>`, show the `CODE` from the `PAIR_TELEGRAM_CODE` status block, and tell the user to post `@<botname> CODE` in the target group (or DM the bot for a private chat). Wait for the final `PAIR_TELEGRAM` block. The inbound interceptor has already created the `messaging_groups` row stamped with the Telegram adapter's declared policy (`request_approval` on current adapter copies; `strict` only on stale pre-declaration copies) and upserted the paired user — `register` only needs to add the wiring:
 
    ```bash
    pnpm exec tsx setup/index.ts --step register -- \

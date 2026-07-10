@@ -272,9 +272,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       });
 
       // DMs — by definition addressed to the bot. Thread id flows through
-      // so sub-thread context reaches delivery (Slack users can open threads
-      // inside a DM). Router collapses DM sub-threads to one session via
-      // is_group=0 short-circuit.
+      // unmodified (Slack users can open sub-threads inside a DM); whether it
+      // is honored is policy, not transport: the channel's declared
+      // dm.threads default (ChannelDefaults) or a per-wiring threads override
+      // decides at router fanout whether replies land in-thread or all DM
+      // sub-threads collapse into the one DM session.
       chat.onDirectMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
         log.info('Inbound DM received', {

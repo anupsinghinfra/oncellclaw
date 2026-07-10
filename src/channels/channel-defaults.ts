@@ -23,6 +23,20 @@ function escapeRegex(text: string): string {
 }
 
 /**
+ * Substitute the (regex-escaped) agent name for `{name}` in a declared
+ * pattern. A `\b` adjacent to a non-word character can never match, so when
+ * the name starts/ends with one (e.g. "Nano!", "Andy (backup)") the adjacent
+ * declared boundary is dropped — mirrors selfChatEngagePattern in
+ * setup/channels/whatsapp.ts.
+ */
+function substituteName(pattern: string, name: string): string {
+  let out = pattern;
+  if (!/^\w/.test(name)) out = out.replaceAll('\\b{name}', '{name}');
+  if (!/\w$/.test(name)) out = out.replaceAll('{name}\\b', '{name}');
+  return out.replaceAll('{name}', escapeRegex(name));
+}
+
+/**
  * Resolve the engage defaults a new wiring should be created with.
  *
  * @param channelKey mg.instance ?? mg.channel_type (getChannelAdapter key discipline)
@@ -57,7 +71,7 @@ export function resolveWiringDefaults(
   }
   return {
     engage_mode: 'pattern',
-    engage_pattern: ctx.engagePattern.replaceAll('{name}', escapeRegex(agentGroupName)),
+    engage_pattern: substituteName(ctx.engagePattern, agentGroupName),
   };
 }
 

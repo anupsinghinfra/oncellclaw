@@ -298,7 +298,8 @@ setChannelRequestGate(async (mg, event) => {
 /**
  * Wire an approved channel to an agent group and replay the stored event.
  * Shared by both approve paths (connect-existing button, free-text new-agent
- * name reply) so they produce identical wirings.
+ * name reply) so they produce identical wirings. Returns true when the wiring
+ * was created — callers must not confirm success to the approver otherwise.
  *
  * Engage defaults come from the channel's declared defaults (DM vs group
  * context). isGroup uses the adapter's own flag with the persisted row as
@@ -309,7 +310,7 @@ async function wireApprovedChannel(
   row: PendingChannelApproval,
   agentGroupId: string,
   approverId: string,
-): Promise<void> {
+): Promise<boolean> {
   let event: InboundEvent;
   try {
     event = JSON.parse(row.original_message) as InboundEvent;
@@ -319,7 +320,7 @@ async function wireApprovedChannel(
       err,
     });
     deletePendingChannelApproval(row.messaging_group_id);
-    return;
+    return false;
   }
 
   const mg = getMessagingGroup(row.messaging_group_id);
@@ -342,7 +343,7 @@ async function wireApprovedChannel(
       err,
     });
     deletePendingChannelApproval(row.messaging_group_id);
-    return;
+    return false;
   }
 
   const mgaId = `mga-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -389,6 +390,7 @@ async function wireApprovedChannel(
       err,
     });
   }
+  return true;
 }
 
 /**
@@ -597,7 +599,7 @@ registerMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
     folder: ag.folder,
   });
 
-  await wireApprovedChannel(row, ag.id, userId);
+  const wired = await wireApprovedChannel(row, ag.id, userId);
 
   const adapter = getDeliveryAdapter();
   if (adapter) {
@@ -609,7 +611,11 @@ registerMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
           dm.platform_id,
           null,
           'chat-sdk',
-          JSON.stringify({ text: `✅ Agent "${ag.name}" created and connected.` }),
+          JSON.stringify({
+            text: wired
+              ? `✅ Agent "${ag.name}" created and connected.`
+              : `⚠️ Agent "${ag.name}" was created but the channel couldn't be connected — check the host logs.`,
+          }),
         )
         .catch(() => {});
     }

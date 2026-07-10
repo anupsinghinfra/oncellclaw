@@ -20,7 +20,7 @@ vi.mock('../../modules/agent-to-agent/write-destinations.js', () => ({
 import type { ChannelDefaults } from '../../channels/adapter.js';
 import { registerChannelAdapter } from '../../channels/channel-registry.js';
 import { initTestDb, closeDb, runMigrations, createAgentGroup, createMessagingGroup } from '../../db/index.js';
-import { getMessagingGroupAgent } from '../../db/messaging-groups.js';
+import { createMessagingGroupAgent, getMessagingGroupAgent } from '../../db/messaging-groups.js';
 import { lookup } from '../registry.js';
 // Side-effect import: registers wirings-create / wirings-update.
 import './wirings.js';
@@ -202,5 +202,31 @@ describe('wirings-update — same validation as create', () => {
     };
     expect(updated.threads).toBe(1);
     expect(updated.priority).toBe(3);
+  });
+
+  it('allows unrelated updates to a legacy pattern row with NULL engage_pattern', async () => {
+    // Rows created on main before engage_pattern defaults existed: pattern
+    // mode + NULL pattern, which the router evaluates as match-all.
+    createMessagingGroupAgent({
+      id: 'mga-legacy',
+      messaging_group_id: 'mg-stale',
+      agent_group_id: 'ag-1',
+      engage_mode: 'pattern',
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+
+    const updated = (await update({ id: 'mga-legacy', priority: '5' })) as { priority: number };
+    expect(updated.priority).toBe(5);
+    // The pattern fields stay untouched — no silent backfill.
+    expect(getMessagingGroupAgent('mga-legacy')!.engage_pattern).toBeNull();
+
+    // But actually changing the pattern fields to an invalid combination
+    // still rejects.
+    await expect(update({ id: 'mga-legacy', engage_pattern: '' })).rejects.toThrow(/--engage-pattern/);
   });
 });
