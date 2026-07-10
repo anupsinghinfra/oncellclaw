@@ -112,6 +112,7 @@ async function main(): Promise<void> {
   const folder = args.folder || `cli-with-${normalizeName(args.displayName)}`;
   const pickedProvider = process.env.NANOCLAW_PICKED_PROVIDER?.trim().toLowerCase();
   let ag: AgentGroup | undefined = getAgentGroupByFolder(folder);
+  let createdGroup = false;
   if (!ag) {
     const agId = generateId('ag');
     createAgentGroup({
@@ -122,15 +123,17 @@ async function main(): Promise<void> {
       created_at: now,
     });
     ag = getAgentGroupByFolder(folder)!;
+    createdGroup = true;
     console.log(`Created agent group: ${ag.id} (${folder})`);
   } else {
     console.log(`Reusing agent group: ${ag.id} (${folder})`);
   }
   initGroupFilesystem(ag, {
-    instructions:
-      `# ${args.agentName}\n\n` +
-      `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
-      'When the user first reaches out, introduce yourself briefly and invite them to chat. Keep replies concise.',
+    instructions: createdGroup
+      ? `# ${args.agentName}\n\n` +
+        `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
+        'When the user first reaches out, introduce yourself briefly and invite them to chat. Keep replies concise.'
+      : undefined,
     // The operator's setup pick (NANOCLAW_PICKED_PROVIDER) when set; otherwise
     // undefined, so initGroupFilesystem falls back to the instance default and
     // stamps it onto the fresh config row.

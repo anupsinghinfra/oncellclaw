@@ -25,9 +25,8 @@ interface AgentProvider {
    *  through raw. When false, the poll-loop formats them like any chat message. */
   readonly supportsNativeSlashCommands: boolean;
 
-  /** Opt-in: scaffold a persistent memory/ tree at boot. Providers with native
-   *  memory (Claude's CLAUDE.local.md) omit it. Never gated on a provider name. */
-  readonly usesMemoryScaffold?: boolean;
+  /** True when the provider injects shared memory on startup, clear, and compact. */
+  readonly providesMemorySessionHook?: boolean;
 
   /** Optional. Called after each completed exchange so providers whose harness
    *  keeps no on-disk transcript can persist it themselves. Claude (the SDK

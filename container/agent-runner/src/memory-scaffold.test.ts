@@ -20,15 +20,13 @@ describe('ensureMemoryScaffold', () => {
     }
   });
 
-  it('never touches workspace memory it did not create — CLAUDE.local.md stays untouched', () => {
+  it('never imports legacy workspace memory during normal startup', () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-mem-'));
     try {
       fs.writeFileSync(path.join(base, 'CLAUDE.local.md'), '# group memory\nuser prefers terse replies\n');
 
       ensureMemoryScaffold(base);
 
-      // Migration between memory stores is the operator's move (/migrate-memory),
-      // never a boot side effect.
       expect(fs.existsSync(path.join(base, 'memory', 'memories', 'imported-agent-memory.md'))).toBe(false);
       expect(fs.readFileSync(path.join(base, 'CLAUDE.local.md'), 'utf-8')).toContain('terse replies');
     } finally {

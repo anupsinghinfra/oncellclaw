@@ -339,6 +339,7 @@ const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not fou
 
 export class ClaudeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = true;
+  readonly providesMemorySessionHook = true;
 
   private assistantName?: string;
   private mcpServers: Record<string, McpServerConfig>;
@@ -356,6 +357,7 @@ export class ClaudeProvider implements AgentProvider {
     this.env = {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     };
   }
 

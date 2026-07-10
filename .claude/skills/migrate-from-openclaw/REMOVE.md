@@ -36,17 +36,18 @@ rm -f groups/*/openclaw-migration-tasks.md
 These are content you chose to bring over, now part of your agent groups. Delete
 only the ones you no longer want — review each first.
 
-- Identity / personality: `groups/*/soul.md`
-- User context: `groups/*/user-context.md`
-- Memories: `groups/*/memories.md`, `groups/*/daily-memories/`
+- Identity / personality: `groups/*/instructions.prepend.md`,
+  `groups/*/memory/memories/soul.md`
+- User context: `groups/*/memory/memories/user-context.md`
+- Memories: imported files under `groups/*/memory/memories/`
 - Copied OpenClaw skills: directories you added under `container/skills/`
   (compare against the stock set before removing — do not delete
   `onecli-gateway`, `welcome`, `self-customize`, `agent-browser`,
   `slack-formatting`, or other shipped container skills).
 
-If you edited shared instructions, the relevant edits live in
-`container/CLAUDE.md`, and per-group edits in `groups/<folder>/CLAUDE.local.md` —
-review and revert those by hand if desired.
+Per-group standing instructions live in `groups/<folder>/instructions.prepend.md`;
+durable facts live under `groups/<folder>/memory/`. Review and revert only the
+OpenClaw-derived entries by hand if desired.
 
 ## 5. Rebuild if you removed copied skills
 

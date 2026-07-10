@@ -31,7 +31,6 @@
  * For direct-addressable channels (telegram, whatsapp, etc.), --platform-id
  * is typically the same as the handle in --user-id, with the channel prefix.
  */
-import fs from 'fs';
 import net from 'net';
 import path from 'path';
 
@@ -55,6 +54,7 @@ import {
   getMessagingGroupByPlatform,
 } from '../src/db/messaging-groups.js';
 import { runMigrations } from '../src/db/migrations/index.js';
+import { stageGroupPersona } from '../src/group-persona.js';
 import { normalizeName } from '../src/modules/agent-to-agent/db/agent-destinations.js';
 import { addMember } from '../src/modules/permissions/db/agent-group-members.js';
 import { getUserRoles, grantRole } from '../src/modules/permissions/db/user-roles.js';
@@ -229,6 +229,7 @@ async function main(): Promise<void> {
   const folder = `dm-with-${normalizeName(args.displayName)}`;
   const pickedProvider = process.env.NANOCLAW_PICKED_PROVIDER?.trim().toLowerCase();
   let ag: AgentGroup | undefined = getAgentGroupByFolder(folder);
+  let createdGroup = false;
   if (!ag) {
     const agId = generateId('ag');
     createAgentGroup({
@@ -239,6 +240,7 @@ async function main(): Promise<void> {
       created_at: now,
     });
     ag = getAgentGroupByFolder(folder)!;
+    createdGroup = true;
     console.log(`Created agent group: ${ag.id} (${folder})`);
   } else {
     console.log(`Reusing agent group: ${ag.id} (${folder})`);
@@ -246,18 +248,17 @@ async function main(): Promise<void> {
   // Seed the config row, stamped with the effective provider: the operator's
   // setup pick (NANOCLAW_PICKED_PROVIDER) when this runs inside a setup run,
   // otherwise the persisted instance default. Workspace scaffolding is deferred
-  // to the first spawn (group-init), where the DB-resolved provider decides the
-  // surface (Claude: CLAUDE.local.md; a surfaces-owning provider: the memory
-  // scaffold). A reused group keeps its provider (INSERT OR IGNORE).
+  // to the first spawn (group-init). A reused group keeps its provider
+  // (INSERT OR IGNORE).
   ensureContainerConfig(ag.id, pickedProvider);
-  const groupDir = path.resolve(GROUPS_DIR, folder);
-  fs.mkdirSync(groupDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(groupDir, '.seed.md'),
-    `# ${args.agentName}\n\n` +
-      `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
-      'When the user first reaches out (or you receive a system welcome prompt), introduce yourself briefly and invite them to chat. Keep replies concise.\n',
-  );
+  if (createdGroup) {
+    stageGroupPersona(
+      path.resolve(GROUPS_DIR, folder),
+      `# ${args.agentName}\n\n` +
+        `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
+        'When the user first reaches out (or you receive a system welcome prompt), introduce yourself briefly and invite them to chat. Keep replies concise.',
+    );
+  }
 
   // 2b. Assign the user a role for this agent group. The caller picks via
   // --role; the channel drivers default to 'owner' for the self-host case.

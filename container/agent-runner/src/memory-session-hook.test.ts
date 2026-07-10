@@ -1,0 +1,33 @@
+import { describe, expect, it } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+import {
+  MEMORY_SESSION_START_MATCHER,
+  memoryContextForSessionStart,
+  type MemorySessionStartSource,
+} from './memory-session-hook.js';
+
+describe('memory SessionStart contract', () => {
+  it('injects startup, clear, and compact but not resume', () => {
+    expect(MEMORY_SESSION_START_MATCHER).toBe('startup|clear|compact');
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-memory-hook-contract-'));
+    try {
+      fs.mkdirSync(path.join(base, 'memory', 'system'), { recursive: true });
+      fs.writeFileSync(path.join(base, 'memory', 'index.md'), '# Memory Index\n');
+      fs.writeFileSync(path.join(base, 'memory', 'system', 'definition.md'), '# Definition\n');
+      const expected: Record<MemorySessionStartSource, boolean> = {
+        startup: true,
+        resume: false,
+        clear: true,
+        compact: true,
+      };
+      for (const [source, shouldInject] of Object.entries(expected)) {
+        expect(Boolean(memoryContextForSessionStart(source as MemorySessionStartSource, base))).toBe(shouldInject);
+      }
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+});

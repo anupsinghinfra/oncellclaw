@@ -15,9 +15,8 @@ import { fileURLToPath } from 'url';
  * They ship in the mounted `/app/src` tree, so no image change is needed.
  *
  * Idempotent — only writes what's missing, so the agent's own edits and
- * accumulated memory are never clobbered on a later wake. Provider-agnostic:
- * the runner makes no assumption about which harness is running — a provider
- * opts in via `usesMemoryScaffold`.
+ * accumulated memory are never clobbered on a later wake. Every provider uses
+ * the same tree.
  */
 const TEMPLATES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'memory-templates');
 
@@ -34,6 +33,9 @@ export function ensureMemoryScaffold(baseDir = '/workspace/agent'): void {
 }
 
 function copyTemplateIfMissing(template: string, dest: string): void {
-  if (fs.existsSync(dest)) return;
-  fs.copyFileSync(path.join(TEMPLATES_DIR, template), dest);
+  try {
+    fs.copyFileSync(path.join(TEMPLATES_DIR, template), dest, fs.constants.COPYFILE_EXCL);
+  } catch (err) {
+    if (typeof err !== 'object' || err === null || !('code' in err) || err.code !== 'EEXIST') throw err;
+  }
 }
