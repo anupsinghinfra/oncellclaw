@@ -23,7 +23,7 @@ import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
 import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
-import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
+import type { ChannelAdapter, ChannelDefaults, ChannelSetup, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
 interface GatewayAdapter extends Adapter {
@@ -68,6 +68,12 @@ export interface ChatSdkBridgeConfig {
    * way and the default depends on installation style.
    */
   supportsThreads: boolean;
+  /**
+   * Declared wiring-time defaults for this channel. Copied verbatim onto the
+   * returned ChannelAdapter, exactly like supportsThreads. See
+   * `ChannelAdapter.defaults`.
+   */
+  defaults?: ChannelDefaults;
   /**
    * Optional transform applied to outbound text/markdown before it reaches the
    * adapter. Used by channels that need to sanitize for a platform-specific
@@ -220,6 +226,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     instance: config.instance, // undefined ⇒ default instance
 
     supportsThreads: config.supportsThreads,
+    defaults: config.defaults,
 
     async setup(hostConfig: ChannelSetup) {
       setupConfig = hostConfig;
