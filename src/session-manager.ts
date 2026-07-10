@@ -26,7 +26,6 @@ import {
   findSessionByAgentGroup,
   findSessionForAgent,
   getSession,
-  isTaskThread,
   taskThreadId,
   updateSession,
 } from './db/sessions.js';
@@ -161,10 +160,10 @@ export function initSessionFolder(agentGroupId: string, sessionId: string): void
 }
 
 /**
- * Write the default reply routing for a session into its inbound.db.
+ * Write the current chat/thread routing for a session into its inbound.db.
  *
- * The container reads this as the default (channel_type, platform_id, thread_id)
- * for outbound messages when the agent doesn't specify an explicit destination.
+ * The container uses this to preserve thread_id when an explicitly named
+ * destination resolves to the conversation this session is bound to.
  * Derived from session.messaging_group_id → messaging_groups row + session.thread_id.
  *
  * Called on every container wake alongside the agent-to-agent module's
@@ -194,10 +193,6 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
       channel_type: channelType,
       platform_id: platformId,
       thread_id: session.thread_id,
-      // Stamp task-ness explicitly so the container can gate one-door
-      // delivery on a host-asserted flag instead of sniffing the thread
-      // prefix (fail-closed at the source of truth).
-      is_task: isTaskThread(session.thread_id) ? 1 : 0,
     });
   } finally {
     db.close();

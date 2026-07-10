@@ -117,7 +117,7 @@ async function spawnContainer(session: Session): Promise<void> {
     return;
   }
 
-  // Refresh the destination map and default reply routing so any admin
+  // Refresh the destination map and current-thread routing so any admin
   // changes take effect on wake. Destinations come from the agent-to-agent
   // module — skip when the module isn't installed (table absent).
   if (hasTable(getDb(), 'agent_destinations')) {

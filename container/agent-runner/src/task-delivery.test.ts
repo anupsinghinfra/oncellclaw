@@ -1,54 +1,44 @@
 /**
  * One-door delivery in task sessions.
  *
- * Wiring under test (each leg goes red if its integration is deleted):
- *   1. send_message with no `to` ERRORS in a task session (session_routing
- *      thread system:tasks:*) instead of falling back to a default target.
- *   2. Final-text `<message to>` blocks are inert in a task fire — no
- *      outbound chat row, no "undelivered" nudge state.
- *   3. The fire's final text auto-appends as a `task_log` outbound row,
- *      EXCEPT when the agent already ran `ncl tasks append-log` this fire.
+ * Every outbound tool call names its destination. In a task run, final output
+ * is inert delivery-wise and becomes the automatic run summary instead.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
-import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
-import { getUndeliveredMessages, hasAppendLogRequestSince, maxSeq, writeMessageOut } from './db/messages-out.js';
-import { sendMessage } from './mcp-tools/core.js';
-import { autoAppendTaskLog, dispatchResultText, shouldNudgeTaskBlocks } from './poll-loop.js';
+import { closeSessionDb, getInboundDb, getOutboundDb, initTestSessionDb } from './db/connection.js';
+import { getUndeliveredMessages, writeMessageOut } from './db/messages-out.js';
+import { getTaskSeriesId } from './db/session-routing.js';
+import { sendFile, sendMessage } from './mcp-tools/core.js';
+import { autoAppendTaskLog, buildTaskBlockNudge, dispatchResultText, shouldNudgeTaskBlocks } from './poll-loop.js';
 import type { RoutingContext } from './formatter.js';
 
-function seedSessionRouting(threadId: string | null, isTask?: 0 | 1): void {
+function seedSessionRouting(channelType: string | null, platformId: string | null, threadId: string | null): void {
   const db = getInboundDb();
   db.exec(`CREATE TABLE IF NOT EXISTS session_routing (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    channel_type TEXT, platform_id TEXT, thread_id TEXT,
-    is_task INTEGER NOT NULL DEFAULT 0
+    channel_type TEXT, platform_id TEXT, thread_id TEXT
   )`);
   db.prepare(
-    'INSERT OR REPLACE INTO session_routing (id, channel_type, platform_id, thread_id, is_task) VALUES (1, ?, ?, ?, ?)',
-  ).run(
-    threadId ? null : 'telegram',
-    threadId ? null : 'telegram:123',
-    threadId,
-    isTask ?? (threadId?.startsWith('system:tasks') ? 1 : 0),
-  );
+    'INSERT OR REPLACE INTO session_routing (id, channel_type, platform_id, thread_id) VALUES (1, ?, ?, ?)',
+  ).run(channelType, platformId, threadId);
 }
 
-function seedDestination(): void {
+function seedDestination(name = 'family', channelType = 'telegram', platformId = 'telegram:99'): void {
   getInboundDb()
     .prepare(
       `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
-       VALUES ('family', 'Family', 'channel', 'telegram', 'telegram:99', NULL)`,
+       VALUES (?, ?, 'channel', ?, ?, NULL)`,
     )
-    .run();
+    .run(name, name, channelType, platformId);
 }
 
 const taskRouting: RoutingContext = {
   platformId: 'ag-1',
   channelType: 'agent',
   threadId: 'system:tasks:daily-digest-a1b2',
-  inReplyTo: 'fire-1',
-  taskFire: true,
+  inReplyTo: 'run-1',
+  taskRun: true,
 };
 
 beforeEach(() => {
@@ -60,31 +50,58 @@ afterEach(() => {
   closeSessionDb();
 });
 
-describe('send_message in a task session', () => {
-  it('errors without `to` — no default-destination fallback', async () => {
-    seedSessionRouting('system:tasks:daily-digest-a1b2');
+describe('explicit outbound destinations', () => {
+  it('derives task mode from the canonical per-series thread without a DB migration', () => {
+    seedSessionRouting(null, null, 'system:tasks:daily-digest-a1b2');
+    expect(getTaskSeriesId()).toBe('daily-digest-a1b2');
 
-    const res = (await sendMessage.handler({ text: 'hello' })) as { isError?: boolean; content: { text: string }[] };
+    seedSessionRouting('telegram', 'telegram:99', 'chat-thread');
+    expect(getTaskSeriesId()).toBeNull();
+  });
 
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain('task session');
+  it('requires `to` in both outbound tool schemas', () => {
+    expect(sendMessage.tool.inputSchema.required).toContain('to');
+    expect(sendFile.tool.inputSchema.required).toContain('to');
+  });
+
+  it('never infers the only destination when `to` is omitted', async () => {
+    const messageResult = (await sendMessage.handler({ text: 'hello' })) as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
+    const fileResult = (await sendFile.handler({ path: 'report.txt' })) as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
+
+    for (const result of [messageResult, fileResult]) {
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('to is required');
+      expect(result.content[0].text).toContain('family');
+    }
     expect(getUndeliveredMessages()).toHaveLength(0);
   });
 
-  it('the host-stamped is_task flag alone drives the gate (thread_id NULL)', async () => {
-    // No thread prefix to sniff — proves the flag, not the magic string,
-    // is what makes the session a task session.
-    seedSessionRouting(null, 1);
+  it('rejects an unknown explicit destination without falling back', async () => {
+    const messageResult = (await sendMessage.handler({ to: 'missing', text: 'hello' })) as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
+    const fileResult = (await sendFile.handler({ to: 'missing', path: 'report.txt' })) as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
 
-    const res = (await sendMessage.handler({ text: 'hello' })) as { isError?: boolean; content: { text: string }[] };
-
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain('task session');
+    for (const result of [messageResult, fileResult]) {
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Unknown destination "missing"');
+      expect(result.content[0].text).toContain('Known: family');
+    }
     expect(getUndeliveredMessages()).toHaveLength(0);
   });
 
-  it('delivers normally with an explicit `to`', async () => {
-    seedSessionRouting('system:tasks:daily-digest-a1b2');
+  it('delivers to the explicitly named destination', async () => {
+    seedSessionRouting(null, null, 'system:tasks:daily-digest-a1b2');
 
     await sendMessage.handler({ to: 'family', text: 'hello' });
 
@@ -93,191 +110,118 @@ describe('send_message in a task session', () => {
     expect(out[0].platform_id).toBe('telegram:99');
   });
 
-  it('chat sessions keep the reply-in-place default', async () => {
-    seedSessionRouting(null); // normal chat routing row
+  it('preserves the current thread for an explicitly named matching destination', async () => {
+    seedDestination('current-chat', 'discord', 'channel:1');
+    seedSessionRouting('discord', 'channel:1', 'thread-7');
 
-    await sendMessage.handler({ text: 'hello' });
+    await sendMessage.handler({ to: 'current-chat', text: 'hello' });
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
-    expect(out[0].platform_id).toBe('telegram:123');
+    expect(out[0].platform_id).toBe('channel:1');
+    expect(out[0].thread_id).toBe('thread-7');
   });
 });
 
-describe('final-text <message to> blocks in a task fire', () => {
-  it('are inert — no outbound row, no undelivered flag, counted for the nudge', () => {
+describe('final-output blocks in a task run', () => {
+  it('keeps them inert and returns their destination and content for correction', () => {
     const { sent, hasUnwrapped, taskBlocks } = dispatchResultText(
       '<message to="family">digest is ready</message>',
       taskRouting,
     );
 
     expect(sent).toBe(0);
-    expect(hasUnwrapped).toBe(false); // plain text is the normal task ending — never the wrap nudge
-    expect(taskBlocks).toBe(1); // but the inert block IS flagged for the task nudge
+    expect(hasUnwrapped).toBe(false);
+    expect(taskBlocks).toEqual([{ to: 'family', body: 'digest is ready' }]);
     expect(getUndeliveredMessages()).toHaveLength(0);
   });
 
-  it('still deliver in non-task sessions', () => {
+  it('still delivers final-output blocks in chat sessions', () => {
     const { sent, taskBlocks } = dispatchResultText('<message to="family">hi</message>', {
       ...taskRouting,
-      taskFire: false,
+      taskRun: false,
     });
 
     expect(sent).toBe(1);
-    expect(taskBlocks).toBe(0);
+    expect(taskBlocks).toEqual([]);
     expect(getUndeliveredMessages()).toHaveLength(1);
   });
 
-  it('nudge fires once per turn, and only in task fires with blocks', () => {
-    expect(shouldNudgeTaskBlocks(true, 1, false)).toBe(true);
-    expect(shouldNudgeTaskBlocks(true, 1, true)).toBe(false); // already nudged this turn
-    expect(shouldNudgeTaskBlocks(true, 0, false)).toBe(false); // plain text is the normal ending
-    expect(shouldNudgeTaskBlocks(false, 1, false)).toBe(false); // chat turns use the wrap nudge
+  it('nudges at most once and only when a task result contains inert blocks', () => {
+    const blocks = [{ to: 'family', body: 'digest' }];
+    expect(shouldNudgeTaskBlocks(true, blocks, false)).toBe(true);
+    expect(shouldNudgeTaskBlocks(true, blocks, true)).toBe(false);
+    expect(shouldNudgeTaskBlocks(true, [], false)).toBe(false);
+    expect(shouldNudgeTaskBlocks(false, blocks, false)).toBe(false);
   });
 
-  it('run-log auto-append happens exactly once across a nudged turn', () => {
-    const start = maxSeq();
+  it('shows the exact content and makes re-send conditional', () => {
+    const nudge = buildTaskBlockNudge([{ to: 'family', body: '3 <new> posts & a warning' }], 'family, ops');
+
+    expect(nudge).toContain('to="family"');
+    expect(nudge).toContain('3 &lt;new&gt; posts &amp; a warning');
+    expect(nudge).toContain('If and only if');
+    expect(nudge).toContain('do not send it again');
+    expect(nudge).not.toContain('Re-send now');
+  });
+
+  it('records the original task result once, not the correction retry', () => {
     let nudged = false;
+    const original = '<message to="family">digest</message>';
+    const first = dispatchResultText(original, taskRouting);
+    if (!nudged) autoAppendTaskLog(original);
+    nudged = shouldNudgeTaskBlocks(true, first.taskBlocks, nudged);
 
-    // Result 1: the agent ended the fire with an inert <message> block.
-    const first = dispatchResultText('<message to="family">digest</message>', taskRouting);
-    const willRetry = shouldNudgeTaskBlocks(true, first.taskBlocks, nudged);
-    expect(willRetry).toBe(true);
-    if (!willRetry) autoAppendTaskLog('<message to="family">digest</message>', start);
-    nudged = true;
-
-    // Result 2 (post-nudge retry): plain final text → this one becomes the log.
-    const second = dispatchResultText('Sent the digest to family via send_message.', taskRouting);
-    const willRetry2 = shouldNudgeTaskBlocks(true, second.taskBlocks, nudged);
-    expect(willRetry2).toBe(false);
-    if (!willRetry2) autoAppendTaskLog('Sent the digest to family via send_message.', start);
+    const retry = dispatchResultText('Delivery decision handled.', taskRouting);
+    if (!nudged) autoAppendTaskLog('Delivery decision handled.');
+    expect(shouldNudgeTaskBlocks(true, retry.taskBlocks, nudged)).toBe(false);
 
     const rows = getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'task_log'").all() as {
       content: string;
     }[];
     expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0].content).text).toBe('Sent the digest to family via send_message.');
+    expect(JSON.parse(rows[0].content).text).toContain('[undelivered → family] digest');
   });
 });
 
-describe('task-fire run-log auto-append', () => {
-  it('writes a task_log row from the final text', () => {
-    const start = maxSeq();
-
-    autoAppendTaskLog('Checked  the\nfeeds — nothing new.', start);
+describe('automatic task run summary', () => {
+  it('writes a task_log row from final text', () => {
+    autoAppendTaskLog('Checked  the\nfeeds — nothing new.');
 
     const rows = getOutboundDb().prepare("SELECT kind, content FROM messages_out WHERE kind = 'task_log'").all() as {
       kind: string;
       content: string;
     }[];
     expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0].content).text).toBe('Checked the feeds — nothing new.'); // whitespace collapsed
+    expect(JSON.parse(rows[0].content).text).toBe('Checked the feeds — nothing new.');
   });
 
-  it('strips <message to> blocks — logs their inner text marked undelivered, never raw XML', () => {
-    const start = maxSeq();
+  it('marks legacy final-output blocks undelivered and never stores raw XML', () => {
+    autoAppendTaskLog('Digest done. <message to="family">3 new posts today</message> See you tomorrow.');
 
-    autoAppendTaskLog('Digest done. <message to="family">3 new posts today</message> See you tomorrow.', start);
-
-    const rows = getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'task_log'").all() as {
+    const row = getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'task_log'").get() as {
       content: string;
-    }[];
-    expect(rows).toHaveLength(1);
-    const line = JSON.parse(rows[0].content).text as string;
+    };
+    const line = JSON.parse(row.content).text as string;
     expect(line).not.toContain('<message');
     expect(line).toContain('[undelivered → family] 3 new posts today');
     expect(line).toContain('Digest done.');
   });
 
-  it('is suppressed when the agent ran append-log this fire (exactly-once)', () => {
-    const start = maxSeq();
-    // The ncl binary writes each CLI call as a cli_request system row.
+  it('is additive to an explicit append-log request', () => {
     writeMessageOut({
-      id: 'cli-1',
-      kind: 'system',
-      content: JSON.stringify({ action: 'cli_request', requestId: 'cli-1', command: 'tasks-append-log', args: { msg: 'done' } }),
-    });
-    expect(hasAppendLogRequestSince(start)).toBe(true);
-
-    autoAppendTaskLog('final text', start);
-
-    const rows = getOutboundDb().prepare("SELECT 1 FROM messages_out WHERE kind = 'task_log'").all();
-    expect(rows).toHaveLength(0);
-  });
-
-  it('a positional append-log invocation (dash-joined command) also suppresses', () => {
-    const start = maxSeq();
-    // `ncl tasks append-log "did the thing"` → command 'tasks-append-log-did-the-thing'
-    writeMessageOut({
-      id: 'cli-pos',
+      id: 'cli-progress',
       kind: 'system',
       content: JSON.stringify({
         action: 'cli_request',
-        requestId: 'cli-pos',
-        command: 'tasks-append-log-did-the-thing',
-        args: {},
-      }),
-    });
-
-    expect(hasAppendLogRequestSince(start)).toBe(true);
-
-    autoAppendTaskLog('final text', start);
-    expect(getOutboundDb().prepare("SELECT 1 FROM messages_out WHERE kind = 'task_log'").all()).toHaveLength(0);
-  });
-
-  it('a DEFINITIVELY failed append-log (response ok:false) does not suppress', () => {
-    const start = maxSeq();
-    writeMessageOut({
-      id: 'cli-fail',
-      kind: 'system',
-      content: JSON.stringify({ action: 'cli_request', requestId: 'cli-fail', command: 'tasks-append-log', args: {} }),
-    });
-    // Host response frame lands in inbound messages_in with ok:false.
-    getInboundDb()
-      .prepare("INSERT INTO messages_in (id, seq, kind, timestamp, content) VALUES (?, ?, 'system', datetime('now'), ?)")
-      .run(
-        'resp-fail',
-        1000,
-        JSON.stringify({
-          requestId: 'cli-fail',
-          frame: { id: 'cli-fail', ok: false, error: { code: 'invalid-args', message: 'bad series' } },
-        }),
-      );
-
-    expect(hasAppendLogRequestSince(start)).toBe(false);
-
-    autoAppendTaskLog('final text', start);
-    expect(getOutboundDb().prepare("SELECT 1 FROM messages_out WHERE kind = 'task_log'").all()).toHaveLength(1);
-  });
-
-  it('an append-log with a still-pending response suppresses (no double-log on the success path)', () => {
-    const start = maxSeq();
-    writeMessageOut({
-      id: 'cli-pending',
-      kind: 'system',
-      content: JSON.stringify({
-        action: 'cli_request',
-        requestId: 'cli-pending',
+        requestId: 'cli-progress',
         command: 'tasks-append-log',
-        args: {},
+        args: { msg: 'progress note' },
       }),
     });
-    // No response row in inbound yet.
 
-    expect(hasAppendLogRequestSince(start)).toBe(true);
-  });
+    autoAppendTaskLog('final summary');
 
-  it('append-log from BEFORE the fire does not suppress', () => {
-    writeMessageOut({
-      id: 'cli-old',
-      kind: 'system',
-      content: JSON.stringify({ action: 'cli_request', requestId: 'cli-old', command: 'tasks-append-log', args: {} }),
-    });
-    const start = maxSeq(); // watermark taken after the old call
-
-    autoAppendTaskLog('final text', start);
-
-    const rows = getOutboundDb().prepare("SELECT 1 FROM messages_out WHERE kind = 'task_log'").all();
-    expect(rows).toHaveLength(1);
+    expect(getOutboundDb().prepare("SELECT 1 FROM messages_out WHERE kind = 'task_log'").all()).toHaveLength(1);
   });
 });

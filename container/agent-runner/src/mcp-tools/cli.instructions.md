@@ -67,9 +67,9 @@ ncl tasks list
 # Always pass a short descriptive --name so the task id is readable (e.g. daily-briefing-a25c, not a long uuid).
 # For a recurring task, --recurrence alone sets the schedule (first run derived from it); add --process-after only for one-shots.
 ncl tasks create --name "daily briefing" --prompt "Send the daily briefing" --recurrence "0 9 * * *"
-# At the END of every task run, record one line of history. The host stamps the UTC time — you supply only the summary.
-# This is a LOG ENTRY, not a message: it sends nothing to anyone. Inside a task fire --id is auto-derived from your session.
-ncl tasks append-log --msg "posted the daily digest to slack; one feed returned 403, skipped"
+# Add an optional progress note during a task run. The final response is logged automatically.
+# This is a LOG ENTRY, not a message: it sends nothing to anyone. Inside a task run --id is auto-derived.
+ncl tasks append-log --msg "one feed returned 403; continuing with the remaining feeds"
 
 # Write commands (approval required)
 ncl groups restart

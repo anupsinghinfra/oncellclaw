@@ -281,22 +281,17 @@ function createTask(args: Record<string, unknown>, ctx: CallerContext) {
   const processAfter = firstRunIso(args.process_after, recurrence);
   const id = makeTaskId(args.name);
   const originSessionId = ctx.caller === 'agent' ? ctx.sessionId : null;
-  // Each series runs in its own isolated session; point the fire at its own log.
+  // Each series runs in its own isolated session. Delivery and run-log
+  // instructions are injected by that session's runtime prompt rather than
+  // baked into persisted task content, so the contract can evolve in code.
   const { session } = resolveTaskSession(group, id);
-  const promptWithLog =
-    `${prompt}\n\n` +
-    `[Task delivery contract:\n` +
-    `• MESSAGE (only if the task asks you to report/notify): use send_message({ to: "name", … }) with an explicit destination — that tool call is the ONLY thing the user receives. This run has no chat attached: final text and <message> blocks are NOT delivered here.\n` +
-    `• RUN LOG (automatic): your final text is recorded verbatim in tasks/${id}.md — end the run with a concrete work-log line: what you did and WHY (a no-op run still ends with why nothing was needed; name any files you wrote). Not a greeting, not a copy of the message you sent. For extra mid-run notes use \`ncl tasks append-log --msg "…"\` — if you do, your final text is not auto-logged. Do NOT edit tasks/${id}.md by hand; the log never goes to the user.\n` +
-    `Need context from past runs? Read tasks/${id}.md first.]`;
-
   const created = withInbound(session, (db) => {
     insertTaskRow(db, {
       id,
       seriesId: id,
       processAfter,
       recurrence,
-      content: JSON.stringify({ prompt: promptWithLog, script, originSessionId }),
+      content: JSON.stringify({ prompt, script, originSessionId }),
     });
     return selectTask(db, id);
   });
@@ -308,7 +303,7 @@ function createTask(args: Record<string, unknown>, ctx: CallerContext) {
  * Append one host-timestamped line to a task's run log
  * (`<GROUPS_DIR>/<folder>/tasks/<series>.md`). This is NOT a delivery — it writes
  * nothing to messages_out; it just records what happened so the agent (and human)
- * can see when and why each fire ran. Inside a task fire the series is derived from
+ * can see when and why each run happened. Inside a task run the series is derived from
  * the caller's own task session, so the agent supplies only --msg.
  */
 function appendTaskLog(
@@ -648,9 +643,9 @@ registerResource({
     'append-log': {
       access: 'open',
       description:
-        'Append a one-line note to a task run log (tasks/<id>.md).\n\nOptional: a task fire auto-logs its final text, so most runs need no explicit call — use this for mid-run notes (calling it suppresses the final-text auto-log for that fire). The host stamps the UTC timestamp; you supply --msg. This is a LOG ENTRY, not a message — it sends nothing to anyone. Inside a task fire --id is auto-derived from your session.',
+        'Append a one-line note to a task run log (tasks/<id>.md).\n\nOptional: every task run auto-logs its final text, so use this only for additive mid-run notes. The host stamps the UTC timestamp; you supply --msg. This is a LOG ENTRY, not a message — it sends nothing to anyone. Inside a task run --id is auto-derived from your session.',
       examples: [
-        `# Inside a task fire (--id auto-derived) — the run's work-log line:\nncl tasks append-log --msg "posted the daily digest to slack; one feed returned 403, skipped"`,
+        `# Inside a task run (--id auto-derived) — optional progress note:\nncl tasks append-log --msg "one feed returned 403; continuing with the remaining feeds"`,
       ],
       args: [
         {
@@ -663,7 +658,7 @@ registerResource({
         {
           name: 'id',
           type: 'string',
-          description: 'Task series id. Auto-derived when called from inside a task fire; required otherwise.',
+          description: 'Task series id. Auto-derived when called from inside a task run; required otherwise.',
         },
         {
           name: 'group',

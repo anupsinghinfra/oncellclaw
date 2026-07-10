@@ -4,7 +4,7 @@
  *
  * Two writers, one format:
  *   - `ncl tasks append-log` (agent's explicit mid-run/work-log entry)
- *   - the `task_log` outbound row a task fire's final text produces
+ *   - the `task_log` outbound row a task run's final text produces
  *     (container/agent-runner poll-loop auto-append; delivery.ts routes it here)
  */
 import fs from 'fs';
