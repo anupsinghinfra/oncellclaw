@@ -27,6 +27,7 @@ import { closeDb, createAgentGroup, initTestDb, runMigrations } from './db/index
 import { ensureContainerConfig } from './db/container-configs.js';
 import { initGroupFilesystem } from './group-init.js';
 import { PERSONA_PREPEND_FILE } from './group-persona.js';
+import { log } from './log.js';
 import { registerProviderContainerConfig } from './providers/provider-container-registry.js';
 import type { ContainerConfig } from './container-config.js';
 import type { AgentGroup, Session } from './types.js';
@@ -48,6 +49,7 @@ function containerConfig(): ContainerConfig {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
   fs.mkdirSync(TEST_ROOT, { recursive: true });
   runMigrations(initTestDb());
@@ -113,6 +115,26 @@ describe('initGroupFilesystem agent surfaces', () => {
       },
     ]);
     expect(JSON.stringify(reconciled.hooks.PreCompact)).toContain('compact-instructions.ts');
+  });
+
+  it.each([
+    ['malformed JSON', '{"hooks":'],
+    ['a non-object root', '[]\n'],
+  ])('warns and leaves existing settings unchanged for %s', (_label, content) => {
+    const ag = group('ag-invalid-claude', 'invalid-claude-group');
+    createAgentGroup(ag);
+    initGroupFilesystem(ag);
+
+    const settingsFile = path.join(DATA_DIR, 'v2-sessions', ag.id, '.claude-shared', 'settings.json');
+    fs.writeFileSync(settingsFile, content);
+
+    initGroupFilesystem(ag);
+
+    expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(content);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Claude settings'),
+      expect.objectContaining({ settingsFile }),
+    );
   });
 
   it('stages the same provider-neutral instructions for a provider with its own surfaces', () => {

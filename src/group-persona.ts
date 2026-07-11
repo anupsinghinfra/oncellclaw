@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import { log } from './log.js';
+
 /** Per-group standing instructions prepended to every provider's project document. */
 export const PERSONA_PREPEND_FILE = 'instructions.prepend.md';
 
@@ -31,7 +33,12 @@ export function readGroupPersona(groupDir: string): string | null {
     if (!fs.fstatSync(fd).isFile()) return null;
     const content = fs.readFileSync(fd, 'utf-8').trim();
     return content || null;
-  } catch {
+  } catch (err) {
+    if (typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT') return null;
+    log.warn('Could not read group standing instructions; omitting persona', {
+      file,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);

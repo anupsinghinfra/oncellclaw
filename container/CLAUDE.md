@@ -12,7 +12,7 @@ Files you create are saved in `/workspace/agent/`. Use this for notes, research,
 
 Your persistent memory lives under `/workspace/agent/memory/`. The session-start memory context contains the live top-level index and system definition. Follow that definition when deciding what to store and keep the index accurate so you can retrieve details later.
 
-Standing role, persona, and behavioral instructions belong in `/workspace/agent/instructions.prepend.md`; durable facts belong in memory.
+Standing role, persona, and behavioral instructions belong in `/workspace/agent/instructions.prepend.md`; durable facts belong in memory. Changes to standing instructions take effect after the group container restarts, so say that when confirming an edit.
 
 ## Conversation history
 

@@ -39,10 +39,7 @@ import path from 'path';
 // adapter connects — no Gateway conflict with the running service), so
 // declared channel defaults resolve here without live adapters.
 import '../src/channels/index.js';
-import {
-  resolveUnknownSenderPolicy,
-  resolveWiringDefaults,
-} from '../src/channels/channel-defaults.js';
+import { resolveUnknownSenderPolicy, resolveWiringDefaults } from '../src/channels/channel-defaults.js';
 import { hasDeclaredChannelDefaults } from '../src/channels/channel-registry.js';
 import { DATA_DIR, GROUPS_DIR } from '../src/config.js';
 import { createAgentGroup, getAgentGroupByFolder } from '../src/db/agent-groups.js';
@@ -77,8 +74,7 @@ interface Args {
   engagePattern?: string;
 }
 
-const DEFAULT_WELCOME =
-  'System instruction: run /welcome to introduce yourself to the user on this new channel.';
+const DEFAULT_WELCOME = 'System instruction: run /welcome to introduce yourself to the user on this new channel.';
 
 const DEFAULT_ROLE: Role = 'owner';
 
@@ -119,9 +115,7 @@ function parseArgs(argv: string[]): Args {
       case '--role': {
         const raw = (val ?? '').toLowerCase();
         if (raw !== 'owner' && raw !== 'admin' && raw !== 'member') {
-          console.error(
-            `Invalid --role: ${raw} (expected 'owner', 'admin', or 'member')`,
-          );
+          console.error(`Invalid --role: ${raw} (expected 'owner', 'admin', or 'member')`);
           process.exit(2);
         }
         out.role = raw;
@@ -161,13 +155,7 @@ function generateId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function wireIfMissing(
-  mg: MessagingGroup,
-  ag: AgentGroup,
-  now: string,
-  label: string,
-  engagePattern?: string,
-): void {
+function wireIfMissing(mg: MessagingGroup, ag: AgentGroup, now: string, label: string, engagePattern?: string): void {
   const existing = getMessagingGroupAgentByPair(mg.id, ag.id);
   if (existing) {
     console.log(`Wiring already exists: ${existing.id} (${label})`);
@@ -229,7 +217,6 @@ async function main(): Promise<void> {
   const folder = `dm-with-${normalizeName(args.displayName)}`;
   const pickedProvider = process.env.NANOCLAW_PICKED_PROVIDER?.trim().toLowerCase();
   let ag: AgentGroup | undefined = getAgentGroupByFolder(folder);
-  let createdGroup = false;
   if (!ag) {
     const agId = generateId('ag');
     createAgentGroup({
@@ -240,7 +227,6 @@ async function main(): Promise<void> {
       created_at: now,
     });
     ag = getAgentGroupByFolder(folder)!;
-    createdGroup = true;
     console.log(`Created agent group: ${ag.id} (${folder})`);
   } else {
     console.log(`Reusing agent group: ${ag.id} (${folder})`);
@@ -251,14 +237,12 @@ async function main(): Promise<void> {
   // to the first spawn (group-init). A reused group keeps its provider
   // (INSERT OR IGNORE).
   ensureContainerConfig(ag.id, pickedProvider);
-  if (createdGroup) {
-    stageGroupPersona(
-      path.resolve(GROUPS_DIR, folder),
-      `# ${args.agentName}\n\n` +
-        `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
-        'When the user first reaches out (or you receive a system welcome prompt), introduce yourself briefly and invite them to chat. Keep replies concise.',
-    );
-  }
+  stageGroupPersona(
+    path.resolve(GROUPS_DIR, folder),
+    `# ${args.agentName}\n\n` +
+      `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
+      'When the user first reaches out (or you receive a system welcome prompt), introduce yourself briefly and invite them to chat. Keep replies concise.',
+  );
 
   // 2b. Assign the user a role for this agent group. The caller picks via
   // --role; the channel drivers default to 'owner' for the self-host case.
@@ -269,9 +253,7 @@ async function main(): Promise<void> {
   // getUserRoles prevents duplicates on re-runs.
   const existingRoles = getUserRoles(userId);
   if (args.role === 'owner') {
-    const alreadyOwner = existingRoles.some(
-      (r) => r.role === 'owner' && r.agent_group_id === null,
-    );
+    const alreadyOwner = existingRoles.some((r) => r.role === 'owner' && r.agent_group_id === null);
     if (!alreadyOwner) {
       grantRole({
         user_id: userId,
@@ -284,9 +266,7 @@ async function main(): Promise<void> {
     // Owner's agent group gets global CLI access
     updateContainerConfigScalars(ag.id, { cli_scope: 'global' });
   } else if (args.role === 'admin') {
-    const alreadyAdmin = existingRoles.some(
-      (r) => r.role === 'admin' && r.agent_group_id === ag.id,
-    );
+    const alreadyAdmin = existingRoles.some((r) => r.role === 'admin' && r.agent_group_id === ag.id);
     if (!alreadyAdmin) {
       grantRole({
         user_id: userId,
@@ -347,11 +327,7 @@ async function main(): Promise<void> {
   });
 
   const roleLabel =
-    args.role === 'owner'
-      ? 'owner (global)'
-      : args.role === 'admin'
-        ? `admin (scoped to ${ag.id})`
-        : 'member';
+    args.role === 'owner' ? 'owner (global)' : args.role === 'admin' ? `admin (scoped to ${ag.id})` : 'member';
 
   console.log('');
   console.log('Init complete.');
@@ -396,11 +372,7 @@ async function sendWelcomeViaCliSocket(
     };
 
     socket.once('error', (err) =>
-      settle(
-        new Error(
-          `CLI socket at ${sockPath} not reachable: ${err.message}. Is the NanoClaw service running?`,
-        ),
-      ),
+      settle(new Error(`CLI socket at ${sockPath} not reachable: ${err.message}. Is the NanoClaw service running?`)),
     );
     socket.once('connect', () => {
       const payload =

@@ -143,7 +143,10 @@ function ensureClaudeSettings(settingsFile: string, initialized: string[]): void
   try {
     const raw = fs.readFileSync(settingsFile, 'utf-8');
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return;
+    if (!isRecord(parsed)) {
+      log.warn('Claude settings root is not an object; leaving it unchanged', { settingsFile });
+      return;
+    }
     const settings = parsed;
     let changed = false;
 
@@ -164,6 +167,7 @@ function ensureClaudeSettings(settingsFile: string, initialized: string[]): void
 
     const hooks = isRecord(settings.hooks) ? settings.hooks : {};
     const existingSessionStart = Array.isArray(hooks.SessionStart) ? hooks.SessionStart : [];
+    // NanoClaw owns this command entry and replaces stale matcher/options on init.
     const nextSessionStart = existingSessionStart.map(removeNanoClawMemoryHook).filter((entry) => entry !== undefined);
     nextSessionStart.push({
       matcher: MEMORY_SESSION_START_MATCHER,
@@ -189,10 +193,27 @@ function ensureClaudeSettings(settingsFile: string, initialized: string[]): void
 
     if (!changed) return;
 
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+    writeAtomic(settingsFile, JSON.stringify(settings, null, 2) + '\n');
     initialized.push('settings.json (reconciled Claude settings)');
-  } catch {
-    // Don't break init if settings.json is malformed — it'll use whatever's there.
+  } catch (err) {
+    log.warn('Failed to reconcile Claude settings; leaving them unchanged', {
+      settingsFile,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function writeAtomic(filePath: string, content: string): void {
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmp, content, { flag: 'wx' });
+    fs.renameSync(tmp, filePath);
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // The rename consumed the temp file, or creation failed before it existed.
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 ---
 name: migrate-memory
-description: Migrate legacy NanoClaw group memory into the shared memory tree and provider-neutral standing instructions. Run after an update reports the shared-memory breaking change, or when a group still has .seed.md, CLAUDE.local.md, or an unindexed imported-agent-memory.md. Triggers on "migrate memory", "legacy memory", "the agent forgot everything after the switch".
+description: Migrate legacy NanoClaw and Claude-native memory into the shared memory tree and provider-neutral standing instructions. Run after an update reports the shared-memory breaking change, or when a group still has .seed.md, legacy CLAUDE.md/CLAUDE.local.md, Claude auto-memory, or an unindexed imported-agent-memory.md. Triggers on "migrate memory", "legacy memory", "the agent forgot everything after the switch".
 ---
 
 # Migrate legacy memory
@@ -10,10 +10,11 @@ switches carry memory automatically. This operator-run workflow moves legacy
 files into that shared layout; normal host and container startup never imports
 them.
 
-The migration is deliberately content-blind. Do not open legacy files on the
-host. Move regular files, quarantine symlinks without following them, then let
-the group agent distill standing behavior and durable facts inside its
-container.
+The migration is deliberately content-blind. Do not read legacy contents on
+the host. The only exception is the first line of `CLAUDE.md`, used solely to
+distinguish a generated file from pre-composer group memory. Move regular
+files, quarantine symlinks without following them, then let the group agent
+distill standing behavior and durable facts inside its container.
 
 ## 1. Inventory and maintenance window
 
@@ -21,19 +22,28 @@ container.
 2. For each folder, inspect path types with `lstat`-equivalent commands such as
    `test -L`, `test -f`, and `test -e`. Check:
    - `.seed.md`
+   - `CLAUDE.md`
    - `CLAUDE.local.md`
    - `memory/memories/imported-agent-memory.md`
    - `instructions.prepend.md`
    - `memory/index.md`
-3. Show the operator the affected groups and collision/symlink status. Ask for
-   approval before moving anything.
-4. Ask the operator not to message these groups during the migration. Run
+   - `data/v2-sessions/<group-id>/.claude-shared/projects/*/memory/`
+3. Show the operator the affected groups and collision/symlink status. Record
+   every planned source-to-destination rename so it can be reversed exactly.
+   Ask for approval before moving anything.
+4. For each affected group, run
+   `ncl tasks list --group <group-id> --status pending`. Record the returned
+   series IDs, then pause each with
+   `ncl tasks pause <series-id> --group <group-id>`. Do not resume tasks that
+   were already paused before this workflow.
+5. Ask the operator not to message these groups during the migration. Run
    `ncl groups restart --id <group-id>` for each affected group. Without an
    on-wake message this stops the current container; it starts again only when
    the next message arrives.
 
 Process one group completely before starting the next. No runtime lock or
-migration code is needed because the group is quiesced for this short window.
+migration code is needed because user messages are withheld and scheduled
+wakes are paused for this short window.
 
 ## 2. Prepare the shared tree
 
@@ -63,6 +73,21 @@ Use same-filesystem renames so each move is atomic.
 - Any other `.seed.md` path type: leave it untouched and stop this group for
   operator review.
 
+### Legacy `CLAUDE.md`
+
+- If absent, continue.
+- Symlink: rename the symlink itself into
+  `memory/.migration-quarantine/CLAUDE.md` (add a numeric suffix on
+  collision).
+- Regular file: read only its first line. If it starts with
+  `<!-- Composed at spawn`, it is generated and must stay in place. Otherwise
+  rename it to `memory/memories/imported-claude-md.md`, using `-2`, `-3`,
+  and so on without skipping or overwriting collisions.
+- Add a Map entry for a renamed regular file:
+  `- [Imported legacy CLAUDE.md](memories/<filename>) - pre-composer group memory awaiting in-container distillation.`
+- Any other path type: leave it untouched and stop this group for operator
+  review.
+
 ### `CLAUDE.local.md`
 
 - Symlink: rename the symlink itself into
@@ -76,6 +101,22 @@ Use same-filesystem renames so each move is atomic.
   `- [Imported Claude local memory](memories/<filename>) - legacy memory awaiting in-container distillation.`
 - Any other `CLAUDE.local.md` path type: leave it untouched and stop this group
   for operator review.
+
+### Claude native auto-memory
+
+For every
+`data/v2-sessions/<group-id>/.claude-shared/projects/*/memory/` path:
+
+- Symlink: rename the symlink itself into
+  `memory/.migration-quarantine/claude-auto-memory` (add a numeric suffix on
+  collision).
+- Directory: rename the entire directory, without opening its files, to
+  `memory/memories/imported-claude-auto-memory`. For additional project
+  directories or collisions use `-2`, then `-3`, and so on.
+- Add a Map entry for each renamed directory:
+  `- [Imported Claude auto-memory](memories/<directory>/) - native Claude memory awaiting in-container distillation.`
+- Any other path type: leave it untouched and stop this group for operator
+  review.
 
 ### `memory/memories/imported-agent-memory.md`
 
@@ -113,8 +154,12 @@ Verify for every group:
 - standing behavior is in `instructions.prepend.md`
 - imported files are linked under Map until distilled
 - a test message can recall a migrated fact
+- every task series paused in step 1 is resumed with
+  `ncl tasks resume <series-id> --group <group-id>`; task series that were
+  already paused remain paused
 
-Rollback before distillation is a rename in reverse: stop the group, move
-`imported-claude-local*.md` back to `CLAUDE.local.md` or
-`instructions.prepend.md` back to `.seed.md`, and remove only the Map line added
-for that file. Never overwrite a path during rollback.
+Rollback before distillation is every recorded rename in reverse: stop the
+group, restore each source path from its exact destination, and remove only the
+Map lines added for those imports. Restore any task series paused by this
+workflow even when the migration is rolled back. Never overwrite a path during
+rollback.

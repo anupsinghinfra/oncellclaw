@@ -1,12 +1,18 @@
 import fs from 'fs';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('./log.js', () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn() },
+}));
 
 import { PERSONA_PREPEND_FILE, readGroupPersona, stageGroupPersona } from './group-persona.js';
+import { log } from './log.js';
 
 const TMP = '/tmp/nanoclaw-group-persona-test';
 
 beforeEach(() => {
+  vi.clearAllMocks();
   fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
 });
@@ -18,6 +24,7 @@ afterEach(() => {
 describe('readGroupPersona', () => {
   it('returns null when the prepend file is absent', () => {
     expect(readGroupPersona(TMP)).toBeNull();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('returns null for an empty / whitespace-only file', () => {
@@ -36,6 +43,10 @@ describe('readGroupPersona', () => {
     fs.symlinkSync(target, path.join(TMP, PERSONA_PREPEND_FILE));
 
     expect(readGroupPersona(TMP)).toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Could not read group standing instructions; omitting persona',
+      expect.objectContaining({ file: path.join(TMP, PERSONA_PREPEND_FILE) }),
+    );
   });
 });
 
