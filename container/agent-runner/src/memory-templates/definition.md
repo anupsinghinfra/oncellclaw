@@ -40,9 +40,10 @@ The starting layout, not a rule - reshape it as your memory grows:
 - `memory/memories/` - durable facts, project context, people, decisions, entity notes
 - `memory/data/` - structured reference data, datasets, tables, reusable records
 
-Write to the smallest useful file, and update existing files rather than
-creating duplicates. Be concise and source-aware; include dates when timing
-matters.
+Write to the smallest useful file for the entity the fact is about. Update
+that entity's existing file rather than creating duplicates, and don't default
+to whichever file is already open or most recently discussed. Be concise and
+source-aware; include dates when timing matters.
 
 ## Keep it true
 
