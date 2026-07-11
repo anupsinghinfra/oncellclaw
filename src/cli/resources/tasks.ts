@@ -643,7 +643,7 @@ registerResource({
     'append-log': {
       access: 'open',
       description:
-        'Append a one-line note to a task run log (tasks/<id>.md).\n\nOptional: every task run auto-logs its final text, so use this only for additive mid-run notes. The host stamps the UTC timestamp; you supply --msg. This is a LOG ENTRY, not a message — it sends nothing to anyone. Inside a task run --id is auto-derived from your session.',
+        'Append a one-line note to a task run log (tasks/<id>.md).\n\nOptional: every task run auto-logs its final text, so use this only for additive mid-run notes. The host stamps the local timestamp; you supply --msg. This is a LOG ENTRY, not a message — it sends nothing to anyone. Inside a task run --id is auto-derived from your session.',
       examples: [
         `# Inside a task run (--id auto-derived) — optional progress note:\nncl tasks append-log --msg "one feed returned 403; continuing with the remaining feeds"`,
       ],
@@ -652,7 +652,7 @@ registerResource({
           name: 'msg',
           type: 'string',
           description:
-            'Your work-log entry: what you did and why it mattered (like a human work log). The host prepends the UTC timestamp; this is logged, never sent to the user.',
+            'Your work-log entry: what you did and why it mattered (like a human work log). The host prepends the local timestamp; this is logged, never sent to the user.',
           required: true,
         },
         {

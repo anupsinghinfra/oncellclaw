@@ -367,7 +367,7 @@ describe('deliverSessionMessages — task_log rows (one-door task delivery)', ()
     const logFile = `${TEST_DIR}/groups/test-agent/tasks/daily-digest-a1b2.md`;
     expect(fs.existsSync(logFile)).toBe(true);
     const line = fs.readFileSync(logFile, 'utf8').trim();
-    expect(line).toMatch(/^\d{4}-\d{2}-\d{2}T.* — checked feeds; nothing new$/);
+    expect(line).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} — checked feeds; nothing new$/);
     // Marked delivered — the row is not retried.
     const delivered = getDeliveredIds(openInboundDb('ag-1', session.id));
     expect(delivered.has('log-1')).toBe(true);

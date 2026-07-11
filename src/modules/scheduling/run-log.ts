@@ -9,8 +9,9 @@
  */
 import fs from 'fs';
 
-import { GROUPS_DIR } from '../../config.js';
+import { GROUPS_DIR, TIMEZONE } from '../../config.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
+import { formatLocalStamp } from '../../timezone.js';
 
 export function appendRunLog(
   agentGroupId: string,
@@ -23,7 +24,7 @@ export function appendRunLog(
   const ag = getAgentGroup(agentGroupId);
   if (!ag) throw new Error(`agent group not found: ${agentGroupId}`);
 
-  const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const timestamp = formatLocalStamp(new Date(), TIMEZONE);
   const dir = `${GROUPS_DIR}/${ag.folder}/tasks`;
   const file = `${dir}/${series}.md`;
   fs.mkdirSync(dir, { recursive: true });

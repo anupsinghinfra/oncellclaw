@@ -208,6 +208,6 @@ describe('handleRecurrence — script-failure backoff (streak derived from faile
     const content = fs.readFileSync(logFile, 'utf8');
     expect(content).toContain('auto-paused after 8 consecutive script failures');
     expect(content).toContain('ncl tasks resume task-s-0');
-    expect(content).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z — /m); // appendRunLog's stamp
+    expect(content).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} — /m); // appendRunLog's local-time stamp
   });
 });
