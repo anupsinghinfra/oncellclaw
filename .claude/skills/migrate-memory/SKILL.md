@@ -11,10 +11,8 @@ files into that shared layout; normal host and container startup never imports
 them.
 
 The migration is deliberately content-blind. Do not read legacy contents on
-the host. The only exception is the first line of `CLAUDE.md`, used solely to
-distinguish a generated file from pre-composer group memory. Move regular
-files, quarantine symlinks without following them, then let the group agent
-distill standing behavior and durable facts inside its container.
+the host. Move regular files, quarantine symlinks without following them, then
+let the group agent classify and distill content inside its container.
 
 ## 1. Inventory and maintenance window
 
@@ -79,12 +77,11 @@ Use same-filesystem renames so each move is atomic.
 - Symlink: rename the symlink itself into
   `memory/.migration-quarantine/CLAUDE.md` (add a numeric suffix on
   collision).
-- Regular file: read only its first line. If it starts with
-  `<!-- Composed at spawn`, it is generated and must stay in place. Otherwise
-  rename it to `memory/memories/imported-claude-md.md`, using `-2`, `-3`,
-  and so on without skipping or overwriting collisions.
+- Regular file: without opening it, rename it to
+  `memory/memories/imported-claude-md.md`, using `-2`, `-3`, and so on without
+  skipping or overwriting collisions. The group agent classifies it later.
 - Add a Map entry for a renamed regular file:
-  `- [Imported legacy CLAUDE.md](memories/<filename>) - pre-composer group memory awaiting in-container distillation.`
+  `- [Imported CLAUDE.md](memories/<filename>) - legacy memory or generated composition awaiting in-container classification.`
 - Any other path type: leave it untouched and stop this group for operator
   review.
 
@@ -137,12 +134,14 @@ rerun.
 Restart the group with an on-wake task:
 
 ```bash
-ncl groups restart --id <group-id> --message "Review every legacy import linked from memory/index.md. Move standing role, persona, and behavioral instructions into instructions.prepend.md without overwriting unrelated content. Move durable facts into Core Memory only when relevant in nearly every conversation; put other facts in focused linked memory files. Update the Map, then report what you changed."
+ncl groups restart --id <group-id> --message "Review every legacy import linked from memory/index.md. First classify imported-claude-md*.md: if its first line starts with '<!-- Composed at spawn', it is generated boilerplate, so remove that import and its exact Map entry without treating it as memory. Distill other imports by moving standing role, persona, and behavioral instructions into instructions.prepend.md without overwriting unrelated content. Move durable facts into Core Memory only when relevant in nearly every conversation; put other facts in focused linked memory files. Update the Map, then report what you changed."
 ```
 
 The group agent performs this content-aware step inside its own workspace. Keep
 the imported files until the operator approves the distillation; then the agent
-may archive them under `memory/memories/` or remove their Map entries.
+may archive them under `memory/memories/` or remove their Map entries. Generated
+composition boilerplate is the exception: it contains no legacy memory and is
+removed during classification.
 
 ## 5. Verify and rollback
 

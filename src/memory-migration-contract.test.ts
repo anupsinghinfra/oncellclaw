@@ -12,6 +12,11 @@ describe('shared-memory migration contract', () => {
     expect(skill).toContain('### `.seed.md`');
   });
 
+  it('keeps legacy contents opaque on the host and classifies generated CLAUDE.md in-container', () => {
+    expect(skill).toContain('Regular file: without opening it, rename it');
+    expect(skill).toContain("if its first line starts with '<!-- Composed at spawn'");
+  });
+
   it('pauses scheduled wakes for the maintenance window and restores only recorded tasks', () => {
     expect(skill).toContain('ncl tasks pause <series-id> --group <group-id>');
     expect(skill).toContain('ncl tasks resume <series-id> --group <group-id>');
