@@ -36,7 +36,7 @@ describe('WhatsApp shared-number risk gate', () => {
     expect(result).toBe(BACK_TO_CHANNEL_SELECTION);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining('temporarily suspend or permanently ban that number'),
-      '⚠️ Risk to your WhatsApp account',
+      'Risk to your WhatsApp account',
     );
     expect(mocks.userInput).toHaveBeenCalledWith('whatsapp_shared_risk_acknowledged', 'true');
   });

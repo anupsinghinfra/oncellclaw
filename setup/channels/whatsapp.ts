@@ -244,7 +244,7 @@ async function confirmSharedNumber(): Promise<'continue' | 'dedicated'> {
       `  • ${brandBold('a dedicated WhatsApp number')} — spare SIM, eSIM, or old phone`,
       `  • ${brandBold('/add-whatsapp-cloud')} — the official Meta Business API`,
     ].join('\n'),
-    '⚠️ Risk to your WhatsApp account',
+    'Risk to your WhatsApp account',
   );
   const choice = ensureAnswer(
     await brightSelect({
