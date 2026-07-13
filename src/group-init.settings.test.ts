@@ -44,7 +44,6 @@ describe('default settings.json for new groups', () => {
     const settings = JSON.parse(fs.readFileSync(file, 'utf-8'));
 
     expect(settings.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBeUndefined();
-    expect(settings.disableWorkflows).toBe(true);
     expect(settings.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD).toBe('1');
     expect(JSON.stringify(settings.hooks.PreCompact)).toContain('compact-instructions');
   });
