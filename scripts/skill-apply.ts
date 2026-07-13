@@ -553,7 +553,13 @@ async function applyOne(
         const b = String(d.attrs['from-branch']);
         const remote = ctx.resolveRemote(b);
         await exec(`git fetch ${remote} ${b}`);
-        for (const l of d.body) await exec(`git show ${remote}/${b}:${srcOf(l)} > ${destOf(l)}`);
+        for (const l of d.body) {
+          // The shell redirect can't create parent directories, and the dest
+          // may not exist on trunk (e.g. container skills that live only on
+          // the channels branch). Mirror the local-copy path's mkdir.
+          mkdirSync(dirname(join(root, destOf(l))), { recursive: true });
+          await exec(`git show ${remote}/${b}:${srcOf(l)} > ${destOf(l)}`);
+        }
       } else {
         for (const l of d.body) {
           const dst = join(root, destOf(l));

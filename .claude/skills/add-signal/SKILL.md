@@ -127,6 +127,41 @@ linked, and wait for its CLI socket before wiring:
 bash setup/lib/restart.sh
 ```
 
+## Wiring
+
+### DMs
+
+After the service starts, send any message to the Signal number from your
+personal Signal app. The router auto-creates a `messaging_groups` row. Then:
+
+```bash
+pnpm exec tsx scripts/q.ts data/v2.db \
+  "SELECT id, platform_id FROM messaging_groups WHERE channel_type='signal' ORDER BY created_at DESC LIMIT 5"
+```
+
+Pass the `id` to `/init-first-agent` or `/manage-channels` to wire it to an agent group.
+
+### Groups
+
+Add the Signal number to a group from your phone, send any message, then wire the resulting row the same way. Each group gets its own session with the default `shared` mode (one session per agent + messaging group). Create the wiring with `ncl` — **the host service must be running** (`ncl` connects to it over a Unix socket):
+
+```bash
+# Engage mode/pattern default to the Signal adapter's declared channel defaults
+ncl wirings create --messaging-group-id mg-GROUPID --agent-group-id ag-AGENTID
+```
+
+### Grant user access
+
+New Signal users (including the owner's Signal identity) are silently dropped with `not_member` until granted access. After the user's first message appears in `messaging_groups` (host service running):
+
+```bash
+ncl users create --id "signal:UUID" --kind signal --display-name "<name>"
+ncl roles grant --user "signal:UUID" --role owner
+ncl members add --user "signal:UUID" --group ag-AGENTID
+```
+
+Find the UUID from `messaging_groups.platform_id` or the `users` table.
+
 ## Next Steps
 
 If you're in the middle of `/setup`, return to the setup flow now. Otherwise wire
@@ -143,7 +178,7 @@ this channel with `/init-first-agent` (or `/manage-channels`).
 - **how-to-find-id**: The owner number comes back from the device-link step above. For third parties or groups, send a message to the bot, then query `messaging_groups`.
 - **supports-threads**: no
 - **typical-use**: Personal assistant via Signal DMs or small group chats
-- **default-isolation**: One agent per Signal account. Multiple chats with the same operator can share an agent group; groups with other people should typically use `isolated` session mode.
+- **default-isolation**: One agent per Signal account. Multiple chats with the same operator can share an agent group; groups with other people should typically get their own agent group (the default `shared` session mode already gives each messaging group its own session).
 
 ### Features
 
@@ -278,7 +313,7 @@ If you see `Signal channel lost TCP connection to signal-cli daemon` in the logs
 
 ### Messages dropped with `not_member`
 
-The Signal user hasn't been granted membership. New Signal senders — including the owner's Signal identity — are gated until granted access. `/init-first-agent` grants the owner automatically; for other users, wire access with `/manage-channels` after their first message appears in `messaging_groups`. This affects every new Signal user, since their Signal identity is a separate user record from their identity on other channels even if it's the same person.
+The Signal user hasn't been granted membership. New Signal senders — including the owner's Signal identity — are gated until granted access. `/init-first-agent` grants the owner automatically; for other users, grant access as shown under **Grant user access** in the Wiring section (or via `/manage-channels`) after their first message appears in `messaging_groups`. This affects every new Signal user, since their Signal identity is a separate user record from their identity on other channels even if it's the same person.
 
 ### Captcha required
 

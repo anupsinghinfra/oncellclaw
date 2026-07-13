@@ -179,7 +179,7 @@ So during this step:
   marker.
 
 The level-2 log still gets an entry (`auth [interactive] → success`
-with the method — subscription / oauth-token / api-key). Level-3 captures
+with the method — subscription / oauth / api). Level-3 captures
 are optional here; mirroring `script -q` output is tricky and the risk of
 leaking the token to disk outweighs the debugging value.
 
@@ -190,7 +190,7 @@ leaking the token to disk outweighs the debugging value.
 | `nanoclaw.sh` | Top-level wrapper. Phase 1 (bootstrap) and phase 2 (setup:auto) orchestration. Writes bootstrap's raw log + progression entry. `--uninstall` bypasses bootstrap entirely — it execs setup:auto directly (the flow lives in `setup/uninstall/`), or prints manual-cleanup guidance and exits 1 when the TS toolchain is missing. |
 | `setup.sh` | Phase 1 bootstrap: Node, pnpm, native-module verify. Emits its own `BOOTSTRAP` status block (historically printed to stdout; now goes to the bootstrap raw log). |
 | `setup/auto.ts` | Phase 2 driver. Orchestrates the clack UI, step execution, user prompts, and writes to all three log levels for every step it spawns. |
-| `setup/logs.ts` | The logging primitives (`logStep`, `logUserInput`, `logComplete`, `stepRawLog`, `initSetupLog`). Single source of truth for level 2/3 formatting and file paths. |
+| `setup/logs.ts` | The logging primitives (`step`, `userInput`, `complete`, `stepRawLog`, `reset`). Single source of truth for level 2/3 formatting and file paths. |
 | `setup/<step>.ts` | Individual step implementations. Must emit one terminal status block; must not write directly to the terminal. |
 | `setup/register-claude-token.sh` | The Anthropic exception. Inherits stdio, prints its own UI, returns a status to the driver. |
 | `setup/channels/telegram.ts` | Telegram channel flow. Installs the adapter in-process by applying the `/add-telegram` skill (directive engine; SKILL.md is the single source of truth), feeding the collected bot token to the skill's `bot_token` prompt var. |

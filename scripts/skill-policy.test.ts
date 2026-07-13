@@ -59,12 +59,14 @@ describe('gatePolicy — §5.1 parity table (real skills)', () => {
 
   it('whatsapp: each auth-method operator skips the OTHER branch and gates on its own step', () => {
     const d = decisions(loadSkill('whatsapp'));
+    // shared-number ban warning → shared_confirm prompt (natural barrier);
     // qr operator skips the pairing-code operator + step (guard-incompatible)
-    // and gates on the qr effect:step; pairing-code likewise; the shared/dedicated
-    // block is prompt-followed.
-    expect(d.map((g) => g.needsConfirm)).toEqual([true, true, false]);
-    expect(d[0].flavor).toBe('readiness');
+    // and gates on the qr effect:step; pairing-code likewise; the dedicated
+    // chat-number block and the shared-mode closing note are prompt-followed
+    // or terminal.
+    expect(d.map((g) => g.needsConfirm)).toEqual([false, true, true, false, false]);
     expect(d[1].flavor).toBe('readiness');
+    expect(d[2].flavor).toBe('readiness');
   });
 
   it('imessage: guard-compatibility — the local block skips the remote-only prompts and gates on the local configure run', () => {

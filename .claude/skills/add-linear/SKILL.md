@@ -31,8 +31,9 @@ re-run; anything a parser can't apply falls back to the prose beside it.
 ## Apply
 
 Linear OAuth apps post and read comments under an app identity that can't be
-@-mentioned, so when you wire the channel in `/manage-channels`, pick an engage
-mode that responds to plain comments rather than mention-only.
+@-mentioned; the adapter's declared channel defaults therefore respond to plain
+comments rather than mention-only, and the wiring below sets that same pattern
+mode explicitly.
 
 ### 1. Copy the adapter and its registration test
 
@@ -146,20 +147,30 @@ LINEAR_API_KEY=lin_api_...
 
 Linear is team-routed: the assistant watches one team and answers *every* comment
 on its issues (it can't be @-mentioned). Wire the team you set up to an agent —
-pick which one should answer (`ncl groups list` shows their folders):
+pick which one should answer (`ncl groups list` shows their folders). The host
+service must be running — `ncl` connects to it over a Unix socket.
+
+The sender policy depends on the workspace: a private workspace can use `public`
+(only workspace members can comment anyway); a public workspace should use
+`strict` so only registered members may talk to the agent.
 
 ```nc:prompt agent_folder
 Which agent should answer Linear comments? Enter its folder (run `ncl groups list`).
 ```
+```nc:prompt linear_sender_policy normalize:lower validate:^(public|strict)$
+Is this a private or public Linear workspace? Enter `public` for a private workspace (only members can comment) or `strict` for a public workspace (only registered members may talk to the agent).
+```
 ```nc:run effect:wire
-ncl messaging-groups create --channel-type linear --platform-id linear:{{linear_team_key}} --is-group 1 --unknown-sender-policy public --name {{linear_team_key}}
+ncl messaging-groups create --channel-type linear --platform-id linear:{{linear_team_key}} --is-group 1 --unknown-sender-policy {{linear_sender_policy}} --name {{linear_team_key}}
 ncl wirings create --channel-type linear --platform-id linear:{{linear_team_key}} --agent-group {{agent_folder}} --engage-mode pattern --engage-pattern . --session-mode per-thread
 ```
 
-Each issue thread becomes its own conversation. There's no welcome — Linear has
-no direct message, so the assistant greets people when it first answers a comment.
-For a public-internet workspace, restrict it to people you've registered with
-`--unknown-sender-policy strict` (see the GitHub skill for adding members).
+The explicit `pattern` engage mode with pattern `.` matches the Linear adapter's
+declared channel defaults — Linear can't be @-mentioned, so the agent answers
+every comment. Each issue thread becomes its own conversation. There's no
+welcome — Linear has no direct message, so the assistant greets people when it
+first answers a comment. If you chose `strict`, register the people who may talk
+to the agent (see the GitHub skill for adding members).
 
 ## Next Steps
 

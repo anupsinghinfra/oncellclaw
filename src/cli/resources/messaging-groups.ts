@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
 
-import { createMessagingGroup, getMessagingGroupByPlatform } from '../../db/messaging-groups.js';
+import { resolveUnknownSenderPolicy } from '../../channels/channel-defaults.js';
+import { hasDeclaredChannelDefaults } from '../../channels/channel-registry.js';
+import { getMessagingGroupByPlatform } from '../../db/messaging-groups.js';
+import { log } from '../../log.js';
 import { routeInbound } from '../../router.js';
-import type { MessagingGroup } from '../../types.js';
 import { registerResource } from '../crud.js';
 
 registerResource({
@@ -53,7 +55,7 @@ registerResource({
       name: 'unknown_sender_policy',
       type: 'string',
       description:
-        'What happens when an unrecognized sender posts. "strict" drops silently. "request_approval" sends an approval card to an admin. "public" allows anyone.',
+        'What happens when an unrecognized sender posts. "strict" drops silently. "request_approval" sends an approval card to an admin. "public" allows anyone. Default: declared by the channel adapter for this context (DM vs group); "strict" when the channel has no declaration.',
       enum: ['strict', 'request_approval', 'public'],
       default: 'strict',
       updatable: true,
@@ -67,39 +69,27 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
-  // Generic create is replaced by the custom `create` below — the standard
-  // INSERT can't default the NOT NULL `instance` column (it isn't in the
-  // resource's column list) and isn't idempotent.
-  operations: { list: 'open', get: 'open', update: 'approval', delete: 'approval' },
+  // Idempotent create: a skill re-running `ncl messaging-groups create` gets the existing row back.
+  naturalKey: ['channel_type', 'platform_id', 'instance'],
+  operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
+  resolveDefaults: (values) => {
+    if (values.unknown_sender_policy !== undefined) return;
+    const channelType = String(values.channel_type);
+    const channelKey = (values.instance as string | undefined) ?? channelType;
+    // Static 'strict' stays the no-declaration fallback: a trunk update alone
+    // must not change ncl's creation defaults for stale (undeclared) adapters.
+    if (!hasDeclaredChannelDefaults(channelKey, channelType)) {
+      log.warn(
+        `messaging-group create: channel '${channelKey}' has no declared defaults (adapter not installed or stale) — using legacy static defaults`,
+      );
+      return;
+    }
+    // is_group carries its static default (0) only after this hook runs, so
+    // treat "not provided" as the same DM context the static default means.
+    const isGroup = Number(values.is_group ?? 0) === 1;
+    values.unknown_sender_policy = resolveUnknownSenderPolicy(channelKey, isGroup, channelType);
+  },
   customOperations: {
-    create: {
-      access: 'approval',
-      description:
-        'Create (or return the existing) messaging group. Idempotent on (channel_type, platform_id, instance); instance defaults to channel_type. Use --channel-type, --platform-id, optionally --instance, --name, --is-group, --unknown-sender-policy.',
-      handler: async (args) => {
-        const channelType = args.channel_type as string;
-        const platformId = args.platform_id as string;
-        if (!channelType || !platformId) {
-          throw new Error('--channel-type and --platform-id are required');
-        }
-        const instance = (args.instance as string) ?? channelType;
-        const existing = getMessagingGroupByPlatform(channelType, platformId, instance);
-        if (existing) return existing;
-        const group = {
-          id: randomUUID(),
-          channel_type: channelType,
-          platform_id: platformId,
-          instance,
-          name: (args.name as string) ?? null,
-          is_group: Number(args.is_group ?? 0),
-          unknown_sender_policy: (args.unknown_sender_policy as string) ?? 'strict',
-          denied_at: null,
-          created_at: new Date().toISOString(),
-        } as MessagingGroup;
-        createMessagingGroup(group);
-        return group;
-      },
-    },
     send: {
       access: 'approval',
       description:

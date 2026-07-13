@@ -35,6 +35,8 @@ interface WireArgs {
   displayName: string;
   agentName: string;
   role: OperatorRole;
+  /** Explicit DM engage regex (e.g. WhatsApp shared-mode "@<name> only" self-chat). */
+  engagePattern?: string;
 }
 
 async function resolveAgentName(): Promise<string> {
@@ -63,6 +65,7 @@ async function initFirstAgent(args: WireArgs): Promise<boolean> {
       '--display-name', args.displayName,
       '--agent-name', args.agentName,
       '--role', args.role,
+      ...(args.engagePattern ? ['--engage-pattern', args.engagePattern] : []),
     ],
     { running: `Wiring ${args.agentName} to your ${args.channel} DMs…`, done: 'Agent wired.' },
     { extraFields: { CHANNEL: args.channel, AGENT_NAME: args.agentName, PLATFORM_ID: args.platformId } },
@@ -128,7 +131,12 @@ export async function runChannelSkill(
     exec: overrides.exec,
     resolveInput: overrides.resolveInput,
     resolveRemote: overrides.resolveRemote,
-    inputs: overrides.inputs,
+    // The already-resolved agent name is pre-supplied so a skill that consumes
+    // {{agent_name}} (WhatsApp's ASSISTANT_NAME / engage-pattern steps) never
+    // re-asks in the wizard; its own prompt still asks on standalone runs. In
+    // wireIfResolved mode the name is asked AFTER the skill run, so it stays
+    // unbound here. An explicit overrides.inputs.agent_name wins.
+    inputs: askLater ? overrides.inputs : { agent_name: agentName, ...overrides.inputs },
     skipEffects: overrides.skipEffects,
     // undefined ⇒ runSkill's default policy handler (TTY-gated spinner + operator
     // note → URL offer → natural-barrier confirm). An injected onEvent replaces
@@ -198,7 +206,18 @@ export async function runChannelSkill(
   // Shared wire — the same procedure for every channel. role is defined here:
   // it's only undefined in an unresolved wireIfResolved run (returned above).
   const wire = overrides.wire ?? initFirstAgent;
-  const ok = await wire({ channel, userId: `${channel}:${ownerHandle}`, platformId, displayName, agentName, role: role! });
+  // A skill-resolved engage pattern (WhatsApp shared-mode "@<name> only"
+  // self-chat) rides along to init-first-agent's --engage-pattern; unset means
+  // the wiring's own DM default applies.
+  const ok = await wire({
+    channel,
+    userId: `${channel}:${ownerHandle}`,
+    platformId,
+    displayName,
+    agentName,
+    role: role!,
+    engagePattern: res.vars.engage_pattern || undefined,
+  });
   if (!ok) {
     await failWith('init-first-agent', `Couldn't finish connecting ${agentName}.`, 'You can retry later with `/init-first-agent`.');
   }

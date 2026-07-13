@@ -8,11 +8,11 @@ import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
-  ensureContainerConfig,
   getContainerConfig,
   updateContainerConfigScalars,
   updateContainerConfigJson,
 } from '../../db/container-configs.js';
+import { initGroupFilesystem } from '../../group-init.js';
 import { createAgentFromTemplate } from '../../templates/create-agent.js';
 import type { AgentGroup, ContainerConfigRow } from '../../types.js';
 import { registerResource } from '../crud.js';
@@ -74,7 +74,7 @@ registerResource({
       description:
         'Create (or return the existing) agent group with its container config. Idempotent on --folder. ' +
         'With --template <ref>, stamp from a local template under templates/ (MCP servers + instructions ' +
-        '+ skills). Use --folder <slug> and --name <display name>. Workspace files are scaffolded on first spawn.',
+        '+ skills). Use --folder <slug> and --name <display name>.',
       handler: async (args) => {
         if (args.template) {
           return createAgentFromTemplate(String(args.template), {
@@ -86,12 +86,21 @@ registerResource({
         const name = (args.name as string) ?? folder;
         const existing = getAgentGroupByFolder(folder);
         if (existing) {
-          ensureContainerConfig(existing.id); // ensure a reused group is fully configured too
+          initGroupFilesystem(existing); // ensure a reused group is fully configured too (idempotent; also repairs a missing workspace folder)
           return existing;
         }
         const id = `ag-${randomUUID()}`;
-        createAgentGroup({ id, name, folder, agent_provider: null, created_at: new Date().toISOString() });
-        ensureContainerConfig(id);
+        const group: AgentGroup = { id, name, folder, agent_provider: null, created_at: new Date().toISOString() };
+        createAgentGroup(group);
+        // Provision the workspace folder and the `container_configs` row that
+        // `getContainerConfig` and the spawn path require. Without this, a
+        // group created via `ncl groups create` would throw "Container config
+        // not found" on first spawn and stay broken until the host restart
+        // backfill ran (#2415). The template branch above provisions its own
+        // config + folder in `createAgentFromTemplate`; this covers the bare
+        // path. Mirrors what `setup/register.ts` does after creating an agent
+        // group via the setup flow.
+        initGroupFilesystem(group);
         return getAgentGroupByFolder(folder);
       },
     },

@@ -15,15 +15,22 @@ safe to re-run; anything a parser can't apply falls back to the prose beside it.
 
 ## Apply
 
-### 1. Copy the adapter and its registration test
+### 1. Copy the adapter, registration test, and formatting skill
 
-Fetch the `channels` branch and copy the Slack adapter and its registration test
-into `src/channels/` (overwrite — the branch is canonical):
+Fetch the `channels` branch and copy the Slack adapter, its registration test,
+and the formatting container skill into place (overwrite — the branch is
+canonical):
 
 ```nc:copy from-branch:channels
 src/channels/slack.ts
 src/channels/slack-registration.test.ts
+container/skills/slack-formatting/SKILL.md
 ```
+
+The `slack-formatting` container skill is part of the channel payload: it
+reaches agents via `~/.claude/skills` (synced at spawn) and teaches Slack's
+mrkdwn syntax. Trunk does not ship it — without this copy step agents send
+Slack messages with generic markdown that renders literally.
 
 ### 2. Register the adapter
 

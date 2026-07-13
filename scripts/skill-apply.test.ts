@@ -105,6 +105,41 @@ describe('apply engine lifecycle', () => {
   });
 });
 
+// from-branch copy: the dest may live only on the registry branch (e.g. a
+// container skill trunk no longer ships), so the engine must create the
+// parent directory itself — the shell redirect in `git show src > dest` can't.
+const FROM_BRANCH_SKILL = `# from-branch demo
+
+## Pull the formatting skill from the channels branch
+\`\`\`nc:copy from-branch:channels
+container/skills/demo-formatting/SKILL.md
+\`\`\`
+`;
+
+describe('from-branch copy apply path', () => {
+  it('creates the missing dest parent dir before the git-show redirect', async () => {
+    const fskill = mkdtempSync(join(tmpdir(), 'nc-skill-fb-'));
+    const froot = mkdtempSync(join(tmpdir(), 'nc-proj-fb-'));
+    writeFileSync(join(fskill, 'SKILL.md'), FROM_BRANCH_SKILL);
+    writeFileSync(join(froot, '.env'), '');
+    writeFileSync(join(froot, 'package.json'), '{"name":"scratch"}');
+    // container/skills/demo-formatting/ deliberately absent from root
+
+    const { cmds, exec } = recordingExec();
+    const res = await applySkill(fskill, froot, { exec, resolveRemote: () => 'origin' });
+
+    // the redirect target's parent now exists, so the exec'd `git show … > dest`
+    // (mocked here) would not fail with ENOENT on a real run
+    expect(existsSync(join(froot, 'container/skills/demo-formatting'))).toBe(true);
+    expect(cmds).toContain('git fetch origin channels');
+    expect(cmds.some((c) => /^git show origin\/channels:container\/skills\/demo-formatting\/SKILL\.md > container\/skills\/demo-formatting\/SKILL\.md$/.test(c))).toBe(true);
+    expect(res.journal).toContainEqual({ op: 'wrote', path: 'container/skills/demo-formatting/SKILL.md' });
+
+    rmSync(fskill, { recursive: true, force: true });
+    rmSync(froot, { recursive: true, force: true });
+  });
+});
+
 // json-merge: push a body object into an array-of-objects JSON file, keyed.
 const JSON_MERGE_SKILL = `# json-merge demo
 

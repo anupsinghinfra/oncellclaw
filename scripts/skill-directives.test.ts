@@ -49,10 +49,14 @@ describe('skill-directives parser, on the converted add-slack', () => {
     expect(ops[2].attrs.when).toBe('connection=webhook');
   });
 
-  it('reads copy as a branch fetch with both files', () => {
+  it('reads copy as a branch fetch with the full channel payload', () => {
     const copy = directives.find((d) => d.kind === 'copy')!;
     expect(copy.attrs['from-branch']).toBe('channels');
-    expect(copy.body).toEqual(['src/channels/slack.ts', 'src/channels/slack-registration.test.ts']);
+    expect(copy.body).toEqual([
+      'src/channels/slack.ts',
+      'src/channels/slack-registration.test.ts',
+      'container/skills/slack-formatting/SKILL.md',
+    ]);
   });
 
   it('reads the barrel append target and line', () => {

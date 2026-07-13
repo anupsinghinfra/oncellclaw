@@ -1,158 +1,232 @@
 /**
- * Programmatic wiring via ncl — the verbs a converted channel skill calls from
- * `nc:run effect:wire` (so wiring is "collect input + ncl", no nc:wire directive).
- *
- * Covers the three behaviours those skills rely on:
- *   - `messaging-groups create` defaults the NOT NULL `instance` to channel_type
- *     and is idempotent (re-apply returns the same row, no UNIQUE violation).
- *   - `users create` is idempotent on the user id.
- *   - `wirings create` resolves natural keys (channel_type + platform_id → mg;
- *     agent-group folder → ag) and is idempotent on the (mg, ag) pair.
- *
- * Dispatch is invoked with `{ caller: 'host' }` — the same path setup takes —
- * so the create verbs' `access: 'approval'` gate (container agents only) is
- * bypassed, exactly as during `/setup`.
+ * Wiring creation/update against channel declarations: the resolveDefaults
+ * hook fills omitted engage defaults from the adapter declaration ({name}
+ * substituted), explicit flags always win, undeclared channels keep the
+ * legacy static defaults (back-compat contract), and the create/update
+ * validation rejects combinations that could never engage.
  */
-import fs from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-
-vi.mock('../../container-runner.js', () => ({
-  wakeContainer: vi.fn().mockResolvedValue(undefined),
-  isContainerRunning: vi.fn().mockReturnValue(false),
-  getActiveContainerCount: vi.fn().mockReturnValue(0),
-  killContainer: vi.fn(),
-  buildAgentGroupImage: vi.fn().mockResolvedValue(undefined),
+vi.mock('../../log.js', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-vi.mock('../../config.js', async () => {
-  const actual = await vi.importActual('../../config.js');
-  return { ...actual, DATA_DIR: '/tmp/nanoclaw-test-cli-wirings' };
+// wirings' postCommit projects destinations into live session DBs — no
+// sessions run in this test, but the module must not open on-disk DB files.
+vi.mock('../../modules/agent-to-agent/write-destinations.js', () => ({
+  writeDestinations: vi.fn(),
+}));
+
+import type { ChannelDefaults } from '../../channels/adapter.js';
+import { registerChannelAdapter } from '../../channels/channel-registry.js';
+import { initTestDb, closeDb, runMigrations, createAgentGroup, createMessagingGroup } from '../../db/index.js';
+import { createMessagingGroupAgent, getMessagingGroupAgent } from '../../db/messaging-groups.js';
+import { lookup } from '../registry.js';
+// Side-effect import: registers wirings-create / wirings-update.
+import './wirings.js';
+
+const hostCtx = { caller: 'host' as const };
+const now = () => new Date().toISOString();
+
+// Registration-tier declarations only — no adapter is live, which is exactly
+// the environment `ncl` sees for offline instances and setup scripts.
+const declared: ChannelDefaults = {
+  dm: { engageMode: 'pattern', engagePattern: 'hey {name}!', threads: false, unknownSenderPolicy: 'public' },
+  group: { engageMode: 'mention-sticky', threads: true, unknownSenderPolicy: 'request_approval' },
+  mentions: 'platform',
+};
+registerChannelAdapter('declchan', { factory: () => null, defaults: declared });
+
+const neverDeclared: ChannelDefaults = {
+  dm: { engageMode: 'pattern', engagePattern: '.', threads: false, unknownSenderPolicy: 'strict' },
+  group: { engageMode: 'pattern', engagePattern: '{name}', threads: false, unknownSenderPolicy: 'strict' },
+  mentions: 'never',
+};
+registerChannelAdapter('neverchan', { factory: () => null, defaults: neverDeclared });
+
+function mg(id: string, channelType: string, isGroup: number) {
+  createMessagingGroup({
+    id,
+    channel_type: channelType,
+    platform_id: `pid-${id}`,
+    name: null,
+    is_group: isGroup,
+    unknown_sender_policy: 'strict',
+    created_at: now(),
+  });
+}
+
+async function create(args: Record<string, unknown>) {
+  return (await lookup('wirings-create')!.handler(args, hostCtx)) as Record<string, unknown>;
+}
+
+async function update(args: Record<string, unknown>) {
+  return (await lookup('wirings-update')!.handler(args, hostCtx)) as Record<string, unknown>;
+}
+
+beforeEach(() => {
+  runMigrations(initTestDb());
+  createAgentGroup({
+    id: 'ag-1',
+    name: 'Helper Bot',
+    folder: 'helper-bot',
+    agent_provider: null,
+    created_at: now(),
+  });
+  mg('mg-dm', 'declchan', 0);
+  mg('mg-group', 'declchan', 1);
+  mg('mg-never', 'neverchan', 1);
+  mg('mg-stale', 'stalechan', 1); // no declaration anywhere
 });
 
-const TEST_DIR = '/tmp/nanoclaw-test-cli-wirings';
+afterEach(() => {
+  closeDb();
+});
 
-import { initTestDb, closeDb, runMigrations, createAgentGroup, getDb } from '../../db/index.js';
-import { dispatch } from '../dispatch.js';
-// Side-effect imports: register the verbs under test.
-import './messaging-groups.js';
-import './wirings.js';
-import './users.js';
-import './groups.js';
-
-const HOST = { caller: 'host' as const };
-function now(): string {
-  return new Date().toISOString();
-}
-function send(command: string, args: Record<string, unknown>) {
-  return dispatch({ id: 'test', command, args }, HOST);
-}
-function count(sql: string, ...params: unknown[]): number {
-  return (
-    getDb()
-      .prepare(sql)
-      .get(...params) as { c: number }
-  ).c;
-}
-
-describe('programmatic wiring verbs', () => {
-  beforeEach(() => {
-    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
-    fs.mkdirSync(TEST_DIR, { recursive: true });
-    runMigrations(initTestDb());
-    createAgentGroup({ id: 'ag-1', name: 'Nano', folder: 'nano', agent_provider: null, created_at: now() });
-  });
-  afterEach(() => {
-    closeDb();
-    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+describe('wirings-create — declaration-derived defaults', () => {
+  it('fills DM defaults from the declaration with {name} substituted', async () => {
+    const row = await create({ messaging_group_id: 'mg-dm', agent_group_id: 'ag-1' });
+    expect(row.engage_mode).toBe('pattern');
+    expect(row.engage_pattern).toBe('hey Helper Bot!');
   });
 
-  it('messaging-groups create defaults instance to channel_type and is idempotent', async () => {
-    const r1 = await send('messaging-groups-create', {
-      channel_type: 'resend',
-      platform_id: 'resend:you@example.com',
-      is_group: 0,
+  it('fills group defaults from the declaration', async () => {
+    const row = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1' });
+    expect(row.engage_mode).toBe('mention-sticky');
+    const persisted = getMessagingGroupAgent(row.id as string);
+    expect(persisted!.engage_pattern).toBeNull();
+  });
+
+  it('explicit --engage-mode wins over the declaration', async () => {
+    const row = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1', engage_mode: 'mention' });
+    expect(row.engage_mode).toBe('mention');
+  });
+
+  it('undeclared channels keep the legacy static default (back-compat)', async () => {
+    const row = await create({ messaging_group_id: 'mg-stale', agent_group_id: 'ag-1' });
+    expect(row.engage_mode).toBe('mention');
+    expect(row.engage_pattern).toBeUndefined();
+  });
+});
+
+describe('wirings-create — validation', () => {
+  it('rejects pattern mode without --engage-pattern', async () => {
+    await expect(
+      create({ messaging_group_id: 'mg-stale', agent_group_id: 'ag-1', engage_mode: 'pattern' }),
+    ).rejects.toThrow(/--engage-pattern/);
+  });
+
+  it("rejects mention modes on a channel declaring mentions: 'never'", async () => {
+    await expect(
+      create({ messaging_group_id: 'mg-never', agent_group_id: 'ag-1', engage_mode: 'mention' }),
+    ).rejects.toThrow(/mentions: 'never'/);
+  });
+
+  it('coerces explicit mention-sticky to mention when the declared context has threads=false', async () => {
+    const row = await create({ messaging_group_id: 'mg-dm', agent_group_id: 'ag-1', engage_mode: 'mention-sticky' });
+    expect(row.engage_mode).toBe('mention');
+  });
+
+  it('coerces mention-sticky when --threads false overrides a threaded declaration', async () => {
+    const row = await create({
+      messaging_group_id: 'mg-group',
+      agent_group_id: 'ag-1',
+      engage_mode: 'mention-sticky',
+      threads: 'false',
     });
-    expect(r1.ok).toBe(true);
-    const mg1 = (r1 as { data: Record<string, unknown> }).data;
-    expect(mg1.instance).toBe('resend'); // defaulted from channel_type
-    expect(mg1.is_group).toBe(0);
-
-    const r2 = await send('messaging-groups-create', {
-      channel_type: 'resend',
-      platform_id: 'resend:you@example.com',
-      is_group: 0,
-    });
-    expect(r2.ok).toBe(true);
-    expect((r2 as { data: { id: string } }).data.id).toBe((mg1 as { id: string }).id); // same row
-    expect(count(`SELECT COUNT(*) c FROM messaging_groups WHERE platform_id = ?`, 'resend:you@example.com')).toBe(1);
+    expect(row.engage_mode).toBe('mention');
+    expect(row.threads).toBe(0);
   });
 
-  it('users create is idempotent on the user id', async () => {
-    const args = { id: 'resend:you@example.com', kind: 'resend', display_name: 'Owner' };
-    expect((await send('users-create', args)).ok).toBe(true);
-    expect((await send('users-create', args)).ok).toBe(true); // no UNIQUE violation
-    expect(count(`SELECT COUNT(*) c FROM users WHERE id = ?`, 'resend:you@example.com')).toBe(1);
+  it('keeps mention-sticky when the declared group context has threads=true', async () => {
+    const row = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1', engage_mode: 'mention-sticky' });
+    expect(row.engage_mode).toBe('mention-sticky');
+  });
+});
+
+describe('wirings — threads and priority columns', () => {
+  it('omitted --threads stores NULL (inherit declaration)', async () => {
+    const row = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1' });
+    expect(getMessagingGroupAgent(row.id as string)!.threads).toBeNull();
   });
 
-  it('wirings create resolves natural keys (platform_id + agent-group folder) and is idempotent', async () => {
-    await send('messaging-groups-create', {
-      channel_type: 'resend',
-      platform_id: 'resend:you@example.com',
-      is_group: 0,
-    });
+  it('--threads true/false stores 1/0', async () => {
+    const on = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1', threads: 'true' });
+    expect(getMessagingGroupAgent(on.id as string)!.threads).toBe(1);
+    const off = await create({ messaging_group_id: 'mg-dm', agent_group_id: 'ag-1', threads: 'false' });
+    expect(getMessagingGroupAgent(off.id as string)!.threads).toBe(0);
+  });
 
-    const wireArgs = {
-      channel_type: 'resend',
-      platform_id: 'resend:you@example.com',
-      agent_group: 'nano', // by FOLDER, not synthetic id
+  it('rejects a non-boolean --threads value', async () => {
+    await expect(create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1', threads: 'bogus' })).rejects.toThrow(
+      /--threads must be true or false/,
+    );
+  });
+
+  it('--priority is settable on create and defaults to 0', async () => {
+    const dflt = await create({ messaging_group_id: 'mg-dm', agent_group_id: 'ag-1' });
+    expect(dflt.priority).toBe(0);
+    const high = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1', priority: '5' });
+    expect(high.priority).toBe(5);
+  });
+});
+
+describe('wirings-update — same validation as create', () => {
+  it('rejects switching to pattern mode when no engage_pattern exists', async () => {
+    const row = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1' }); // sticky, no pattern
+    await expect(update({ id: row.id, engage_mode: 'pattern' })).rejects.toThrow(/--engage-pattern/);
+  });
+
+  it("rejects switching to a mention mode on a mentions:'never' channel", async () => {
+    const row = await create({
+      messaging_group_id: 'mg-never',
+      agent_group_id: 'ag-1',
       engage_mode: 'pattern',
       engage_pattern: '.',
-      session_mode: 'shared',
+    });
+    await expect(update({ id: row.id, engage_mode: 'mention' })).rejects.toThrow(/mentions: 'never'/);
+  });
+
+  it('coerces an existing sticky wiring to mention when --threads is turned off', async () => {
+    const row = await create({ messaging_group_id: 'mg-group', agent_group_id: 'ag-1' }); // mention-sticky
+    const updated = (await update({ id: row.id, threads: 'false' })) as { engage_mode: string; threads: number };
+    expect(updated.threads).toBe(0);
+    expect(updated.engage_mode).toBe('mention');
+  });
+
+  it('updates threads and priority', async () => {
+    const row = await create({ messaging_group_id: 'mg-dm', agent_group_id: 'ag-1' });
+    const updated = (await update({ id: row.id, threads: 'true', priority: '3' })) as {
+      threads: number;
+      priority: number;
     };
-    const w1 = await send('wirings-create', wireArgs);
-    expect(w1.ok).toBe(true);
-    const wiring = (w1 as { data: Record<string, unknown> }).data;
-    expect(wiring.agent_group_id).toBe('ag-1'); // folder resolved to the agent group id
-    expect(wiring.engage_mode).toBe('pattern');
-    expect(wiring.engage_pattern).toBe('.');
-
-    const w2 = await send('wirings-create', wireArgs);
-    expect(w2.ok).toBe(true);
-    expect((w2 as { data: { id: string } }).data.id).toBe((wiring as { id: string }).id); // idempotent on the pair
-    expect(count(`SELECT COUNT(*) c FROM messaging_group_agents WHERE agent_group_id = ?`, 'ag-1')).toBe(1);
+    expect(updated.threads).toBe(1);
+    expect(updated.priority).toBe(3);
   });
 
-  it('wirings create fails clearly when the messaging group has not been created yet', async () => {
-    const r = await send('wirings-create', {
-      channel_type: 'resend',
-      platform_id: 'resend:nobody@example.com',
-      agent_group: 'nano',
+  it('allows unrelated updates to a legacy pattern row with NULL engage_pattern', async () => {
+    // Rows created on main before engage_pattern defaults existed: pattern
+    // mode + NULL pattern, which the router evaluates as match-all.
+    createMessagingGroupAgent({
+      id: 'mga-legacy',
+      messaging_group_id: 'mg-stale',
+      agent_group_id: 'ag-1',
+      engage_mode: 'pattern',
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
     });
-    expect(r.ok).toBe(false);
-    expect((r as { error: { message: string } }).error.message).toMatch(/no messaging group/i);
-  });
 
-  it('groups create scaffolds the container config and is idempotent on folder', async () => {
-    const r1 = await send('groups-create', { folder: 'dm-with-bob', name: 'Bob' });
-    expect(r1.ok).toBe(true);
-    const ag = (r1 as { data: { id: string } }).data;
-    expect(ag.id).toBeTruthy();
-    // a working group needs a container_config row — generic create never made one
-    expect(count('SELECT COUNT(*) c FROM container_configs WHERE agent_group_id = ?', ag.id)).toBe(1);
-    // idempotent on folder
-    const r2 = await send('groups-create', { folder: 'dm-with-bob', name: 'Bob' });
-    expect((r2 as { data: { id: string } }).data.id).toBe(ag.id);
-    expect(count('SELECT COUNT(*) c FROM agent_groups WHERE folder = ?', 'dm-with-bob')).toBe(1);
-  });
+    const updated = (await update({ id: 'mga-legacy', priority: '5' })) as { priority: number };
+    expect(updated.priority).toBe(5);
+    // The pattern fields stay untouched — no silent backfill.
+    expect(getMessagingGroupAgent('mga-legacy')!.engage_pattern).toBeNull();
 
-  it('messaging-groups send errors when no group exists (lookup before routeInbound)', async () => {
-    const r = await send('messaging-groups-send', {
-      channel_type: 'resend',
-      platform_id: 'resend:ghost@example.com',
-      text: 'hi',
-    });
-    expect(r.ok).toBe(false);
-    expect((r as { error: { message: string } }).error.message).toMatch(/no messaging group/i);
+    // But actually changing the pattern fields to an invalid combination
+    // still rejects.
+    await expect(update({ id: 'mga-legacy', engage_pattern: '' })).rejects.toThrow(/--engage-pattern/);
   });
 });
