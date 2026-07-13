@@ -99,7 +99,9 @@ registerResource({
         // backfill ran (#2415). The template branch above provisions its own
         // config + folder in `createAgentFromTemplate`; this covers the bare
         // path. Mirrors what `setup/register.ts` does after creating an agent
-        // group via the setup flow.
+        // group via the setup flow. The config row is stamped with the
+        // instance default provider (`ensureContainerConfig` inside) — per-group
+        // `groups config update --provider` still wins.
         initGroupFilesystem(group);
         return getAgentGroupByFolder(folder);
       },
