@@ -389,15 +389,26 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
   // Create symlinks for desired skills (container path targets)
   for (const skill of desired) {
     const linkPath = path.join(skillsDir, skill);
-    let exists = false;
+    let entry: fs.Stats | undefined;
     try {
-      fs.lstatSync(linkPath);
-      exists = true;
+      entry = fs.lstatSync(linkPath);
     } catch {
       /* missing */
     }
-    if (!exists) {
+    if (!entry) {
       fs.symlinkSync(`/app/skills/${skill}`, linkPath);
+    } else if (!entry.isSymbolicLink()) {
+      // A real entry here is either a template overlay (intentional; see
+      // src/group-skills.ts) or a stale pre-refactor skill copy that shadows
+      // the shared skill (#3001). No marker distinguishes them yet, so
+      // surface the skip instead of staying silent.
+      log.warn(
+        'Shared skill not symlinked: real entry occupies the path (template overlay or stale pre-refactor copy)',
+        {
+          skill,
+          path: linkPath,
+        },
+      );
     }
   }
 }
