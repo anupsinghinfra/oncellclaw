@@ -7,7 +7,7 @@ type: system
 This file defines how your persistent memory works, and it is yours to improve.
 Only the portable file contract below and two loaded paths are fixed:
 `memory/index.md` and this file at `memory/system/definition.md`. The folders,
-prose organization, and other guidance are yours to reshape whenever a different
+prose organization, and other guidance are yours to reshape if a different
 shape would remember or retrieve better.
 
 `memory/index.md` and this definition are loaded whenever a context window is

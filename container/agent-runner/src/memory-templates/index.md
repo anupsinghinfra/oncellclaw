@@ -13,5 +13,3 @@ qualifies. Replace this note with your first core fact.
 ## Map
 
 - [Memory system definition](system/definition.md) - how this memory works, and yours to improve
-- [Memories](memories/) - durable facts, people, projects, decisions
-- [Data](data/) - structured reference data
