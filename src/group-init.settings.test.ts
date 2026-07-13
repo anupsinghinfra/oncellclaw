@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe('default settings.json for new groups', () => {
-  it('is lean: no agent-teams env key, workflows disabled, unmanaged keys intact', () => {
+  it('is lean: no agent-teams env key, unmanaged keys intact', () => {
     const ag = makeGroup('ag-lean');
     initGroupFilesystem(ag, {});
 
