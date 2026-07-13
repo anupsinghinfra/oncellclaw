@@ -1,6 +1,6 @@
 # The skill-engine seam: declare/emit vs. acquire/present
 
-Status: SPEC — approved boundary decision, pre-implementation, review findings folded. Branch: `feat/structured-skill-format` (pre-merge; clean break, no compat shims).
+Status: IMPLEMENTED on `feat/structured-skill-format` (clean break, no compat shims) — kept as the boundary-rule rationale and the consumer-contract reference. Author-facing directive grammar: [skill-directives.md](skill-directives.md).
 
 ## 1. The boundary rule
 
@@ -419,8 +419,8 @@ of the stale-credential path; raw `inputs` remain loud-fail (§4).
 
 - **Inputs from env — convention:** for each prompt var `foo_bar`, read
   `NC_INPUT_FOO_BAR` (prefix `NC_INPUT_`, var uppercased). A small helper
-  `inputsFromEnv(md: string, env = process.env)` (driver-agnostic, may live
-  beside the engine) parses the skill's prompt vars via `parseDirectives` and
+  `inputsFromEnv(md: string, env = process.env)` (driver-agnostic, implemented
+  at `scripts/skill-inputs.ts`) parses the skill's prompt vars via `parseDirectives` and
   returns the `inputs` record. Var names are case-sensitive in the grammar
   (`skill-directives.ts:111`), so uppercasing can collide (`bot_token` vs
   `Bot_Token`): `inputsFromEnv` **errors on a collision**. All in-tree vars are
@@ -475,6 +475,8 @@ A coding agent driving a skill over chat implements the two seams:
   is exactly the degrade-to-agent path the prose was written for.
 
 ## 8. Implementation step plan
+
+*Historical — this plan was executed on `feat/structured-skill-format`; kept as the record of how the refactor landed.*
 
 Each step must be independently green — `pnpm exec tsc --noEmit` (root) +
 `pnpm test` (full vitest suite) + skill lint on every touched skill — and
@@ -535,6 +537,8 @@ branch is fine; the *merged* result has no compat layer).
    untouched.
 
 ## 9. Test-migration notes (per step)
+
+*Historical — executed alongside §8; line numbers reference the pre-refactor tree.*
 
 - **Step 1:** all existing tests stay green — the ONLY permitted edits are the
   §4 shape-violating input fixtures (Option-A slack `:49`/`:62`, teams deferWire

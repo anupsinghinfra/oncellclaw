@@ -36,6 +36,8 @@ A skill carries everything it needs:
 
 Apply must be safe to re-run. Upgrades re-run skills, so a skill that half-applies twice is a bug.
 
+**Two readers, one document.** Some skills — the trunk channel and provider installs that the setup wizard drives — also carry their apply steps as machine-readable `nc:` directive fences beside the prose. The same SKILL.md then serves two readers: a deterministic engine (and the setup wizard built on it) applies the fences, a coding agent applies the prose, and anything the tool can't do degrades to the agent. The prose stays primary: with the fences stripped, the document reads as a normal skill. This is core tooling, not part of the model's contract — a skill with no fences is a first-class skill. See [skill-directives.md](skill-directives.md).
+
 ## Two kinds of skills
 
 - **Capability skills** add something new: a channel, a provider, a tool, a dashboard.
