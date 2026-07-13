@@ -7,14 +7,22 @@ import { log } from './log.js';
 import { providerProvidesAgentSurfaces } from './providers/provider-container-registry.js';
 import type { AgentGroup } from './types.js';
 
+// Lean by default for NEW groups: no CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+// (NanoClaw's a2a messaging is the multi-agent path) and disableWorkflows
+// (NanoClaw orchestrates its own sessions; Workflow is the largest tool
+// schema on every turn). Existing groups keep their settings.json as-is —
+// this template is only written when the file doesn't exist. To re-enable
+// either feature for one group, edit that group's
+// data/v2-sessions/<id>/.claude-shared/settings.json and restart the group;
+// nothing regenerates the file, so the edit sticks.
 const DEFAULT_SETTINGS_JSON =
   JSON.stringify(
     {
       env: {
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
         CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
         CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
       },
+      disableWorkflows: true,
       hooks: {
         PreCompact: [
           {
