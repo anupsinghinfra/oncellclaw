@@ -555,9 +555,7 @@ async function main(): Promise<void> {
       }
       let result: void | typeof BACK_TO_CHANNEL_SELECTION;
       // Every channel now runs through the SKILL.md-driven flow — the whole
-      // connect+wire procedure lives in each add-<channel>/SKILL.md. Teams
-      // defers the wire (its platform_id only exists after the first inbound),
-      // so it installs + hands off rather than wiring inline.
+      // connect+wire procedure lives in each add-<channel>/SKILL.md.
       if (channelChoice === 'telegram') {
         result = await runChannelSkill('telegram', displayName!, { offerBack: true });
       } else if (channelChoice === 'discord') {
@@ -567,7 +565,10 @@ async function main(): Promise<void> {
       } else if (channelChoice === 'signal') {
         result = await runChannelSkill('signal', displayName!, { offerBack: true });
       } else if (channelChoice === 'teams') {
-        result = await runChannelSkill('teams', displayName!, { deferWire: true, offerBack: true });
+        // Fresh create resolves the owner DM proactively and wires inline (the
+        // welcome message reaches the human first); a drop-through re-run
+        // resolves nothing and falls back to the deferred-wire ending.
+        result = await runChannelSkill('teams', displayName!, { wireIfResolved: true, offerBack: true });
       } else if (channelChoice === 'slack') {
         result = await runChannelSkill('slack', displayName!, { offerBack: true });
       } else if (channelChoice === 'imessage') {
@@ -587,6 +588,12 @@ async function main(): Promise<void> {
       if (result === BACK_TO_CHANNEL_SELECTION) backed = true;
     }
   }
+
+  // Deferred wire (Teams): verify passes with zero groups because the
+  // platform id only exists after the first DM. Tracked here so the ENDING
+  // changes too — the last box must be the one remaining action, not a
+  // premature "your assistant is saying hi" (no welcome DM exists yet).
+  let wiringPending = false;
 
   if (!skip.has('verify')) {
     const res = await runQuietStep('verify', {
@@ -642,6 +649,7 @@ async function main(): Promise<void> {
       p.outro(k.yellow('Almost there. A few things still need your attention.'));
       return;
     }
+    wiringPending = res.terminal?.fields.WIRING === 'pending_first_dm';
   }
 
   const rows: [string, string][] = [
@@ -667,7 +675,15 @@ async function main(): Promise<void> {
   phEmit('setup_completed', { duration_ms: Date.now() - RUN_START });
 
   const dmTarget = channelDmLabel(channelChoice);
-  if (dmTarget) {
+  if (wiringPending) {
+    // No welcome DM exists yet — the one remaining action is the last thing
+    // on screen, in the same bright framed style as the "go say hi" banner.
+    note(
+      `${brandBold('→')} ${k.bold(`Have the person you want wired DM the bot once in ${dmTarget ?? 'your chat app'} ("hi" works).`)}\nNanoClaw registers their identity and chat from that first message; then run /init-first-agent with your coding agent and pick them.`,
+      "What's left",
+    );
+    p.outro(k.green("You're set — one DM to go."));
+  } else if (dmTarget) {
     // Bright framed banner (not dim) — the whole point of the feedback was
     // that the welcome-message signal was too easy to miss. Use p.note so it
     // renders with a visible box, cyan-bold the directive line, and put it
