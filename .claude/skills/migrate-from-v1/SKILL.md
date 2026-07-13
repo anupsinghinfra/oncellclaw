@@ -136,10 +136,10 @@ WHERE id IN (SELECT id FROM messaging_groups WHERE channel_type IN (<migrated_ch
 ## Phase 2: Migrate legacy memory
 
 Run `/migrate-memory` for the imported groups. It quiesces each group, moves the
-v1 `CLAUDE.local.md` into the shared `memory/` tree without reading or
-overwriting it on the host, and asks the group agent to distill standing
-identity into `instructions.prepend.md` and durable facts into Core Memory or
-focused linked files.
+v1 `CLAUDE.local.md` into the shared `memory/` tree without reading it during
+staging, then has the invoking coding harness distill standing identity into
+`instructions.prepend.md` and durable facts into Core Memory or focused linked
+files before the NanoClaw group runs again.
 
 Do not duplicate that migration logic here. Record each group's result in the
 handoff before continuing.

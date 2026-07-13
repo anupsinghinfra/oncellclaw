@@ -20,13 +20,15 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
 describe('renderMemorySection', () => {
-  it('inlines the live index and definition', () => {
+  it('inlines existing untyped memory without blocking it', () => {
     writeMemoryTree('# Memory Index\n- [Casa](memories/casa.md)\n', 'custom doctrine\n');
 
     const section = renderMemorySection(BASE);
 
     expect(section).toContain('## Memory');
     expect(section).toContain('files on disk are authoritative');
+    expect(section).toContain('Missing or malformed');
+    expect(section).toContain('metadata never blocks memory use');
     expect(section).toContain('- [Casa](memories/casa.md)');
     expect(section).toContain('custom doctrine');
   });

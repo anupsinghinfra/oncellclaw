@@ -5,6 +5,13 @@ import path from 'path';
 
 import { ensureMemoryScaffold } from './memory-scaffold.js';
 
+function parseFrontmatter(filePath: string): unknown {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const match = content.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!match) throw new Error(`Missing YAML frontmatter in ${filePath}`);
+  return Bun.YAML.parse(match[1]);
+}
+
 describe('ensureMemoryScaffold', () => {
   it('deterministically creates the memory tree', () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-mem-'));
@@ -15,6 +22,8 @@ describe('ensureMemoryScaffold', () => {
       expect(fs.existsSync(path.join(base, 'memory', 'system', 'definition.md'))).toBe(true);
       expect(fs.existsSync(path.join(base, 'memory', 'memories'))).toBe(true);
       expect(fs.existsSync(path.join(base, 'memory', 'data'))).toBe(true);
+      expect(parseFrontmatter(path.join(base, 'memory', 'index.md'))).toMatchObject({ okf_version: '0.1' });
+      expect(parseFrontmatter(path.join(base, 'memory', 'system', 'definition.md'))).toMatchObject({ type: 'system' });
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
     }

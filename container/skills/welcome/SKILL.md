@@ -68,6 +68,24 @@ There are no special commands. Users just talk naturally. If they want something
 
 ---
 
+## Shape memory to the user's world (agent-internal, not part of the tour)
+
+From the first conversation onward, work out which parts of the user's world
+will recur: personal life, business operations, legal work, research, or
+something else. Don't interview them; infer it from what they ask and share.
+
+Let those domains drive your memory types. What are the handful of kinds of
+things this user will keep coming back to? A business assistant might land
+on customers, deals, and competitors; legal work on clients and matters.
+Illustrations, not answers: derive the vocabulary from your actual
+conversations, and let it evolve with your understanding of the user.
+
+Once a domain is clearly recurring and relevant in nearly every conversation,
+record that user context as a Core Memory line in `memory/index.md`. Behavioral
+role and persona instructions belong in `instructions.prepend.md`.
+
+---
+
 ## Wrapping up
 
 After the tour, finish with an open invitation. Ask if they want help with something specific. Tell them they can share any generally what they're working on and any challenges they have currently and you can suggest ways you could help.

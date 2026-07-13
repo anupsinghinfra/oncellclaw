@@ -1,11 +1,14 @@
+---
+okf_version: "0.1"
+---
+
 # Memory Index
 
 ## Core Memory
 
-Nothing stored yet. Keep this section to the few durable facts that matter in
-nearly every conversation: who the user is, hard constraints, critical
-preferences. Standing instructions and persona belong in
-`/workspace/agent/instructions.prepend.md`, not here.
+Nothing stored yet. Only the few durable facts that matter in nearly every
+conversation belong here; the [definition](system/definition.md) says what
+qualifies. Replace this note with your first core fact.
 
 ## Map
 

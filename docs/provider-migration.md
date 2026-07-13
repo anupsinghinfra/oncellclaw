@@ -38,6 +38,12 @@ The memory hook runs when a context window is created: `startup`, `clear`, and
 `compact`. It does not run on `resume`, because the resumed conversation already
 contains the injected memory context.
 
+The shared tree is an Open Knowledge Format (OKF) v0.1 bundle. Durable Markdown
+concepts use YAML frontmatter with a `type`, while reserved `index.md` and
+`log.md` files do not. Missing metadata does not block recall; the agent repairs
+it opportunistically when working with that file. Search remains ordinary
+filesystem search (`rg`, `find`, and relative Markdown links).
+
 ## What does not carry over
 
 - **In-flight conversation context.** Continuations are provider-specific (a
