@@ -147,3 +147,13 @@ explicitly.)
 - **supports-threads**: no (the adapter sets `supportsThreads: false`; replies still thread via email headers, but the router does not treat threads as the primary conversation unit)
 - **typical-use**: Async communication -- email conversations with longer response expectations
 - **default-isolation**: Same agent group if you want your agent to handle email alongside other channels. Separate agent group if email contains sensitive correspondence that shouldn't be accessible from other channels.
+
+## Troubleshooting
+
+**Sends fail with 401.** The API key comes from the Resend dashboard's **API Keys** page and starts with `re_`. Keys are shown once at creation — if in doubt, create a new one and update `RESEND_API_KEY` in `.env`.
+
+**The hello email never lands, or hits spam.** The sending domain must show as verified under Resend → **Domains** — until the SPF/DKIM DNS records propagate, sends are rejected or spam-foldered. `RESEND_FROM_ADDRESS` must be an address on that verified domain; a free-mail from-address will not work.
+
+**Replies never reach the agent.** Inbound only flows via the webhook: Resend → **Webhooks** must point at your public host at `/webhook/resend` (shared webhook server, port 3000) with the **email.received** event selected, and `RESEND_WEBHOOK_SECRET` must match that webhook's signing secret. Resend's webhook page lists delivery attempts — a run of failures means the URL is unreachable or the secret mismatches.
+
+**Adapter installed but nothing flows.** Run `pnpm exec vitest run src/channels/resend-registration.test.ts` — red means the barrel import or the `@resend/chat-sdk-adapter` install drifted, so re-run the Apply steps. If green, restart the service so it loads the adapter and `.env`, then re-send the hello.

@@ -115,5 +115,13 @@ If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
 - **supports-threads**: yes
 - **typical-use**: Interactive chat — team spaces or direct messages
 - **default-isolation**: Same agent group for spaces where you're the primary user. Separate agent group for spaces with different teams or sensitive contexts.
-</content>
-</invoke>
+
+## Troubleshooting
+
+**The adapter starts, then errors about credentials.** `GCHAT_CREDENTIALS` must be the *entire* service account JSON collapsed to one line — inspect `.env` and confirm it still contains `"type":"service_account"`, `"private_key"`, and `"client_email"`. A truncated paste (shells often mangle the multi-line private key) is the usual cause; download a fresh JSON key under **IAM & Admin → Service Accounts → Keys** and re-paste it as a single line.
+
+**Messages sent in the space never reach the agent.** Google Chat delivers only to the HTTP endpoint URL set under **Google Chat API → Configuration**, and that URL must be publicly reachable at `/webhook/gchat` (shared webhook server, port 3000). Tunnel hostnames (ngrok free tier) change on restart — make sure the Configuration URL matches the tunnel that's actually up.
+
+**The app doesn't appear when adding it to a space.** Check the Chat API Configuration page: the app status must be live and its visibility must include your domain or user, and you must be adding it from the same Google Workspace the Cloud project belongs to.
+
+**Everything configured but still silent.** Run `pnpm exec vitest run src/channels/gchat-registration.test.ts` — red means the barrel import or the `@chat-adapter/gchat` install drifted, so re-run the Apply steps. If green, restart the service so it picks up the adapter and `.env`, then watch `logs/nanoclaw.log` for the inbound webhook hit.

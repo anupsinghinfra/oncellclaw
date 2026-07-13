@@ -154,3 +154,13 @@ this channel with `/init-first-agent` (or `/manage-channels`).
 - **supports-threads**: yes
 - **typical-use**: Interactive chat — server channels or direct messages
 - **default-isolation**: Same agent group for your personal server. Separate agent group for servers with different communities or where different members have different information boundaries.
+
+## Troubleshooting
+
+**The Bot Token paste is rejected.** The token must be at least 50 characters of letters, digits, dots, underscores, and hyphens — a real Bot Token has two `.` separators. It lives under **Bot → Reset Token** in the Developer Portal and is shown only once; reset to get a fresh one. The short numeric **Application ID** and the **OAuth2 Client Secret** are different values and won't pass.
+
+**`applications/@me` returns 401.** The token was reset since you copied it, or a stray space/newline came along with the paste. Reset the token in the Bot tab and re-run the check — it fails here on purpose, before the restart, while the credential is still cheap to fix.
+
+**The bot is online but never sees your messages.** Two usual causes: Message Content Intent is off (Bot tab → Privileged Gateway Intents), so message bodies arrive empty and nothing triggers; or the bot doesn't share a server with you — in which case `POST /users/@me/channels` also refuses. Open the invite URL and add the bot to a server you're in, then retry.
+
+**Adapter looks installed but Discord never connects.** Run `pnpm exec vitest run src/channels/discord-registration.test.ts` — red means the barrel import or the `@chat-adapter/discord` install drifted, so re-run the Apply steps. If it's green, the service probably hasn't restarted since the credentials were stored: `bash setup/lib/restart.sh`, then check `logs/nanoclaw.error.log` for missing `DISCORD_PUBLIC_KEY` / `DISCORD_APPLICATION_ID` complaints.

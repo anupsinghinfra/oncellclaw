@@ -194,3 +194,15 @@ systemctl --user restart $(systemd_unit)              # Linux
 - **supports-threads**: yes (issue comment threads are native conversations)
 - **typical-use**: Webhook-driven — the agent receives all issue comment events and responds automatically. No @-mention needed (Linear OAuth apps can't be @-mentioned).
 - **default-isolation**: Use `per-thread` session mode. Each issue comment thread gets its own isolated agent session.
+
+## Troubleshooting
+
+**Comments never reach the agent.** New Linear webhooks can lag 1–5 minutes, so wait before digging. Then check the webhook in Linear Settings → API → Webhooks: the URL must be your public host at `/webhook/linear` (shared webhook server, port 3000), the right team selected, and the **Comment** event checked. A mismatch between the webhook's signing secret and `LINEAR_WEBHOOK_SECRET` makes deliveries fail signature verification silently — re-copy the secret from the webhook page.
+
+**OAuth credentials rejected.** The Client ID and Secret come from Linear Settings → API → OAuth Applications, and the app must have **Client credentials** enabled under grant types after creation — without that toggle the token exchange 401s. If you meant to use a Personal API key instead, answer `none` at both OAuth prompts and set `LINEAR_API_KEY` in `.env` by hand.
+
+**The agent ignores your own comments.** That's Personal-API-key mode working as designed: comments from the key's account are filtered as self-messages so the bot doesn't answer itself. Other members' comments still trigger it; if it must answer you too, switch to the OAuth app identity.
+
+**Sender-policy answer rejected, or issues route nowhere.** The policy must be exactly `public` or `strict` (lowercase), and `LINEAR_TEAM_KEY` must be the short team key (e.g. `ENG`) from Settings → Teams — all issues in that one team route to the messaging group.
+
+**Wired but dead.** Run `pnpm exec vitest run src/channels/linear-registration.test.ts` — red means the barrel import or the `@chat-adapter/linear` install drifted, so re-run the Apply steps. If green, restart the service (see Next Steps) so the adapter and `.env` values are live.

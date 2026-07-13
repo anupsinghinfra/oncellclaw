@@ -194,3 +194,15 @@ Otherwise, run `/manage-channels` to wire this channel to an agent group.
 - **supports-threads**: partial (some clients support threads, but not all — treat as no for reliability)
 - **typical-use**: Interactive chat — rooms or direct messages. Requires a separate bot account (the agent cannot DM users from their own account).
 - **default-isolation**: Same agent group for rooms where you're the primary user. Separate agent group for rooms with different communities or sensitive contexts.
+
+## Troubleshooting
+
+**Build fails with `ERR_MODULE_NOT_FOUND` for `matrix-js-sdk/lib/...`.** The ESM extension patch (step 4) hasn't been applied — or a later `pnpm install` reinstalled the adapter and wiped it. Re-run the patch, then `pnpm run build`; the patch is idempotent, so re-running is always safe.
+
+**Login fails with `M_FORBIDDEN`.** The username/user-ID split is the usual trip: `MATRIX_USERNAME` is the bare localpart (`andybot`), while `MATRIX_USER_ID` is the full ID (`@andybot:matrix.org`) — swapping them fails auth. With Option B, an access token dies the moment that Element session signs out; grab a fresh one from Settings → Help & About → Access Token, or via the login API.
+
+**The bot never joins your room.** Auto-join is on by default (`MATRIX_INVITE_AUTOJOIN=true`), but an allowlist (`MATRIX_INVITE_AUTOJOIN_ALLOWLIST`) that doesn't include your user ID makes it ignore your invites. Invite the bot from your own account and watch the service log for the join.
+
+**Messages to yourself never arrive.** Matrix cannot DM your own account — the bot must be its own account, separate from yours. If you configured the adapter with your personal credentials, register a dedicated bot account and redo the credential steps.
+
+**Registered but silent.** Run `pnpm exec vitest run src/channels/matrix-registration.test.ts` — red means the barrel import or the `@beeper/chat-adapter-matrix` install drifted, so re-run the Apply steps. If green, restart the service (see Next Steps) and check `logs/nanoclaw.error.log` for login errors.

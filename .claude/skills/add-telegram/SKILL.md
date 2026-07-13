@@ -88,7 +88,7 @@ message until the bot exists. Tell the user:
 Create the Telegram bot:
 1. Open Telegram and message @BotFather — Telegram's official bot for creating bots.
 2. Send /newbot and follow the prompts: a friendly name, then a username that must end in "bot".
-3. Copy the bot token it gives you (looks like 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11).
+3. Copy the bot token it gives you (looks like 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11a).
 4. Planning to use the bot in group chats? Send /mybots → your bot → Bot Settings → Group Privacy → Turn off, so the bot can see all messages and not just @mentions.
 ```
 
@@ -158,3 +158,15 @@ this channel with `/init-first-agent` (or `/manage-channels`).
 - **supports-threads**: no
 - **typical-use**: Interactive chat — direct messages or small groups
 - **default-isolation**: Same agent group if you're the only participant across multiple chats. Separate agent group if different people are in different groups.
+
+## Troubleshooting
+
+**The bot token paste is rejected.** A BotFather token is `<numeric bot id>:<35+ character secret>` — e.g. `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11a`. Pasting only the part after the colon, or the bot's @username, won't pass. Recover the full token any time by sending `/token` to @BotFather.
+
+**`getMe` fails.** The token was revoked (a `/revoke` or a fresh `/token` invalidates the old value) or picked up whitespace in the paste. Get the current token from BotFather and re-paste it.
+
+**Pairing never completes.** The live adapter is what observes the code, so the service must be running — the restart step comes before pairing for exactly this reason. Send *just* the 4 digits from the exact chat you want registered; in a group with Group Privacy on, prefix them with `@<botname>`. Wrong guesses are fine (a fresh code is issued, up to 5 times), but a dead adapter waits forever.
+
+**The bot ignores group messages.** Group Privacy is on, so the bot only sees @-mentions and replies. BotFather → `/mybots` → your bot → Bot Settings → Group Privacy → Turn off — then remove and re-add the bot to the group so the change takes effect.
+
+**Everything green but no replies.** Run `pnpm exec vitest run src/channels/telegram-registration.test.ts` — red means the barrel import or the `@chat-adapter/telegram` install drifted, so re-run the Apply steps. If green, restart again (`bash setup/lib/restart.sh`) and check `logs/nanoclaw.error.log` for token errors.

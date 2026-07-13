@@ -204,3 +204,15 @@ this channel with `/init-first-agent` (or `/manage-channels`).
 - **supports-threads**: no
 - **typical-use**: Interactive 1:1 chat — personal messaging
 - **default-isolation**: Same agent group if you're the only person messaging the bot across iMessage and other channels. Separate agent group if different contacts should have information isolation.
+
+## Troubleshooting
+
+**The mode answer is rejected.** It must be exactly `local` or `remote`, lowercase. Local only exists on macOS — it reads this Mac's `chat.db` directly — so on any other OS the platform check stops you and remote (Photon) is the only path.
+
+**Local mode: outgoing works but nothing ever arrives.** Full Disk Access wasn't granted to the *actual* Node binary the service runs under — with nvm the path changes per Node version (`~/.nvm/versions/node/v22.x.x/bin/node`), so an old grant silently stops covering a new binary. Re-open System Settings → Privacy & Security → Full Disk Access, add the binary at `$(which node)`, then restart the service.
+
+**Remote mode: Photon values rejected or unreachable.** The server URL must start with `http://` or `https://` — copy it and the API key from your Photon dashboard at photon.codes. If the adapter starts but sends fail, curl the server URL from this machine to rule out a network path issue.
+
+**Your handle is rejected at the resolve step.** It must be a bare +E.164 number (`+14155551234` — no spaces, dashes, or parentheses) or an email/Apple ID. Use the exact handle you actually send iMessages from — a number-vs-email mismatch means your messages never map to the wired conversation.
+
+**Adapter installed but silent.** Run `pnpm exec vitest run src/channels/imessage-registration.test.ts` — red means the barrel import or the `chat-adapter-imessage` install drifted, so re-run the Apply steps. If green, restart the service (`bash setup/lib/restart.sh`) so it loads the adapter and the mode config, then check `logs/nanoclaw.error.log`.

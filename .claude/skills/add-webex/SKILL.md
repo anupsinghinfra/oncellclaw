@@ -118,3 +118,13 @@ If you're in the middle of `/setup`, return to the setup flow now. Otherwise run
 - **supports-threads**: yes
 - **typical-use**: Interactive chat — team spaces or direct messages
 - **default-isolation**: Same agent group for spaces where you're the primary user. Separate agent group for spaces with different teams or sensitive information.
+
+## Troubleshooting
+
+**Sends fail with 401.** The Bot Access Token is shown once, on the bot's page under developer.webex.com → My Apps — it is *not* the 12-hour personal access token from the API docs pages, which is the classic mix-up (that one works briefly, then everything 401s). Regenerate the token on the bot page if needed; regenerating invalidates the old value, so update `WEBEX_BOT_TOKEN` right away.
+
+**Messages in the space never reach the agent.** Webex delivers only to the webhook you created: it must target your public host at `/webhook/webex` (shared webhook server, port 3000) with resource `messages`. List your webhooks with `GET https://webexapis.com/v1/webhooks` using the bot token — Webex flips a webhook to `inactive` after repeated delivery failures, and it stays off until you re-enable or recreate it.
+
+**Events arrive but are rejected.** Signature mismatch: the secret set at webhook creation must equal `WEBEX_WEBHOOK_SECRET` exactly. Recreate the webhook with a known secret and update `.env` to match.
+
+**Adapter installed but silent.** Run `pnpm exec vitest run src/channels/webex-registration.test.ts` — red means the barrel import or the `@bitbasti/chat-adapter-webex` install drifted, so re-run the Apply steps. If green, restart the service so it loads the adapter and the tokens, then watch `logs/nanoclaw.log` for the webhook hit.

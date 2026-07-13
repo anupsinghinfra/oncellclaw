@@ -174,3 +174,13 @@ systemctl --user restart $(systemd_unit)              # Linux
 - **supports-threads**: yes (PR and issue comment threads are native conversations)
 - **typical-use**: Webhook-driven — the agent receives PR and issue comment events and responds in comment threads when @-mentioned. After the first mention, the thread is subscribed and the agent responds to all follow-up comments.
 - **default-isolation**: Use `per-thread` session mode. Each PR or issue gets its own isolated agent session. Typically wire to a dedicated agent group if the repo contains sensitive code.
+
+## Troubleshooting
+
+**API calls return 401/403 with the token.** The token must be a **fine-grained** PAT starting `github_pat_`, created while logged in as the *bot* account (Settings → Developer Settings → Personal Access Tokens → Fine-grained tokens), with the monitored repos selected under Repository access and both **Pull requests** and **Issues** set to Read & Write. A classic `ghp_` token, or one minted on your personal account, is the usual miss.
+
+**Webhook deliveries show red in the repo settings.** Open **Settings → Webhooks → Recent Deliveries** on the repo: a 401 response means the secret in the webhook form doesn't match `GITHUB_WEBHOOK_SECRET`; a timeout means `https://your-domain/webhook/github` isn't publicly reachable on the shared webhook port (3000). Fix, then use **Redeliver** to retest without writing a new comment.
+
+**Comments never trigger the agent.** The @-mention must match `GITHUB_BOT_USERNAME` exactly, and the webhook must subscribe to **Issue comments** and **Pull request review comments** (not just pushes). Comments authored by the bot account itself are filtered by design — test from a different account than the bot.
+
+**Adapter installed but the channel is dead.** Run `pnpm exec vitest run src/channels/github-registration.test.ts` — red means the barrel import or the `@chat-adapter/github` install drifted, so re-run the Apply steps. If green, restart the service (see Next Steps) so it loads the adapter and the new `.env` values.

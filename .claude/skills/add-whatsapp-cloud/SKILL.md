@@ -131,5 +131,13 @@ Otherwise, run `/manage-channels` to wire this channel to an agent group.
 - **supports-threads**: no
 - **typical-use**: Interactive 1:1 chat -- direct messages only
 - **default-isolation**: Same agent group if you're the only person messaging the bot. Each additional person who messages gets their own conversation automatically, but they share the agent's workspace and memory -- use a separate agent group if you need information isolation between different contacts.
-</content>
-</invoke>
+
+## Troubleshooting
+
+**Meta's "Verify and save" fails on the webhook.** Meta hits your URL with a challenge the moment you click, so the endpoint must already be publicly reachable at `/webhook/whatsapp` (shared webhook server, port 3000) *and* the service must be running with `WHATSAPP_VERIFY_TOKEN` set to exactly the string you typed under WhatsApp > Configuration. Start or restart the service first, then click verify.
+
+**Everything works for a day, then all calls 401.** You stored the temporary token from WhatsApp > API Setup, which expires in ~24 hours. Create a **System User** under Business Settings → Users, grant it the app with `whatsapp_business_messaging`, generate a permanent token, and replace `WHATSAPP_ACCESS_TOKEN`.
+
+**Outbound messages are accepted but never delivered.** Two Meta-side gates: while the app is in development mode you can only message numbers added to the recipient allowlist in API Setup; and free-form replies are only allowed within 24 hours of the user's last inbound message — outside that window you need an approved template. Also confirm `WHATSAPP_PHONE_NUMBER_ID` is the Phone Number *ID*, not the phone number itself.
+
+**Adapter installed but nothing flows.** Run `pnpm exec vitest run src/channels/whatsapp-cloud-registration.test.ts` — red means the barrel import or the `@chat-adapter/whatsapp` install drifted, so re-run the Apply steps. If green, restart the service (see Next Steps) so the adapter and `.env` values are live.

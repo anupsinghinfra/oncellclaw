@@ -197,3 +197,13 @@ this channel with `/init-first-agent` (or `/manage-channels`).
 - **supports-threads**: yes
 - **typical-use**: Interactive chat — team channels or direct messages
 - **default-isolation**: Same agent group for channels where you're the primary user. Separate agent group for channels with different teams or sensitive contexts.
+
+## Troubleshooting
+
+**A token paste is rejected.** Each secret has a fixed shape: the Bot User OAuth Token starts `xoxb-` (OAuth & Permissions, after Install to Workspace), the App-Level Token starts `xapp-` (Basic Information → App-Level Tokens), and the Signing Secret is a hex string (Basic Information). The classic mix-up is pasting a user token (`xoxp-`) instead of the bot token, or the app's Client Secret instead of the Signing Secret.
+
+**`auth.test` fails, or `conversations.open` returns no channel.** A failing `auth.test` means the bot token is wrong or the app was never installed to the workspace. `conversations.open` coming back empty means the `im:write` scope is missing — add it under OAuth & Permissions and **reinstall the app**; scope changes only take effect after reinstall, which also mints a new `xoxb-` token to store.
+
+**The greeting arrives but your replies vanish.** Sending works with just the bot token; *receiving* needs the event path. Socket Mode: the toggle on, `SLACK_APP_TOKEN` set with `connections:write`, and the bot events (`message.im`, `message.channels`, `message.groups`, `app_mention`) subscribed. Webhook: the Request URL must have passed Slack's challenge and the same events subscribed. Either way, App Home's Messages Tab must be enabled or Slack refuses DMs to the app.
+
+**Adapter registered but Slack never connects.** Run `pnpm exec vitest run src/channels/slack-registration.test.ts` — red means the barrel import or the `@chat-adapter/slack` install drifted, so re-run the Apply steps. If green, restart the service (`bash setup/lib/restart.sh`) so it picks up the adapter and tokens, then check `logs/nanoclaw.error.log`.
