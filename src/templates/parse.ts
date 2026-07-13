@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { parse } from 'yaml';
 
 /** A parsed template folder. Pure data — no DB, no side effects. */
 export interface Template {
@@ -13,6 +14,7 @@ export interface Template {
 export interface TemplateTask {
   name: string;
   schedule: string;
+  script?: string;
   prompt: string;
   source: string;
 }
@@ -92,22 +94,42 @@ function parseTaskFile(tasksDir: string, file: string): TemplateTask {
   const closing = lines.indexOf('---', 1);
   if (closing === -1) throw new Error(`Template task ${source} is missing the closing ---`);
 
-  const metadata = lines.slice(1, closing).filter((line) => line.trim().length > 0);
-  if (metadata.length !== 1 || !metadata[0].startsWith('schedule:')) {
-    throw new Error(`Template task ${source} frontmatter must contain only schedule`);
+  let metadata: unknown;
+  try {
+    metadata = parse(lines.slice(1, closing).join('\n'));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Template task ${source} has invalid YAML frontmatter: ${message}`, { cause: err });
   }
-  let schedule = metadata[0].slice('schedule:'.length).trim();
-  if ((schedule.startsWith('"') && schedule.endsWith('"')) || (schedule.startsWith("'") && schedule.endsWith("'"))) {
-    schedule = schedule.slice(1, -1).trim();
-  } else if (/^["']|["']$/.test(schedule)) {
-    throw new Error(`Template task ${source} has mismatched quotes around schedule`);
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    throw new Error(`Template task ${source} frontmatter must be a YAML mapping`);
   }
-  if (!schedule) throw new Error(`Template task ${source} schedule is required`);
+  const unknownFields = Object.keys(metadata).filter((key) => key !== 'schedule' && key !== 'script');
+  if (unknownFields.length > 0) {
+    throw new Error(`Template task ${source} frontmatter accepts only schedule and script`);
+  }
+
+  const scheduleValue = Reflect.get(metadata, 'schedule');
+  if (typeof scheduleValue !== 'string' || !scheduleValue.trim()) {
+    throw new Error(`Template task ${source} schedule must be a nonempty string`);
+  }
+  const schedule = scheduleValue.trim();
+
+  const scriptValue = Reflect.get(metadata, 'script');
+  if (scriptValue !== undefined && (typeof scriptValue !== 'string' || !scriptValue.trim())) {
+    throw new Error(`Template task ${source} script must be a nonempty string`);
+  }
 
   const prompt = lines
     .slice(closing + 1)
     .join('\n')
     .trim();
   if (!prompt) throw new Error(`Template task ${source} prompt is required`);
-  return { name, schedule, prompt, source };
+  return {
+    name,
+    schedule,
+    ...(typeof scriptValue === 'string' ? { script: scriptValue } : {}),
+    prompt,
+    source,
+  };
 }

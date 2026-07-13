@@ -41,10 +41,16 @@ function writeTemplate(): void {
   fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: widget\n---\n');
 }
 
-function writeTask(name: string, schedule: string, prompt: string): void {
+function writeTask(name: string, schedule: string, prompt: string, script?: string): void {
   const dir = path.join(TEMPLATES_DIR, 'sales', 'sdr', 'tasks');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${name}.md`), `---\nschedule: "${schedule}"\n---\n\n${prompt}\n`);
+  const scriptBlock = script
+    ? `script: |\n${script
+        .split('\n')
+        .map((line) => `  ${line}`)
+        .join('\n')}\n`
+    : '';
+  fs.writeFileSync(path.join(dir, `${name}.md`), `---\nschedule: "${schedule}"\n${scriptBlock}---\n\n${prompt}\n`);
 }
 
 beforeEach(() => {
@@ -112,6 +118,30 @@ describe('createAgentFromTemplate', () => {
       originSessionId: null,
     });
     expect(fs.existsSync(path.join(GROUPS_DIR, g.folder, 'tasks', 'weekday-briefing.md'))).toBe(false);
+  });
+
+  it('forwards multiline scripts unchanged through the shared task creation path', () => {
+    const script = 'count=2\necho \'{"wakeAgent": true, "data": {"count": 2}}\'';
+    writeTask('alert-watch', '*/15 * * * *', 'Investigate new alerts.', script);
+
+    const g = createAgentFromTemplate('sales/sdr', { name: 'Scripted Tasks' });
+    const sessions = findTaskSessions(g.id);
+    expect(sessions).toHaveLength(1);
+
+    const db = new Database(inboundDbPath(g.id, sessions[0].id), { readonly: true });
+    const row = db.prepare("SELECT status, recurrence, content FROM messages_in WHERE kind = 'task'").get() as {
+      status: string;
+      recurrence: string;
+      content: string;
+    };
+    db.close();
+
+    expect(row.status).toBe('paused');
+    expect(row.recurrence).toBe('*/15 * * * *');
+    expect(JSON.parse(row.content)).toMatchObject({
+      script: `${script}\n`,
+      originSessionId: null,
+    });
   });
 
   it.each([

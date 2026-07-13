@@ -6,7 +6,7 @@ and optional recurring tasks, but **no secrets and no provider**. Point `ncl` at
 you get a configured agent in seconds; you choose the runtime/provider
 separately.
 
-Templates are purely additive: no DB migration, no new dependency. **Templates
+Templates are purely additive and require no DB migration. **Templates
 are resolved only from a local directory**: `templates/` at the
 project root by default (committed but shipped empty), or whatever
 `NANOCLAW_TEMPLATES_DIR` points at (a local path only). The public registry
@@ -82,26 +82,39 @@ Notes:
 
 Each immediate Markdown file under `tasks/` defines one recurring task. The
 filename becomes its readable name, the frontmatter supplies its cron schedule,
-and the Markdown body is the prompt:
+an optional script can decide whether to wake the agent, and the Markdown body
+is the prompt:
 
 ```markdown
 ---
-schedule: "0 9 * * 1-5"
+schedule: "*/15 * * * *"
+script: |
+  if [ -f /workspace/agent/wake-next-task ]; then
+    echo '{"wakeAgent": true}'
+  else
+    echo '{"wakeAgent": false}'
+  fi
 ---
 
-Review the pipeline and prepare the weekday sales briefing.
+Investigate the alerts reported by the script and notify me if they are serious.
 ```
 
-The frontmatter accepts only `schedule`; unknown fields are rejected so typos
-cannot silently change behavior. Task files are template input, like
-`.mcp.json`: they are not copied into the agent workspace after stamping.
+`schedule` is required. `script` is optional and may be a single-line or
+multiline YAML string. The frontmatter accepts no other fields, so typos cannot
+silently change behavior. Task files are template input, like `.mcp.json`: they
+are not copied into the agent workspace after stamping.
 
 Template tasks use the same creation path as `ncl tasks create`, including cron
 validation, the install timezone, first-run calculation, isolated task sessions,
-the run-log prompt, and the four-fires-per-day safety limit. Templates support
-recurring schedule + prompt only. One-shots, gate scripts, and the dangerous
-frequency override remain available through `ncl tasks create`, not template
-frontmatter.
+the run-log prompt, script behavior, and frequency limits. Ungated tasks are
+limited to four fires in the next 24 hours; tasks with a script gate may run more
+often. Templates do not expose the dangerous frequency override or one-time
+tasks.
+
+The script is passed unchanged to NanoClaw's normal task creation and execution
+path. See [Scheduled Tasks](scheduled-tasks.md#script-gates) for the script
+contract, testing workflow, frequency limit, and failure behavior. Avoid putting
+secrets directly in scripts; prefer runtime credential injection through OneCLI.
 
 Tasks start **paused**, so stamping a template never starts background work
 without user consent. Until the setup welcome flow offers activation, inspect

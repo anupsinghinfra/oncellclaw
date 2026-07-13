@@ -37,7 +37,12 @@ export function createAgentFromTemplate(ref: string, opts?: CreateAgentOptions):
   const tpl = parseTemplate(dir);
   const tasks = tpl.tasks.map((task) => {
     try {
-      return prepareScheduledTask({ name: task.name, prompt: task.prompt, recurrence: task.schedule });
+      return prepareScheduledTask({
+        name: task.name,
+        prompt: task.prompt,
+        recurrence: task.schedule,
+        script: task.script,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Invalid template task ${task.source}: ${message}`, { cause: err });
