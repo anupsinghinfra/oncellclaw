@@ -105,8 +105,8 @@ describe('tasks CLI resource', () => {
     const row = systemDb.prepare("SELECT content FROM messages_in WHERE kind = 'task'").get() as { content: string };
     const content = JSON.parse(row.content);
     expect(content).toMatchObject({ originSessionId: 'chat-1' });
-    expect(content.prompt).toContain('send a briefing');
-    expect(content.prompt).toContain(`tasks/${created.series_id}.md`); // log-path hint injected
+    expect(content.prompt).toBe('send a briefing');
+    expect(content.prompt).not.toContain('Task delivery contract');
     systemDb.close();
   });
 
@@ -455,7 +455,8 @@ describe('tasks CLI resource', () => {
       expect(resp.ok).toBe(true);
       if (!resp.ok) return;
       const content = fs.readFileSync(logFile('ag-1', 'my-task-1'), 'utf8').trim();
-      expect(content).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z — did the thing; it worked$/);
+      // Local-time stamp (formatLocalStamp): "YYYY-MM-DD HH:mm".
+      expect(content).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} — did the thing; it worked$/);
     });
 
     it('derives the series from the caller task session when --id is omitted', async () => {
