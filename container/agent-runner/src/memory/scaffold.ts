@@ -9,8 +9,8 @@ import { fileURLToPath } from 'url';
  * `/workspace/agent` (the host-backed, RW group dir, so it persists across the
  * ephemeral container). No host-side step, nothing mounted in.
  *
- * The default `definition.md` / `index.md` live as real markdown templates next
- * to this module (under `templates/`) — not as strings in code — so the
+ * The default memory files live as real markdown templates next to this module
+ * (under `templates/`) — not as strings in code — so the
  * doctrine is editable as markdown and the agent receives an unescaped copy.
  * They ship in the mounted `/app/src` tree, so no image change is needed.
  *
@@ -24,12 +24,11 @@ export function ensureMemoryScaffold(baseDir = '/workspace/agent'): void {
   const memoryDir = path.join(baseDir, 'memory');
   const systemDir = path.join(memoryDir, 'system');
 
-  for (const dir of [systemDir, path.join(memoryDir, 'memories'), path.join(memoryDir, 'data')]) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  fs.mkdirSync(systemDir, { recursive: true });
 
-  copyTemplateIfMissing('definition.md', path.join(systemDir, 'definition.md'));
   copyTemplateIfMissing('index.md', path.join(memoryDir, 'index.md'));
+  copyTemplateIfMissing(path.join('system', 'index.md'), path.join(systemDir, 'index.md'));
+  copyTemplateIfMissing(path.join('system', 'definition.md'), path.join(systemDir, 'definition.md'));
 }
 
 function copyTemplateIfMissing(template: string, dest: string): void {

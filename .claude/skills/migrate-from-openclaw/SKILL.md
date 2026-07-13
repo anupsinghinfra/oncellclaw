@@ -269,27 +269,35 @@ agent group.
 Read them. Distinguish always-loaded vs reference:
 - **Standing behavior** (core traits, communication style, key rules) → weave
   into the group's `instructions.prepend.md`.
-- **Reference** (backstory, extended guidelines) → a separate
-  `groups/<folder>/memory/memories/soul.md`, linked under `## Map` in
-  `memory/index.md`.
+- **Reference** (backstory, extended guidelines) → a separate durable concept
+  in an appropriate folder under `groups/<folder>/memory/`, linked from that
+  folder's `index.md` and the root Map.
+
+Choose each memory folder based on which related information will be easiest to
+find together; a folder may contain different concept types. Before writing the
+first concept into a new folder, create the folder and its `index.md`. Follow
+`memory/system/definition.md`, including its YAML frontmatter rules, for every
+new concept.
 
 Show proposed edits before applying — this is a thoughtful merge, not a paste.
 
 ### USER.md
 
-Create `groups/<folder>/memory/memories/user-context.md` and link it under Map.
-Put only facts relevant in nearly every conversation (for example name or
-timezone) into `## Core Memory`; keep all other details in the linked file.
+Create a focused user-context concept in an appropriate memory folder and link
+it through that folder's index and the root Map. Put only facts relevant in
+nearly every conversation (for example name or timezone) into `## Core Memory`;
+keep all other details in the linked file.
 
 ### MEMORY.md and daily memory files
 
-Show `MEMORY.md`; keep relevant items in
-`groups/<folder>/memory/memories/openclaw-memory.md` with a Map link. For daily
-files (`workspace/memory/*.md`, count = DAILY_MEMORY_FILES):
+Show `MEMORY.md`; keep relevant items in focused concepts under the chosen
+memory folders, with links through each folder index and the root Map. For
+daily files (`workspace/memory/*.md`, count = DAILY_MEMORY_FILES):
 
 AskUserQuestion: "You have N daily memory files. How to handle them?"
-1. **Copy as-is** — `cp <workspace>/memory/*.md <group_dir>/memory/memories/daily/`,
-   add a Map link to that directory.
+1. **Copy as-is** — agree on a descriptive folder, create it and its `index.md`,
+   then copy with `cp <workspace>/memory/*.md <group_dir>/memory/<chosen-folder>/`
+   and link the retained files through its index and the root Map.
 2. **Consolidate** — read, extract durable facts, and place them in focused
    linked memory files.
 3. **Skip.**
@@ -492,9 +500,9 @@ Print what was migrated:
 - Additional groups → messaging groups + wiring (folders + session modes)
 - Timezone → `.env TZ`; container timeout → noted
 - Access grants → members/roles for OpenClaw allowlist senders
-- Identity/personality → per-group `instructions.prepend.md` + linked `soul.md`
+- Identity/personality → per-group `instructions.prepend.md` + linked memory concepts
 - User context / memories → Core Memory only for universal facts; otherwise
-  linked files under `memory/memories/`
+  linked concepts in content-based folders under `memory/`
 - OpenClaw skills → `container/skills/`
 - Channel tokens → `.env` (list channels)
 - Container-facing credentials → OneCLI vault (list)

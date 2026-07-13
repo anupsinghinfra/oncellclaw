@@ -19,11 +19,15 @@ describe('ensureMemoryScaffold', () => {
       ensureMemoryScaffold(base);
 
       expect(fs.existsSync(path.join(base, 'memory', 'index.md'))).toBe(true);
+      expect(fs.existsSync(path.join(base, 'memory', 'system', 'index.md'))).toBe(true);
       expect(fs.existsSync(path.join(base, 'memory', 'system', 'definition.md'))).toBe(true);
-      expect(fs.existsSync(path.join(base, 'memory', 'memories'))).toBe(true);
-      expect(fs.existsSync(path.join(base, 'memory', 'data'))).toBe(true);
+      expect(fs.existsSync(path.join(base, 'memory', 'memories'))).toBe(false);
+      expect(fs.existsSync(path.join(base, 'memory', 'data'))).toBe(false);
       expect(parseFrontmatter(path.join(base, 'memory', 'index.md'))).toMatchObject({ okf_version: '0.1' });
       expect(parseFrontmatter(path.join(base, 'memory', 'system', 'definition.md'))).toMatchObject({ type: 'system' });
+      expect(fs.readFileSync(path.join(base, 'memory', 'system', 'index.md'), 'utf-8')).toContain(
+        '[Definition](definition.md)',
+      );
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
     }
@@ -53,6 +57,21 @@ describe('ensureMemoryScaffold', () => {
       ensureMemoryScaffold(base);
 
       expect(fs.readFileSync(indexFile, 'utf-8')).toBe('# my own index\n');
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves legacy memory folders and their contents untouched', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-mem-'));
+    try {
+      const legacyFile = path.join(base, 'memory', 'memories', 'legacy.md');
+      fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+      fs.writeFileSync(legacyFile, 'keep me\n');
+
+      ensureMemoryScaffold(base);
+
+      expect(fs.readFileSync(legacyFile, 'utf-8')).toBe('keep me\n');
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
     }

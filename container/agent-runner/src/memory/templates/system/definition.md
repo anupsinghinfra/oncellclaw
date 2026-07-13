@@ -74,9 +74,12 @@ leads the Atlas project"). Make sure to link relevant concepts.
 
 ## Where it goes
 
-Indexes are core data: every folder of memory has an
-`index.md` describing its contents. Past roughly 20 entries, group related
-concepts into subfolders, each with its own `index.md`.
+Indexes are core data. Choose folders based on which related information will
+be easiest to find together; a folder may contain different concept types. If
+the folder does not exist, create it and its `index.md` before writing the first
+concept there. Keep every folder's index accurate and concise. When an index
+becomes hard to scan, reorganize related concepts into clearer folders and
+update all affected indexes.
 
 Write to the smallest useful file for the entity the fact is about. Update
 that entity's existing file rather than creating duplicates, and don't default

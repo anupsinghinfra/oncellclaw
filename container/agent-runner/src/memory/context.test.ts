@@ -21,14 +21,14 @@ afterEach(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
 describe('renderMemorySection', () => {
   it('inlines existing untyped memory without blocking it', () => {
-    writeMemoryTree('# Memory Index\n- [Casa](memories/casa.md)\n', 'custom doctrine\n');
+    writeMemoryTree('# Memory Index\n- [Casa](projects/casa.md)\n', 'custom doctrine\n');
 
     const section = renderMemorySection(BASE);
 
     expect(section).toContain('## Memory');
     expect(section).toContain('files on disk are authoritative');
     expect(section).toContain('Open Knowledge Format (OKF) v0.1 bundle');
-    expect(section).toContain('- [Casa](memories/casa.md)');
+    expect(section).toContain('- [Casa](projects/casa.md)');
     expect(section).toContain('custom doctrine');
   });
 

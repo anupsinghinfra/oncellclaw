@@ -13,17 +13,16 @@ the same directory is mounted at `/workspace/agent/memory/`.
 ```
 memory/
 ├── index.md              # top-level index + Core Memory (always loaded)
-├── system/
-│   └── definition.md     # how the memory behaves (always loaded)
-├── memories/             # durable facts: people, projects, decisions
-└── data/                 # structured reference data
+└── system/
+    ├── index.md          # index for the system folder
+    └── definition.md     # how the memory behaves (always loaded)
 ```
 
 The scaffold is created automatically when a container boots. It only writes
 what is missing, so the agent's own edits and accumulated memory are never
 overwritten.
 
-Two files are special:
+Two files are always loaded:
 
 - **`index.md`** holds the Core Memory section (the few durable facts relevant
   in nearly every conversation) and a map of everything else. Headlines and
@@ -32,10 +31,13 @@ Two files are special:
   store, where to put it, and how to keep it true. It belongs to the agent and
   the agent may improve it over time.
 
+`system/index.md` is a normal folder index and is not injected separately.
+
 Folder layout and Markdown content are flexible, but every durable concept file
-still follows the OKF frontmatter rules below. The agent organizes `memories/`
-and `data/` however serves the group best, keeping an `index.md` in any folder
-that grows.
+still follows the OKF frontmatter rules below. The agent chooses folders based
+on which related information will be easiest to find together; a folder may
+contain different concept types. Before writing into a new folder, the agent
+creates it and its `index.md`.
 
 ## How memory reaches the agent
 
@@ -82,6 +84,9 @@ Groups created before the shared memory tree may still have legacy storage:
 auto-memory directory, or an `imported-agent-memory.md` from an earlier provider
 switch. Run `/migrate-memory` to move standing role and persona into
 `instructions.prepend.md` and organize durable facts in the shared memory tree.
+Older groups may already contain folders named `memories` or `data`. Those are
+still valid agent-chosen folders: normal startup neither creates nor deletes
+them, and migration preserves their contents.
 
 ## Operator notes
 
@@ -91,6 +96,6 @@ switch. Run `/migrate-memory` to move standing role and persona into
 - Wrong or stale facts are just text: delete or correct them in place, or ask
   the agent to (it is instructed to prune and update on correction).
 - The default templates live at
-  `container/agent-runner/src/memory/templates/`. NanoClaw copies a template
-  only when that memory file is missing. It never overwrites an existing memory
-  file.
+  `container/agent-runner/src/memory/templates/`, mirroring the generated
+  memory tree. NanoClaw copies a template only when that memory file is missing.
+  It never overwrites an existing memory file.

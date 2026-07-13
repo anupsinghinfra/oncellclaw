@@ -36,10 +36,10 @@ rm -f groups/*/openclaw-migration-tasks.md
 These are content you chose to bring over, now part of your agent groups. Delete
 only the ones you no longer want — review each first.
 
-- Identity / personality: `groups/*/instructions.prepend.md`,
-  `groups/*/memory/memories/soul.md`
-- User context: `groups/*/memory/memories/user-context.md`
-- Memories: imported files under `groups/*/memory/memories/`
+- Identity / personality: `groups/*/instructions.prepend.md` and the memory
+  concepts recorded for identity reference material
+- User context and memories: the destination files recorded in the migration's
+  source-to-destination summary under `groups/*/memory/`
 - Copied OpenClaw skills: directories you added under `container/skills/`
   (compare against the stock set before removing — do not delete
   `onecli-gateway`, `welcome`, `self-customize`, `agent-browser`,
