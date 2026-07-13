@@ -52,12 +52,10 @@ Add a messaging channel or an agent provider. The SKILL.md contains the install 
 3. The adapter's registration test is fetched the same way and run as verification
 4. Claude walks through interactive setup (tokens, bot creation, etc.)
 
-The **trunk** channel/provider skills additionally carry their mechanical steps as `nc:<kind>` directive fences (see [docs/skill-directives.md](docs/skill-directives.md)) so a deterministic engine can apply the same SKILL.md — that's how the setup wizard installs channels without a separate script that could drift from the skill. The prose remains the skill: an agent reading it with the fences stripped performs the same install. **This is core tooling, not a contribution requirement** — a contributed skill may adopt `nc:` fences but is held only to the standard bar below.
-
 **Contributing a channel or provider skill:**
 1. Fork `nanocoai/nanoclaw` and branch from `main`
 2. Build the adapter following [docs/skill-guidelines.md](docs/skill-guidelines.md): a self-registering module, one appended barrel import, and a registration test that imports the real barrel
-3. Add a SKILL.md in `.claude/skills/<name>/` with the fetch-and-copy steps, and a REMOVE.md that reverses every change. Plain prose steps are all that's required. If you choose to also carry `nc:` directive fences, author them per [docs/skill-directives.md](docs/skill-directives.md) and run the lint — `pnpm exec tsx scripts/skill-directives.ts .claude/skills/<name>/SKILL.md` — and never mention the apply engine in the prose. Either way, a skill with a credential prompt or an interactive step should include a `## Troubleshooting` section.
+3. Add a SKILL.md in `.claude/skills/<name>/` with the fetch-and-copy steps, and a REMOVE.md that reverses every change. Plain prose steps are all that's required. A skill with a credential prompt or an interactive step should include a `## Troubleshooting` section.
 4. Open a PR. We'll land the code on the registry branch from your work
 
 See `/add-slack` for a good example. See [docs/skills-model.md](docs/skills-model.md) for why install is a fetch, never a merge.
@@ -127,7 +125,6 @@ Instructions here...
 - `name`: lowercase, alphanumeric + hyphens, max 64 chars
 - `description`: required — Claude uses this to decide when to invoke the skill
 - Put code in separate files, not inline in the markdown
-- Skills carrying `nc:<kind>` directive fences (the trunk channel/provider skills do; contributed skills may) follow [docs/skill-directives.md](docs/skill-directives.md) — the prose must stand alone with the fences stripped
 - See the [skills standard](https://code.claude.com/docs/en/skills) for all available frontmatter fields
 
 ## Templates

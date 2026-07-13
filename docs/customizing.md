@@ -16,8 +16,6 @@ A good skill mostly **adds** things: new files, a line appended to an existing f
 
 And it ships a test for each spot where it touches the rest of the system. When an update moves something your skill depends on, that test fails and points at the fix, instead of you finding out when things break in production.
 
-(Some core skills — the channel installs the setup wizard drives — also embed machine-applicable `nc:` step fences so a tool can run the same document an agent reads; your own skills don't need them. See [skill-directives.md](skill-directives.md).)
-
 ## How you actually work
 
 You don't have to think in skills while you're building. **Edit the code directly, get it working, then turn your changes into skills afterward.** A coding agent does the conversion for you, following [skill-guidelines.md](skill-guidelines.md).
