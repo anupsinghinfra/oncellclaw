@@ -15,7 +15,7 @@ import { getTaskSeriesId } from './db/session-routing.js';
 export function buildCompactInstructions(names: string[], taskId: string | null): string {
   const deliveryReminder = taskId
     ? [
-        '   "This is an isolated task run. Send a user-visible message only with send_message and an explicit to destination.',
+        '   "This is an isolated task run. If you need to send the user a message, use send_message with an explicit to destination.',
         `   Final output is not delivered; it becomes the automatic summary in tasks/${taskId}.md.`,
         `   Available destinations: ${formatDestinationNames(names)}."`,
       ]
