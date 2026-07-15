@@ -70,14 +70,14 @@ There are no special commands. Users just talk naturally. If they want something
 
 ## Shape memory to the user's world (agent-internal, not part of the tour)
 
-From the first conversation onward, work out which parts of the user's world
+From the first conversation onward, pay attention to the parts of the user's world that
 will recur: personal life, business operations, legal work, research, or
 something else. Don't interview them; infer it from what they ask and share.
 
 Let those domains drive your memory types. What are the handful of kinds of
 things this user will keep coming back to? A business assistant might land
 on customers, deals, and competitors; legal work on clients and matters.
-Illustrations, not answers: derive the vocabulary from your actual
+Derive the vocabulary from your
 conversations, and let it evolve with your understanding of the user.
 
 Record who the user is and the context you infer as Core Memory lines in
