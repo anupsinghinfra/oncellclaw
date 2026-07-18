@@ -35,9 +35,10 @@ export interface SdkRateLimitInfo {
  *
  * The SDK emits this "when rate limit info changes": it is TELEMETRY, and
  * `status` is usually 'allowed' (here's your remaining headroom). We used to
- * treat every one as a terminal error, which aborted perfectly healthy turns
- * across every room — the agent stopped mid-work and posted a rate-limit notice
- * for what was only a status update. **Only 'rejected' is an actual block.**
+ * treat every one as a terminal quota error: on a stock install that logged a
+ * spurious "Rate limit (retryable: false, quota)" on perfectly healthy turns
+ * (#3016), and any consumer acting on the classification aborted those turns
+ * outright. **Only 'rejected' is an actual block.**
  *
  * When it IS rejected the SDK tells us WHY, so we distinguish properly instead
  * of guessing: `errorCode: 'credits_required'` / `overageDisabledReason:
@@ -584,10 +585,9 @@ export class ClaudeProvider implements AgentProvider {
           // The SDK emits this "when rate limit info CHANGES" — it is telemetry,
           // not necessarily an error. `rate_limit_info.status` is usually
           // 'allowed' (here's your remaining headroom). Treating every one of
-          // these as a terminal error aborted perfectly healthy turns across
-          // every room — the agent would stop mid-work and post a rate-limit
-          // notice for what was just a status update. ONLY 'rejected' is an
-          // actual block.
+          // these as a terminal quota error logged a spurious rate-limit line
+          // on healthy turns (#3016) — and aborted them outright wherever the
+          // classification is acted on. ONLY 'rejected' is an actual block.
           //
           // When it IS rejected the SDK tells us WHY, so we can finally
           // distinguish the two cases properly instead of guessing:
