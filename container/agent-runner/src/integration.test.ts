@@ -546,20 +546,35 @@ class InvalidSessionProvider {
 }
 
 describe('poll loop — slash command during active query', () => {
-  it('aborts the active query when /clear arrives as a follow-up', async () => {
+  it(
+    'aborts the active query when /clear arrives as a follow-up',
+    async () => {
+    console.log('[abort-test] start');
     insertMessage('m-active', { sender: 'Alice', text: 'long running request' }, { platformId: 'chan-1', channelType: 'discord' });
+    console.log('[abort-test] message inserted, pending =', JSON.stringify(getPendingMessages().map((m) => m.id)));
 
     const provider = new BlockingProvider();
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider as unknown as MockProvider, controller.signal, 3000);
+    // Generous budgets: on resource-starved CI runners the poll loop can take
+    // well over 2s to issue its first query, which made this test the only
+    // deterministic CI failure while passing everywhere else (macOS + Linux
+    // dev boxes run it in ~0.6s; success aborts the loop early, so the large
+    // ceilings cost nothing on the happy path).
+    const loopPromise = runPollLoopWithTimeout(provider as unknown as MockProvider, controller.signal, 20000);
 
-    await waitFor(() => provider.queries === 1, 2000);
+    for (let i = 0; i < 20 && provider.queries === 0; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      console.log(`[abort-test] t+${(i + 1) * 500}ms queries=${provider.queries} pending=${getPendingMessages().length}`);
+    }
+    await waitFor(() => provider.queries === 1, 15000);
+    console.log('[abort-test] query started');
     insertMessage('m-clear-active', { sender: 'Alice', text: '/clear' }, { platformId: 'chan-1', channelType: 'discord' });
 
-    await waitFor(() => provider.aborts === 1, 2000);
+    await waitFor(() => provider.aborts === 1, 15000);
+    console.log('[abort-test] aborted');
     await waitFor(
       () => getUndeliveredMessages().some((msg) => JSON.parse(msg.content).text === 'Session cleared.'),
-      2000,
+      15000,
     );
     controller.abort();
 
@@ -568,7 +583,9 @@ describe('poll loop — slash command during active query', () => {
     expect(getPendingMessages()).toHaveLength(0);
 
     await loopPromise.catch(() => {});
-  });
+    },
+    30000,
+  );
 });
 
 /**
