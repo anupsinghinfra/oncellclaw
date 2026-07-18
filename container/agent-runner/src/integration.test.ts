@@ -550,9 +550,7 @@ describe('poll loop — slash command during active query', () => {
   // only — 5 of 6 CI runs failed (the poll loop never issues the query within
   // 15s) while passing everywhere reproducible: macOS/arm64, Linux/arm64
   // (incl. 2-core pinned, TZ=UTC, bun --frozen-lockfile), and emulated
-  // linux/amd64 — all on bun 1.3.12. Not exercised by CI before 2026-07-18
-  // (the test landed 2026-06-13; no main CI executed since 2026-06-03), so
-  // this is a pre-existing environment-sensitive hang, not a regression.
+  // linux/amd64 — all on bun 1.3.12.
   // TODO: reproduce with in-loop diagnostics (pending rows + ack states per
   // tick) on a throwaway branch and fix the underlying race, then un-skip.
   it.skip(
