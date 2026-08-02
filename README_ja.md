@@ -1,3 +1,5 @@
+> **oncellclaw** — これは [NanoClaw](https://github.com/nanocoai/nanoclaw) のフォークで、エージェントを Docker ではなく [OnCell](https://oncell.ai) セルで実行します。詳細は英語版 [README](README.md) を参照してください。
+
 <p align="center">
   <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
 </p>

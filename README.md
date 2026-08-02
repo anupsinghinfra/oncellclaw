@@ -3,7 +3,11 @@
 </p>
 
 <p align="center">
-  An AI assistant that runs agents securely in their own containers. Lightweight, built to be easily understood and completely customized for your needs.
+  <strong>oncellclaw — the assistant that survives your laptop.</strong>
+</p>
+
+<p align="center">
+  A <a href="https://github.com/nanocoai/nanoclaw">NanoClaw</a> fork that runs each agent in its own durable <a href="https://oncell.ai">OnCell</a> cell instead of a local Docker container. Same tiny, understandable codebase; your agents' memory and files now live in the cloud, cost ~$0 while idle, and wake on the next message — even if your machine is off. Docker remains a fully supported local runtime.
 </p>
 
 <p align="center">
@@ -24,6 +28,16 @@
 
 NanoClaw provides that same core functionality, but in a codebase small enough to understand: one process and a handful of files. Agents run in their own Linux containers with filesystem isolation, not merely behind permission checks.
 
+### Why OnCell on top
+
+NanoClaw's security thesis is OS-level isolation. OnCell extends it: each agent group runs in a gVisor-sandboxed cell in the cloud — the same isolation boundary, no longer tied to your machine. On top of that the cell is *durable*:
+
+- **Group memory and files live in the cell** — `CLAUDE.md`, memory, working files survive laptop death, reinstalls, and travel.
+- **Idle groups cost ~$0** — a group that isn't talking pauses; the next message wakes it.
+- **Snapshot / fork a group's whole world** — the cell's filesystem is snapshot-able and forkable via the OnCell API, so you can checkpoint or clone an agent's entire state.
+
+The host process shrinks to a channel router: messages in, messages out. Everything the agent does happens in its cell. No `ONCELL_API_KEY`? Everything still runs fully local on Docker, exactly like upstream NanoClaw.
+
 ## Quick Start
 
 ```bash
@@ -33,6 +47,8 @@ bash nanoclaw.sh
 ```
 
 `nanoclaw.sh` walks you from a fresh machine to a named agent you can message. It installs Node, pnpm, and Docker if missing, registers your Anthropic credential with OneCLI, builds the agent container, and pairs your first channel (iMessage, Telegram, Discord, WhatsApp, or a local CLI). If a step fails, Claude Code is invoked automatically to diagnose and resume from where it broke.
+
+To run agents on OnCell instead of local Docker, add `ONCELL_API_KEY=oncell_sk_...` to `.env` before (or after) setup — see [config-examples/oncell.env.example](config-examples/oncell.env.example). The Docker install step can then be skipped entirely.
 
 <details>
 <summary><strong>Migrating from NanoClaw v1?</strong></summary>
@@ -141,7 +157,7 @@ No channel or provider skills are currently requested — propose one via an iss
 
 - macOS or Linux (Windows via WSL2)
 - Node.js 20+ and pnpm 10+ (the installer will install both if missing)
-- [Docker Desktop](https://docker.com/products/docker-desktop) (macOS/Windows) or Docker Engine (Linux)
+- An [OnCell](https://oncell.ai) API key (`ONCELL_API_KEY`) for the cell runtime, **or** [Docker Desktop](https://docker.com/products/docker-desktop) (macOS/Windows) / Docker Engine (Linux) for the local runtime
 - [Claude Code](https://claude.ai/download) for `/customize`, `/debug`, error recovery during setup, and all `/add-<channel>` skills
 
 ## Architecture
@@ -154,6 +170,27 @@ A single Node host orchestrates per-session agent containers. When a message arr
 
 Two SQLite files per session, each with exactly one writer — no cross-mount contention, no IPC, no stdin piping. Channels and alternative providers self-register at startup; trunk ships the registry and the Chat SDK bridge, while the adapters themselves are skill-installed per fork.
 
+### Runtimes: OnCell cells or local Docker
+
+The runtime is selected at startup (`src/runtime-select.ts`):
+
+| `ONCELLCLAW_RUNTIME` | `ONCELL_API_KEY` | Runtime |
+|---|---|---|
+| `docker` | any | Docker (explicit opt-out) |
+| `oncell` | any | OnCell (fails fast if the key is missing) |
+| unset | set | OnCell (the fork's default) |
+| unset | unset | Docker (upstream behavior, fully local) |
+
+On the OnCell runtime the file protocol above is unchanged — the bind mount is replaced by a sync pump. One cell per agent group (`claw-<group-folder>`): the group folder, composed `CLAUDE.md`, skills, and the agent-runner source are mirrored into the cell incrementally (content-hash manifest in the cell KV), the runner runs as the cell's supervised service, and a per-session pump pushes `inbound.db`/inbox and pulls `outbound.db`/heartbeat/outbox through the cell request door. Credentials are passed only in the service environment at start — never written into cell files. Host-side delivery and sweep read the same local session files they always did.
+
+Config (`.env`):
+
+```bash
+ONCELL_API_KEY=oncell_sk_...        # enables the OnCell runtime
+ONCELL_API_URL=https://api.oncell.ai # optional override
+ONCELLCLAW_RUNTIME=oncell|docker     # optional explicit selection
+```
+
 For the full architecture writeup see [docs/architecture.md](docs/architecture.md); for the three-level isolation model see [docs/isolation-model.md](docs/isolation-model.md).
 
 Key files:
@@ -163,6 +200,9 @@ Key files:
 - `src/host-sweep.ts` — 60s sweep: stale detection, due-message wake, recurrence
 - `src/session-manager.ts` — resolves sessions, opens `inbound.db` / `outbound.db`
 - `src/container-runner.ts` — spawns per-agent-group containers, OneCLI credential injection
+- `src/cell-runner.ts` — OnCell runtime: cell lifecycle, workspace sync, session IPC pump
+- `src/cell-sync.ts` / `src/cell-session-io.ts` — incremental cell sync + door-based session IPC
+- `src/oncell-client.ts` — minimal self-contained OnCell API client
 - `src/db/` — central DB (users, roles, agent groups, messaging groups, wiring, migrations)
 - `src/channels/` — channel adapter infra (adapters installed via `/add-<channel>` skills)
 - `src/providers/` — host-side provider config (`claude` baked in; others via skills)

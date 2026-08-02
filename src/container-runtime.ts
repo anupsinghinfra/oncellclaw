@@ -5,11 +5,30 @@
 import { execSync } from 'child_process';
 import os from 'os';
 
-import { CONTAINER_INSTALL_LABEL } from './config.js';
+import { ACTIVE_RUNTIME, CONTAINER_INSTALL_LABEL } from './config.js';
+import { cleanupOrphanCellServices, ensureCellRuntimeReady } from './cell-runtime.js';
 import { log } from './log.js';
 
 /** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = 'docker';
+
+/**
+ * Runtime-agnostic startup readiness check. Dispatches on the selected
+ * runtime: OnCell → API reachability, docker → the unchanged local check.
+ */
+export async function ensureRuntimeReady(): Promise<void> {
+  if (ACTIVE_RUNTIME === 'oncell') return ensureCellRuntimeReady();
+  ensureContainerRuntimeRunning();
+}
+
+/**
+ * Runtime-agnostic orphan cleanup. OnCell → stop stale claw-* cell
+ * services; docker → the unchanged label-scoped container reap.
+ */
+export async function cleanupRuntimeOrphans(): Promise<void> {
+  if (ACTIVE_RUNTIME === 'oncell') return cleanupOrphanCellServices();
+  cleanupOrphans();
+}
 
 /** CLI args needed for the container to resolve the host gateway. */
 export function hostGatewayArgs(): string[] {

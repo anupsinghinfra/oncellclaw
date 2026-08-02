@@ -1,3 +1,5 @@
+> **oncellclaw** — 本仓库是 [NanoClaw](https://github.com/nanocoai/nanoclaw) 的分支，将智能体运行在 [OnCell](https://oncell.ai) 云端单元（cell）中而非本地 Docker。详情请参阅英文 [README](README.md)。
+
 <p align="center">
   <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
 </p>

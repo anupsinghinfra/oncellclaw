@@ -31,8 +31,11 @@ type ResponseFrame =
 // Paths
 // ---------------------------------------------------------------------------
 
-const INBOUND_DB = '/workspace/inbound.db';
-const OUTBOUND_DB = '/workspace/outbound.db';
+// Self-contained on purpose (no ../paths.js import): same env override the
+// runner uses, defaulting to the docker mount location.
+const WS_ROOT = process.env.NANOCLAW_WORKSPACE_ROOT || '/workspace';
+const INBOUND_DB = `${WS_ROOT}/inbound.db`;
+const OUTBOUND_DB = `${WS_ROOT}/outbound.db`;
 
 // ---------------------------------------------------------------------------
 // DB transport

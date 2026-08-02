@@ -1,3 +1,5 @@
+> **oncellclaw** — 이 저장소는 에이전트를 Docker 대신 [OnCell](https://oncell.ai) 셀에서 실행하는 [NanoClaw](https://github.com/nanocoai/nanoclaw) 포크입니다. 자세한 내용은 영어 [README](README.md)를 참조하세요.
+
 <p align="center">
   <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
 </p>

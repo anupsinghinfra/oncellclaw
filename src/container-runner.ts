@@ -2,6 +2,10 @@
  * Container Runner v2
  * Spawns agent containers with session folder + agent group folder mounts.
  * The container runs the v2 agent-runner which polls the session DB.
+ *
+ * oncellclaw: every exported entry point dispatches to cell-runner.ts when
+ * the OnCell runtime is selected (ACTIVE_RUNTIME, see runtime-select.ts).
+ * The docker path below is upstream NanoClaw, unchanged.
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
@@ -11,6 +15,7 @@ import { promisify } from 'util';
 import { OneCLI } from '@onecli-sh/sdk';
 
 import {
+  ACTIVE_RUNTIME,
   CONTAINER_CPU_LIMIT,
   CONTAINER_IMAGE,
   CONTAINER_IMAGE_BASE,
@@ -23,6 +28,13 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
+import {
+  getActiveCellSessionCount,
+  installCellPackages,
+  isCellSessionRunning,
+  killCellSession,
+  wakeCellSession,
+} from './cell-runner.js';
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
@@ -69,10 +81,12 @@ const activeContainers = new Map<string, { process: ChildProcess; containerName:
 const wakePromises = new Map<string, Promise<boolean>>();
 
 export function getActiveContainerCount(): number {
+  if (ACTIVE_RUNTIME === 'oncell') return getActiveCellSessionCount();
   return activeContainers.size;
 }
 
 export function isContainerRunning(sessionId: string): boolean {
+  if (ACTIVE_RUNTIME === 'oncell') return isCellSessionRunning(sessionId);
   return activeContainers.has(sessionId);
 }
 
@@ -89,6 +103,7 @@ export function isContainerRunning(sessionId: string): boolean {
  * can branch on the boolean.
  */
 export function wakeContainer(session: Session): Promise<boolean> {
+  if (ACTIVE_RUNTIME === 'oncell') return wakeCellSession(session);
   if (activeContainers.has(session.id)) {
     log.debug('Container already running', { sessionId: session.id });
     return Promise.resolve(true);
@@ -215,6 +230,10 @@ async function spawnContainer(session: Session): Promise<void> {
 
 /** Kill a container for a session. */
 export function killContainer(sessionId: string, reason: string, onExit?: () => void): void {
+  if (ACTIVE_RUNTIME === 'oncell') {
+    killCellSession(sessionId, reason, onExit);
+    return;
+  }
   const entry = activeContainers.get(sessionId);
   if (!entry) return;
 
@@ -549,8 +568,13 @@ async function buildContainerArgs(
 
 const execAsync = promisify(exec);
 
-/** Build a per-agent-group Docker image with custom packages. */
+/**
+ * Build a per-agent-group Docker image with custom packages. On the OnCell
+ * runtime there is no image — packages are installed directly in the
+ * group's cell instead (see cell-runner.ts).
+ */
 export async function buildAgentGroupImage(agentGroupId: string): Promise<void> {
+  if (ACTIVE_RUNTIME === 'oncell') return installCellPackages(agentGroupId);
   const agentGroup = getAgentGroup(agentGroupId);
   if (!agentGroup) throw new Error('Agent group not found');
 

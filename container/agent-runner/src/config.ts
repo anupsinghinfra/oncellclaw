@@ -7,7 +7,9 @@
  */
 import fs from 'fs';
 
-const CONFIG_PATH = '/workspace/agent/container.json';
+import { agentDir } from './paths.js';
+
+const CONFIG_PATH = `${agentDir()}/container.json`;
 
 export interface RunnerConfig {
   provider: string;

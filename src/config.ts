@@ -3,6 +3,7 @@ import path from 'path';
 
 import { readEnvFile } from './env.js';
 import { getContainerImageBase, getDefaultContainerImage, getInstallSlug } from './install-slug.js';
+import { resolveRuntimeKind, type RuntimeKind } from './runtime-select.js';
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
@@ -19,6 +20,9 @@ const envConfig = readEnvFile([
   'NANOCLAW_EGRESS_LOCKDOWN',
   'NANOCLAW_EGRESS_NETWORK',
   'ONECLI_GATEWAY_CONTAINER',
+  'ONCELL_API_KEY',
+  'ONCELL_API_URL',
+  'ONCELLCLAW_RUNTIME',
 ]);
 
 /**
@@ -94,6 +98,16 @@ export const EGRESS_NETWORK =
   process.env.NANOCLAW_EGRESS_NETWORK || envConfig.NANOCLAW_EGRESS_NETWORK || 'nanoclaw-egress';
 export const ONECLI_GATEWAY_CONTAINER =
   process.env.ONECLI_GATEWAY_CONTAINER || envConfig.ONECLI_GATEWAY_CONTAINER || 'onecli';
+
+// OnCell runtime (oncellclaw) — agents execute in OnCell cells instead of
+// local Docker containers. See src/runtime-select.ts for the selection matrix
+// and src/cell-runner.ts for the cell lifecycle.
+export const ONCELL_API_KEY = process.env.ONCELL_API_KEY || envConfig.ONCELL_API_KEY || '';
+export const ONCELL_API_URL = process.env.ONCELL_API_URL || envConfig.ONCELL_API_URL || '';
+export const ACTIVE_RUNTIME: RuntimeKind = resolveRuntimeKind({
+  runtimeOverride: process.env.ONCELLCLAW_RUNTIME || envConfig.ONCELLCLAW_RUNTIME,
+  oncellApiKey: ONCELL_API_KEY,
+});
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.
