@@ -52,15 +52,126 @@ bash oncellclaw.sh
 
 **最强的 harness，最强的模型。** NanoClaw 通过 Anthropic 官方的 Claude Agent SDK 原生使用 Claude Code，所以您能用上最新的 Claude 模型以及 Claude Code 的完整工具集——包括修改和扩展自己的 NanoClaw fork 的能力。其他提供者是可插拔选项：`/add-codex` 对应 OpenAI 的 Codex（ChatGPT 订阅或 API key），`/add-opencode` 通过 OpenCode 接入 OpenRouter、Google、DeepSeek 等，`/add-ollama-provider` 用于本地开源权重模型。提供者可按智能体组单独配置。
 
-## 功能支持
+## 它能做什么
 
-- **多渠道消息** — WhatsApp、Telegram、Discord、Slack、Microsoft Teams、iMessage、Matrix、Google Chat、Webex、Linear、GitHub、WeChat，以及通过 Resend 的邮件。按需通过 `/add-<channel>` 技能安装。可同时运行一个或多个。
-- **灵活的隔离模式** — 可为每个渠道配一个独立智能体以获得完全隐私，也可让一个智能体在多个渠道上共享、统一记忆但会话独立，或者把多个渠道合并到一个共享会话里，让一场对话横跨多个入口。通过 `/manage-channels` 按渠道选择。详见 [docs/isolation-model.md](docs/isolation-model.md)。
-- **每个智能体的独立工作区** — 每个智能体组都有自己的 `CLAUDE.md`、自己的记忆、自己的容器，以及您允许的挂载点。除非您明确接线，否则不会有东西越过边界。
-- **计划任务** — 运行 Claude 的周期性作业，可以给您回发消息。
-- **网络访问** — 搜索和抓取网页内容。
-- **容器隔离** — 智能体在 Docker（macOS/Linux/WSL2）中沙箱化运行，可选 [Docker Sandboxes](docs/docker-sandboxes.md) 的微虚拟机隔离，或在 macOS 上选用 Apple Container 作为原生运行时。
-- **凭据安全** — 智能体不持有原始 API key。出站请求经由 [OneCLI 的 Agent Vault](https://github.com/onecli/onecli)，在请求时注入凭据，并按每个智能体执行策略和速率限制。
+这里的每一条都是已发布的代码——点开链接就能读到。智能体侧的能力位于 [`container/skills/`](container/skills/) 和 [`container/agent-runner/src/mcp-tools/`](container/agent-runner/src/mcp-tools/)；安装时的能力则是 [`.claude/skills/`](.claude/skills/) 里的斜杠命令。
+
+**随处与它对话**
+
+- **内置网页聊天** — `POST` 一条消息，轮询完整的双向对话记录，或保持一条 Server-Sent-Events 流；自带 Bearer token 认证与速率限制。一个浏览器或一个仪表盘就是完整的客户端。([`src/channels/web.ts`](src/channels/web.ts))
+- **Telegram 一步接入** — 用 @BotFather 创建机器人，`POST /web/channels/telegram/pair`，完成。长轮询模式，因此在 NAT 之后和没有 webhook 的托管单元上都能工作。([`src/channels/telegram.ts`](src/channels/telegram.ts))
+- **另有十几个渠道以技能提供** — WhatsApp、Discord、Slack、iMessage、Teams、Matrix、Google Chat、Webex、Signal、WeChat、Linear、GitHub、通过 Resend 的邮件：`/add-<channel>` 只把您要的那个适配器精确复制进您的 fork。([`.claude/skills/`](.claude/skills/))
+- **一个助手或多个助手** — 为隐私给每个渠道接一个独立智能体，为统一记忆让一个智能体横跨多个渠道，或把多个渠道合并成一场对话。通过 `/manage-channels` 按渠道选择。([docs/isolation-model.md](docs/isolation-model.md))
+
+**您的助手能做什么**
+
+- **浏览网页** — 调研、填表、截图、数据提取、在真实浏览器里测试 Web 应用。([`container/skills/agent-browser`](container/skills/agent-browser/SKILL.md))
+- **自己安排自己的工作** — 一次性与 cron 周期任务，各自运行在隔离会话中并留有运行日志；可选的[脚本闸门](docs/scheduled-tasks.md)以极低成本检查是否有新工作，只在有活干时才唤醒智能体。([`src/modules/scheduling/`](src/modules/scheduling/))
+- **拉起队友** — `create_agent` 孵化一个拥有独立工作区的长期智能体，双向接线：可以委派任务，也能收到它的消息。任何接好线的一对智能体之间都可以互发消息。([`mcp-tools/agents.ts`](container/agent-runner/src/mcp-tools/agents.ts)、[`src/modules/agent-to-agent/`](src/modules/agent-to-agent/))
+- **先问再做** — 特权操作（安装软件包、添加 MCP 服务器、创建智能体）要经过发给管理员的审批卡片；守卫位于投递路径上，而不是寄希望于智能体的善意。([`src/modules/approvals/`](src/modules/approvals/)、[`src/delivery-guard.ts`](src/delivery-guard.ts))
+- **正经地向您提问** — 阻塞式多选题，以及在支持的渠道上的富卡片。([`mcp-tools/interactive.ts`](container/agent-runner/src/mcp-tools/interactive.ts))
+- **发送真正的产物** — 把文件、图表、PDF 发进聊天；编辑自己已发送的消息；对您的消息做出表情回应。([`mcp-tools/core.ts`](container/agent-runner/src/mcp-tools/core.ts))
+- **扩展自己** — 安装 apt/npm 软件包、添加 MCP 服务器、编辑自己的指令与代码（经审批闸门），更大的改动走 builder-agent 模式。([`container/skills/self-customize`](container/skills/self-customize/SKILL.md)、[`mcp-tools/self-mod.ts`](container/agent-runner/src/mcp-tools/self-mod.ts))
+- **认真构建 Web 软件** — 前端工程纪律技能强制在真实浏览器中完成构建-测试-验证之后才算"完成"，可与 `/add-vercel` 这类部署技能配合。([`container/skills/frontend-engineer`](container/skills/frontend-engineer/SKILL.md))
+- **拥有记忆** — 每个智能体的 `CLAUDE.md` 常设指令，加上一个结构化、有预算控制、跨每次重启存活的记忆索引，在每个会话中重新组装。([`src/claude-md-compose.ts`](src/claude-md-compose.ts)、[`container/agent-runner/src/memory/`](container/agent-runner/src/memory/))
+- **管理自己的安装** — 容器内的 `ncl` CLI 可以查询并（经权限闸门）修改渠道、接线、任务与会话。([`src/cli/`](src/cli/))
+
+**幕后机制**
+
+- **比您的笔记本活得久** — 在 OnCell 运行时上，每个智能体的整个世界（记忆、文件、`CLAUDE.md`）都住在一个持久的 gVisor 单元里：笔记本坏了，助手还在。空闲单元以约 $0 的成本暂停到存储；您的下一条消息会唤醒它们。([`src/cell-runner.ts`](src/cell-runner.ts))
+- **快照与分叉** — 单元的文件系统可以通过 OnCell API 打检查点或克隆：既能备份一个助手，也能分叉它的完整状态。
+- **完全本地的选项** — 不设 `ONCELL_API_KEY`，一切就在本地 Docker 容器中运行，与上游 NanoClaw 完全一致。([`src/container-runner.ts`](src/container-runner.ts))
+- **凭据保险库** — 配合 [OneCLI 网关](https://github.com/onecli/onecli)，智能体从不持有原始 API key：凭据在请求时按每个智能体的策略注入，docker 安装还可以把所有出站流量硬锁到网关。([`src/egress-lockdown.ts`](src/egress-lockdown.ts)、[`src/cell-gateway.ts`](src/cell-gateway.ts))
+- **从结构上就被沙箱化** — 每个智能体都运行在自己的容器或单元里，只能看到您加入白名单的挂载。([`src/modules/mount-security/`](src/modules/mount-security/))
+- **用户、角色与陌生发信人** — 每个用户有 owner/admin/member 角色；陌生人给您的机器人发消息会触发审批卡片，而不是一场对话。([`src/modules/permissions/`](src/modules/permissions/))
+- **智能体模板** — 用 `ncl groups create --template <ref>` 冲压出一个开箱即用的智能体（指令 + 工具 + 技能，不含密钥）。([docs/templates.md](docs/templates.md))
+- **按智能体选择模型** — 原生使用 Claude Code；`/add-codex`、`/add-opencode`（OpenRouter、Google、DeepSeek……）、`/add-ollama-provider` 用于本地开源权重模型。([`.claude/skills/`](.claude/skills/))
+
+## 托管版（工作原理）
+
+托管版没有单独的代码库。一个托管实例就是*这个*仓库作为服务运行在您自己的 OnCell 单元里，由 [`scripts/cloud-start.sh`](scripts/cloud-start.sh) 启动——与 [oncell.ai/dashboard/claw](https://oncell.ai/claw) 替您运行的是同一个脚本，您也可以在任何能上网的机器上自己运行它。引导过程**只依赖 node**：单元里有 node、npm/corepack 和 tar，但**没有 git、curl、wget 或 python3**——因此源码以 node 抓取的 GitHub tarball 形式到达（先通过 GitHub API 把 `ONCELLCLAW_REF` 解析为 commit sha，再下载并解压 `codeload.github.com/{owner}/{repo}/tar.gz/{sha}` 的 tarball），pnpm 来自 corepack shim，脚本里的每一次下载都走 `node fetch`。一条命令把一台空机器带到一个可用的助手：抓取并解压源码、准备工具链、安装、构建、配置一个接到内置 [`web` 渠道](src/channels/web.ts)的智能体组，最后 `exec` 主机进程，让您的服务监督器接管。
+
+基础目录（`ONCELLCLAW_DIR`，默认 `~/oncellclaw`）把不可变的源码与持久状态分开，因此升级永远不会摧毁您助手的记忆：
+
+```
+current -> src-<sha>   正在运行的检出（符号链接，原子切换）
+src-<sha>/             某个 commit 的不可变源码树
+state/                 data/ groups/ store/ .env — 符号链接进每一个
+                       检出；在每次升级中存活
+toolchain/             corepack shim（若系统 node 太旧则附带一个私有 node）
+```
+
+每个阶段都是幂等的，所以重启会收敛而不是重复：已解压过的 sha 完全不需要下载（固定到完整 sha 的热重启可全程离线启动），新 sha 在旁边解压后再切换 `current`，旧树只在新树完成构建与配置之后才被清理——失败的升级永远不会删掉上一个已知良好的检出。配置阶段会找到它已经创建过的智能体组，而不是再建一个。设 `ONCELLCLAW_RUNTIME=oncell` 时，主机自己的智能体组住在同一账户下的兄弟单元里，主机单元保持为一个轻薄的路由器。`web` 渠道把整场对话放在进程唯一的 HTTP 端口（`$PORT`）上，也就是单元公开预览 URL 所映射的端口：
+
+```bash
+# 与它对话
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"text":"hello"}' https://<host>/web/assistant/message          # → 202 {"ok":true,"id":"web-…"}
+# 轮询回复（下次把 `cursor` 作为 `after` 传回）
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/assistant/messages?after='                      # → 200 {"messages":[…],"cursor":"…"}
+# 完整的双向对话（用户行 + 助手行，有序、可续传）
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/assistant/transcript?after='                    # → 200 {"messages":[{direction,…}],"cursor":"…"}
+# 用推送代替轮询：Server-Sent Events，每行一个 `event: message`
+curl -N -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/assistant/stream'                               # 先回放，再实时流式推送
+curl https://<host>/web/health                                           # → 200 {"ok":true,"groups":[…]}
+# 面向仪表盘的自省（token 认证）：version、groups（含运行成本）、channels、skills
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     https://<host>/web/status                                           # → 200 {"version":…,"channels":[…],…}
+```
+
+**运行成本：** 每个智能体回合的成本与 token 用量（以 Claude Code 报告的为准）按会话累积在会话数据库里。`/web/status` 按组汇总这本账——`groups[].cost` 为 `{ costUsd, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, turns }`，在记录第一个回合之前为 `null`——每个助手行的对话记录还携带该回合自己的 `costUsd`，因此仪表盘可以渲染一个低调的逐条回复标注。
+
+**首次启动：** 脚本在下载任何东西之前，先用一个极小的占位服务器立即绑定 `$PORT`，因为服务监督器（包括 OnCell 的单元监督器）会在几秒内杀掉不接受连接的服务，而冷安装需要几分钟。引导期间，**所有**路径（包括 `/web/health`）都以 `503` 回答 `{"ok":false,"phase":"…"}`，其中 `phase` 依次经过 `starting → clone → toolchain → install → build → provision → handoff`。随后是占位服务器把端口交给真正主机时短暂的拒绝连接间隙，然后 `/web/health` 返回 `200 {"ok":true,…}`——轮询它直到 `ok` 为 true，就知道助手已经上线。热重启跳过下载与安装，几秒内完成交接。
+
+由于单元里没有 curl，抓取并运行脚本的服务命令本身也只用 node：
+
+```sh
+node -e 'const fs=require("fs");const repo=process.env.ONCELLCLAW_REPO||"https://github.com/anupsinghinfra/oncellclaw.git";const ref=process.env.ONCELLCLAW_REF||"main";const m=repo.match(/github\.com[:\/]([^\/]+)\/([^\/]+?)(?:\.git)?$/);if(!m){console.error("cannot parse ONCELLCLAW_REPO: "+repo);process.exit(1)}const url="https://raw.githubusercontent.com/"+m[1]+"/"+m[2]+"/"+ref+"/scripts/cloud-start.sh";fetch(url,{headers:{"User-Agent":"oncellclaw-bootstrap"}}).then(async r=>{if(!r.ok){console.error("HTTP "+r.status+" for "+url);process.exit(1)}const t=await r.text();if(!t.includes("cloud-start.sh")){console.error("unexpected script body from "+url);process.exit(1)}fs.writeFileSync("/tmp/cloud-start.sh",t);console.log("fetched "+url)}).catch(e=>{console.error("fetch failed: "+e);process.exit(1)})' && bash /tmp/cloud-start.sh
+```
+
+这个 URL 是公开的，所以 `ONCELLCLAW_WEB_TOKEN` 是互联网与您的助手之间唯一的屏障：除非您为可信的本地网络显式设置 `ONCELLCLAW_WEB_ALLOW_INSECURE=1`，否则该渠道在没有 token 时拒绝启动。这里没有任何东西会把密钥写到磁盘——凭据只在进程环境中传递。该渠道还会自我限流：认证失败按客户端 IP 封顶（默认 20 次/分钟，在 token 比较*之前*检查，所以暴力破解一个泄露的 URL 会撞墙），消息 `POST` 按组封顶（默认 30 次/分钟，允许突发的令牌桶）。超预算的请求得到带 `Retry-After` 头的 `429 {"error":"rate_limited"}`；`GET` 轮询和 `/health` 从不限流。
+
+| 变量 | 默认值 | 含义 |
+|---|---|---|
+| `ONCELLCLAW_WEB_TOKEN` | — | 每个 `/web/…` 请求的 Bearer token。除非设置了不安全标志，否则**必需**。用 `openssl rand -hex 32` 生成。 |
+| `ONCELLCLAW_WEB_ALLOW_INSECURE` | 未设置 | `1` 表示 `web` 渠道无认证运行。仅限本地开发。 |
+| `ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN` | `20` | 单个客户端 IP 每分钟允许的认证失败次数，超出后 `/web/…` 回答 `429`（滑动窗口，在 token 比较之前检查）。 |
+| `ONCELLCLAW_WEB_MESSAGES_PER_MIN` | `30` | 单个组每分钟接受的消息 `POST` 数（令牌桶；可突发到同一数值）。`GET` 轮询和 `/health` 从不限流。 |
+| `PORT` | `3000` | HTTP 监听端口。托管运行时总是由单元监督器设置——回退值仅用于裸机自托管。`WEBHOOK_PORT` 仍可覆盖它。 |
+| `ONCELLCLAW_GROUP` | `assistant` | 要配置的智能体组。同时是 URL slug：`/web/<group>/message`。 |
+| `ONCELLCLAW_PERSONA` | — | 该组的常设指令，作为其人设只暂存一次。绝不覆盖已被编辑过的版本。 |
+| `ONCELLCLAW_REPO` | 本仓库 | 要运行的 GitHub 仓库 URL（tarball 引导——必须是 `github.com`）。 |
+| `ONCELLCLAW_REF` | `main` | 分支、标签或 commit sha。完整的 40 位十六进制 sha 会跳过 ref 解析并可离线热重启。 |
+| `ONCELLCLAW_DIR` | `$HOME/oncellclaw` | 持久基础目录：`src-<sha>/` 检出、`current` 符号链接、`state/`（`data`、`groups`、`store`、`.env`）和 `toolchain/`。状态在每次升级中存活。 |
+| `ONCELLCLAW_RUNTIME` | `oncell` | `oncell` 或 `docker`（见[英文 README 的 Runtimes](README.md#runtimes-oncell-cells-or-local-docker)）。 |
+| `ONCELLCLAW_CELL_NAMESPACE` | 安装 slug | 把本实例的智能体组单元（`clawg-{namespace}-{group}`）与同一 OnCell 账户中的其他 claw 隔离。kebab-case，≤24 字符。托管版：仪表盘为每个实例设置唯一值；自托管：默认值（检出路径的 sha1）即可。 |
+| `ONCELL_API_KEY` | — | 运行时为 `oncell` 时必需。 |
+| `ONCELL_API_URL` | — | 可选的 API 端点覆盖。 |
+| `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | — | 智能体凭据。必须且只能提供其中一个。 |
+
+`web` 渠道并非托管专属——它和 `cli` 一样随主干发布，因此自托管者也可以把浏览器、脚本或自己的前端指向本地的 oncellclaw，用同样的三个端点。参见 [config-examples/hosted.env.example](config-examples/hosted.env.example)。
+
+### 连接 Telegram
+
+主干自带一个零依赖的 Telegram 适配器，运行在**长轮询**模式——不需要公开 webhook，因此在托管单元上和 NAT 之后的笔记本上表现完全一致。用 [@BotFather](https://t.me/BotFather) 创建一个机器人（`/newbot`，复制它打印的 token），然后二选一：
+
+- **仪表盘**：Connections & Integrations → Telegram → Connect → 粘贴 token。该面板是下方 API 的一个薄客户端。
+- **API/curl**：
+
+```bash
+curl -X POST -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"botToken":"<BotFather 给的 token>"}' https://<host>/web/channels/telegram/pair
+# → 200 {"ok":true,"bot":{"username":"YourBot"}}      配对成功；适配器立即上线
+# → 400 {"error":"invalid_token"}                     格式不对，或被 Telegram 拒绝
+# → 502 {"error":"telegram_unreachable"}              主机无法访问 Telegram API
+curl -X DELETE -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" https://<host>/web/channels/telegram
+# → 200 {"ok":true}                                   适配器已停止，凭据已移除
+```
+
+配对会用 `getMe` 验证 token，把它作为 `TELEGRAM_BOT_TOKEN` 存进安装的 `.env`（与 CLI 安装路径写入的是同一个地方——无论怎样配对都只有一个凭据仓库），并在不重启的情况下启动适配器。`/web/status` 会立即反映（`configured:true, connected:true, detail:"@YourBot"`），并且总是以诚实的状态列出完整的受支持渠道集合（`web`、`cli`、`telegram`、`whatsapp`、`discord`、`imessage`），让仪表盘有地方挂每一个 Connect 按钮。在 Telegram 上给您的机器人发消息，助手就会在那里回答；来自未获批准发信人的私信会走正常的陌生发信人审批流程。
 
 ## 使用方法
 
