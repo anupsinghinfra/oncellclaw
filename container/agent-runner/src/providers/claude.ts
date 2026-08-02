@@ -9,6 +9,7 @@ import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
 import { agentDir } from '../paths.js';
 import { TIMEZONE, formatLocalStamp } from '../timezone.js';
 import { registerProvider } from './provider-registry.js';
+import { createStderrTail, enrichWithStderr } from './stderr-tail.js';
 import type {
   AgentProvider,
   AgentQuery,
@@ -498,6 +499,12 @@ export class ClaudeProvider implements AgentProvider {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+      // Cell services run as root inside a gVisor sandbox, and Claude Code
+      // refuses --dangerously-skip-permissions as root UNLESS IS_SANDBOX=1.
+      // A cell genuinely is a sandbox, so declaring it is honest — without
+      // this every query exited 1 with no output. The docker path never hit
+      // it because container/Dockerfile drops to USER node.
+      ...(process.env.NANOCLAW_CELL === '1' ? { IS_SANDBOX: '1' } : {}),
     };
   }
 
@@ -553,9 +560,14 @@ export class ClaudeProvider implements AgentProvider {
 
     const instructions = input.systemContext?.instructions;
 
+    // Keep the CLI's last stderr bytes: when the subprocess dies, the SDK's
+    // error says only "exited with code N" — the tail carries the reason.
+    const stderrTail = createStderrTail();
+
     const sdkResult = sdkQuery({
       prompt: stream,
       options: {
+        stderr: (data: string) => stderrTail.append(data),
         cwd: input.cwd,
         additionalDirectories: this.additionalDirectories,
         resume: input.continuation,
@@ -585,6 +597,16 @@ export class ClaudeProvider implements AgentProvider {
     let aborted = false;
 
     async function* translateEvents(): AsyncGenerator<ProviderEvent> {
+      try {
+        yield* translateEventsInner();
+      } catch (err) {
+        const tail = stderrTail.tail();
+        if (tail) log(`Claude Code stderr (last ${tail.length} bytes): ${tail}`);
+        throw enrichWithStderr(err, tail);
+      }
+    }
+
+    async function* translateEventsInner(): AsyncGenerator<ProviderEvent> {
       let messageCount = 0;
       for await (const message of sdkResult) {
         if (aborted) return;
