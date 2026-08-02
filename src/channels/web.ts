@@ -36,6 +36,17 @@
  * between the internet and someone's assistant, so an unset token is a
  * misconfiguration, not a default.
  *
+ * Rate limits (see ./rate-limit.ts; both return 429 {"error":"rate_limited"}
+ * with a Retry-After header, and neither reveals anything about the token):
+ *  - auth failures per client IP — sliding window, default 20/min
+ *    (ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN). Consulted BEFORE the token
+ *    compare, so an over-budget brute-forcer never reaches the comparison.
+ *  - message POSTs per group — token bucket, default 30/min with the same
+ *    burst (ONCELLCLAW_WEB_MESSAGES_PER_MIN); checked before the body is
+ *    read, so malformed floods cost budget too. GET polls are unlimited:
+ *    they are cheap reads of local SQLite and the dashboard polls steadily.
+ *  - /health stays unlimited and unauthenticated.
+ *
  * Delivery semantics: `deliver()` is an acknowledgement, not a send. The
  * outbound row is already durable in the session's outbound.db, which is
  * what the poll endpoint reads; acknowledging keeps the delivery poll from
@@ -59,6 +70,7 @@ import { openOutboundDb } from '../session-manager.js';
 import { registerHttpRoute, unregisterHttpRoute } from '../webhook-server.js';
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup } from './adapter.js';
 import { registerChannelAdapter } from './channel-registry.js';
+import { parseRatePerMin, SlidingWindowLimiter, TokenBucketLimiter } from './rate-limit.js';
 
 /** Channel type + registry key. */
 export const WEB_CHANNEL_TYPE = 'web';
@@ -79,6 +91,12 @@ const MAX_POLL_LIMIT = 500;
 /** Sender handles become `users.id` primary keys — keep them boring. */
 const USER_ID_PATTERN = /^[A-Za-z0-9._@+-]{1,128}$/;
 
+/** Auth failures one client IP may burn per minute before 429s. */
+const DEFAULT_AUTH_FAILURES_PER_MIN = 20;
+/** Accepted messages one group absorbs per minute (token bucket, same burst). */
+const DEFAULT_MESSAGES_PER_MIN = 30;
+const AUTH_WINDOW_MS = 60_000;
+
 /**
  * HTTP transport with a bearer token in front of it: every request that got
  * past the token is trusted ('public'), every posted line is for the agent
@@ -98,15 +116,48 @@ const WEB_DEFAULTS: ChannelDefaults = {
 export interface WebChannelEnv {
   token: string;
   allowInsecure: boolean;
+  authFailuresPerMin: number;
+  messagesPerMin: number;
 }
 
 /** Resolve the channel's env (process.env first, then repo-root .env). */
 export function readWebChannelEnv(): WebChannelEnv {
-  const file = readEnvFile(['ONCELLCLAW_WEB_TOKEN', 'ONCELLCLAW_WEB_ALLOW_INSECURE']);
+  const file = readEnvFile([
+    'ONCELLCLAW_WEB_TOKEN',
+    'ONCELLCLAW_WEB_ALLOW_INSECURE',
+    'ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN',
+    'ONCELLCLAW_WEB_MESSAGES_PER_MIN',
+  ]);
   return {
     token: (process.env.ONCELLCLAW_WEB_TOKEN ?? file.ONCELLCLAW_WEB_TOKEN ?? '').trim(),
     allowInsecure: (process.env.ONCELLCLAW_WEB_ALLOW_INSECURE ?? file.ONCELLCLAW_WEB_ALLOW_INSECURE ?? '') === '1',
+    authFailuresPerMin: parseRatePerMin(
+      process.env.ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN ?? file.ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN,
+      DEFAULT_AUTH_FAILURES_PER_MIN,
+    ),
+    messagesPerMin: parseRatePerMin(
+      process.env.ONCELLCLAW_WEB_MESSAGES_PER_MIN ?? file.ONCELLCLAW_WEB_MESSAGES_PER_MIN,
+      DEFAULT_MESSAGES_PER_MIN,
+    ),
   };
+}
+
+/**
+ * Client IP for rate-limiting purposes.
+ *
+ * TRUST ASSUMPTION: on a hosted cell the only route to this port is the
+ * platform's preview proxy, which sets X-Forwarded-For; the FIRST entry is
+ * the real client, and later entries (appendable by anyone upstream) are
+ * ignored. A caller who can reach the port directly (bare self-hosting) can
+ * spoof XFF and rotate their apparent IP — that degrades the auth-failure
+ * limiter back to "per presented IP", never below it, and the per-group
+ * message limiter is keyed by group, not IP, so it is unaffected.
+ */
+export function clientIpOf(req: Pick<http.IncomingMessage, 'headers' | 'socket'>): string {
+  const raw = req.headers['x-forwarded-for'];
+  const header = Array.isArray(raw) ? raw[0] : raw;
+  const first = header?.split(',')[0]?.trim();
+  return first || req.socket?.remoteAddress || 'unknown';
 }
 
 /**
@@ -267,7 +318,7 @@ function generateId(): string {
 }
 
 function createAdapter(): ChannelAdapter | null {
-  const { token, allowInsecure } = readWebChannelEnv();
+  const { token, allowInsecure, authFailuresPerMin, messagesPerMin } = readWebChannelEnv();
   if (!token && !allowInsecure) {
     log.error(
       'web channel NOT started — ONCELLCLAW_WEB_TOKEN is not set. The web channel exposes your assistant over HTTP; ' +
@@ -281,6 +332,18 @@ function createAdapter(): ChannelAdapter | null {
 
   let mounted = false;
 
+  // Per-IP budget of FAILED auth attempts (brute-force door) and per-group
+  // budget of message POSTs (spam door — malformed floods cost budget too).
+  // Process-local state, pruned inside the limiters.
+  const authFailures = new SlidingWindowLimiter(authFailuresPerMin, AUTH_WINDOW_MS);
+  const messageBudget = new TokenBucketLimiter(messagesPerMin);
+
+  function sendRateLimited(res: http.ServerResponse, retryAfterSec: number): void {
+    // Deliberately indistinguishable between the two limiters, and silent on
+    // how close any presented token was.
+    sendJson(res, 429, { error: 'rate_limited' }, { 'Retry-After': String(retryAfterSec) });
+  }
+
   /** Token gate. Returns true when the request may proceed. */
   function authorize(req: http.IncomingMessage, res: http.ServerResponse): boolean {
     if (!token) return true; // insecure mode, explicitly opted into above
@@ -290,9 +353,23 @@ function createAdapter(): ChannelAdapter | null {
   }
 
   async function handleWeb(req: http.IncomingMessage, res: http.ServerResponse, config: ChannelSetup): Promise<void> {
-    // Token first: an unauthenticated caller learns nothing about which
-    // groups exist, only that it needs a token.
-    if (!authorize(req, res)) return;
+    // Brute-force gate BEFORE the token compare: an IP that has burned its
+    // failure budget gets a 429 without the token ever being examined.
+    const ip = clientIpOf(req);
+    if (token) {
+      const gate = authFailures.check(ip);
+      if (!gate.allowed) {
+        sendRateLimited(res, gate.retryAfterSec);
+        return;
+      }
+    }
+
+    // Token next: an unauthenticated caller learns nothing about which
+    // groups exist, only that it needs a token. Each failure spends budget.
+    if (!authorize(req, res)) {
+      authFailures.record(ip);
+      return;
+    }
 
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parts = url.pathname.split('/').filter((p) => p.length > 0);
@@ -320,6 +397,14 @@ function createAdapter(): ChannelAdapter | null {
     }
 
     if (req.method === 'POST' && action === 'message') {
+      // Per-group spam gate, checked before the body is even read. Keyed by
+      // group (not IP): the token holder is one principal, and the budget
+      // protects the agent behind the group. GET polls stay unlimited.
+      const gate = messageBudget.tryTake(slug);
+      if (!gate.allowed) {
+        sendRateLimited(res, gate.retryAfterSec);
+        return;
+      }
       await postMessage(req, res, config, slug);
       return;
     }

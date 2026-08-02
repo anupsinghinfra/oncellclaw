@@ -87,9 +87,16 @@ function hostSetup(adapter: ChannelAdapter): ChannelSetup {
 }
 
 /** Boot the registered channels with the given env. Empty string = unset. */
-async function startChannels(env: { token?: string; allowInsecure?: string }): Promise<void> {
+async function startChannels(env: {
+  token?: string;
+  allowInsecure?: string;
+  authFailuresPerMin?: string;
+  messagesPerMin?: string;
+}): Promise<void> {
   process.env.ONCELLCLAW_WEB_TOKEN = env.token ?? '';
   process.env.ONCELLCLAW_WEB_ALLOW_INSECURE = env.allowInsecure ?? '';
+  process.env.ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN = env.authFailuresPerMin ?? '';
+  process.env.ONCELLCLAW_WEB_MESSAGES_PER_MIN = env.messagesPerMin ?? '';
   await initChannelAdapters(hostSetup);
 }
 
@@ -162,6 +169,8 @@ afterEach(async () => {
   delete process.env.WEBHOOK_PORT;
   delete process.env.ONCELLCLAW_WEB_TOKEN;
   delete process.env.ONCELLCLAW_WEB_ALLOW_INSECURE;
+  delete process.env.ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN;
+  delete process.env.ONCELLCLAW_WEB_MESSAGES_PER_MIN;
   if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
 });
 
@@ -445,5 +454,104 @@ describe('web channel — routing surface', () => {
   it('shares the one port with the webhook routes', async () => {
     // /webhook is still handled by its own table on the same server.
     expect((await req('/webhook/unknown-adapter')).status).toBe(404);
+  });
+});
+
+describe('web channel — rate limiting', () => {
+  it('429s auth attempts from an IP that exhausted its failure budget — before the token compare', async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN, authFailuresPerMin: '2' });
+
+    // Burn the budget with two failures.
+    expect((await req(`/web/${GROUP}/messages`, { headers: auth('wrong-1') })).status).toBe(401);
+    expect((await req(`/web/${GROUP}/messages`, { headers: auth('wrong-2') })).status).toBe(401);
+
+    // Third bad attempt: 429, generic body, Retry-After present.
+    const blocked = await req(`/web/${GROUP}/messages`, { headers: auth('wrong-3') });
+    expect(blocked.status).toBe(429);
+    expect(await blocked.json()).toEqual({ error: 'rate_limited' });
+    expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
+
+    // Even the CORRECT token is refused — the gate sits before the compare,
+    // so the response carries zero signal about token correctness.
+    const evenCorrect = await req(`/web/${GROUP}/messages`, { headers: auth() });
+    expect(evenCorrect.status).toBe(429);
+    expect(await evenCorrect.json()).toEqual({ error: 'rate_limited' });
+  });
+
+  it('scopes the auth-failure budget per client IP (first X-Forwarded-For entry)', async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN, authFailuresPerMin: '1' });
+
+    const asIp = (ip: string, token: string) =>
+      req(`/web/${GROUP}/messages`, { headers: { ...auth(token), 'X-Forwarded-For': ip } });
+
+    expect((await asIp('203.0.113.7', 'bad')).status).toBe(401); // budget spent
+    expect((await asIp('203.0.113.7', 'bad')).status).toBe(429); // over budget
+    // A different client IP still has its own budget → 401, not 429.
+    expect((await asIp('203.0.113.8', 'bad')).status).toBe(401);
+    // Only the FIRST XFF entry counts — appending the blocked IP later in
+    // the chain must not confuse the limiter.
+    const chained = await req(`/web/${GROUP}/messages`, {
+      headers: { ...auth('bad'), 'X-Forwarded-For': '203.0.113.9, 203.0.113.7' },
+    });
+    expect(chained.status).toBe(401);
+  });
+
+  it('does not spend auth budget on successful requests', async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN, authFailuresPerMin: '1' });
+
+    for (let i = 0; i < 5; i++) {
+      expect((await req(`/web/${GROUP}/messages`, { headers: auth() })).status).toBe(200);
+    }
+    // The single failure allowance is still intact.
+    expect((await req(`/web/${GROUP}/messages`, { headers: auth('bad') })).status).toBe(401);
+  });
+
+  it('429s message POSTs over the per-group budget; GET polls stay unlimited', async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN, messagesPerMin: '2' });
+
+    const post = (text: string) =>
+      req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text }) });
+
+    expect((await post('one')).status).toBe(202);
+    expect((await post('two')).status).toBe(202);
+
+    const blocked = await post('three');
+    expect(blocked.status).toBe(429);
+    expect(await blocked.json()).toEqual({ error: 'rate_limited' });
+    expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
+
+    // Polling is not message-limited — reads continue while posts are 429ing.
+    for (let i = 0; i < 5; i++) {
+      expect((await req(`/web/${GROUP}/messages`, { headers: auth() })).status).toBe(200);
+    }
+  });
+
+  it('honors the env overrides over the defaults', async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN, messagesPerMin: '1' });
+
+    const post = () =>
+      req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text: 'hi' }) });
+
+    // Default is 30/min — a limit of 1 blocking the second POST proves the
+    // override took effect.
+    expect((await post()).status).toBe(202);
+    expect((await post()).status).toBe(429);
+  });
+
+  it('leaves /health unlimited while both limiters are saturated', async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN, authFailuresPerMin: '1', messagesPerMin: '1' });
+
+    await req(`/web/${GROUP}/messages`, { headers: auth('bad') }); // burn auth budget
+    await req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text: 'x' }) });
+
+    for (let i = 0; i < 5; i++) {
+      expect((await req('/health')).status).toBe(200);
+    }
   });
 });

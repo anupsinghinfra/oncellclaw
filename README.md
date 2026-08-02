@@ -77,12 +77,14 @@ Since cells have no curl, the service command that fetches and runs the script i
 node -e 'const fs=require("fs");const repo=process.env.ONCELLCLAW_REPO||"https://github.com/anupsinghinfra/oncellclaw.git";const ref=process.env.ONCELLCLAW_REF||"main";const m=repo.match(/github\.com[:\/]([^\/]+)\/([^\/]+?)(?:\.git)?$/);if(!m){console.error("cannot parse ONCELLCLAW_REPO: "+repo);process.exit(1)}const url="https://raw.githubusercontent.com/"+m[1]+"/"+m[2]+"/"+ref+"/scripts/cloud-start.sh";fetch(url,{headers:{"User-Agent":"oncellclaw-bootstrap"}}).then(async r=>{if(!r.ok){console.error("HTTP "+r.status+" for "+url);process.exit(1)}const t=await r.text();if(!t.includes("cloud-start.sh")){console.error("unexpected script body from "+url);process.exit(1)}fs.writeFileSync("/tmp/cloud-start.sh",t);console.log("fetched "+url)}).catch(e=>{console.error("fetch failed: "+e);process.exit(1)})' && bash /tmp/cloud-start.sh
 ```
 
-That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the internet and your assistant: the channel refuses to start without one unless you explicitly set `ONCELLCLAW_WEB_ALLOW_INSECURE=1` for a trusted local network. Nothing here writes a secret to disk — credentials travel in the process environment only.
+That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the internet and your assistant: the channel refuses to start without one unless you explicitly set `ONCELLCLAW_WEB_ALLOW_INSECURE=1` for a trusted local network. Nothing here writes a secret to disk — credentials travel in the process environment only. The channel also rate-limits itself: failed auth attempts are capped per client IP (default 20/min, checked *before* the token compare so brute-forcing a leaked URL hits a wall) and message `POST`s are capped per group (default 30/min, burst-friendly token bucket). Over-budget requests get `429 {"error":"rate_limited"}` with a `Retry-After` header; `GET` polls and `/health` are never limited.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `ONCELLCLAW_WEB_TOKEN` | — | Bearer token for every `/web/…` request. **Required** unless the insecure flag is set. Generate with `openssl rand -hex 32`. |
 | `ONCELLCLAW_WEB_ALLOW_INSECURE` | unset | `1` runs the `web` channel with no authentication. Local development only. |
+| `ONCELLCLAW_WEB_AUTH_FAILURES_PER_MIN` | `20` | Failed auth attempts one client IP may make per minute before `/web/…` answers `429` (sliding window, consulted before the token compare). |
+| `ONCELLCLAW_WEB_MESSAGES_PER_MIN` | `30` | Message `POST`s one group accepts per minute (token bucket; bursts up to the same number). `GET` polls and `/health` are never limited. |
 | `PORT` | `3000` | HTTP listen port. Always set by the cell supervisor on hosted runs — the fallback is for bare self-hosting only. `WEBHOOK_PORT` still overrides it. |
 | `ONCELLCLAW_GROUP` | `assistant` | Agent group to provision. Also the URL slug: `/web/<group>/message`. |
 | `ONCELLCLAW_PERSONA` | — | Standing instructions for that group, staged once as its persona. Never overwrites an edited one. |
