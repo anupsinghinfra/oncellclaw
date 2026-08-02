@@ -155,3 +155,16 @@ describe('syncProcessingAcks — script-skip counter', () => {
     expect(status(inDb, 't1')).toBe('completed');
   });
 });
+
+describe('getDueOutboundMessages — bare outbound.db', () => {
+  it('treats a schema-less database as empty instead of throwing', async () => {
+    const { getDueOutboundMessages } = await import('./session-db.js');
+    const Database = (await import('better-sqlite3')).default;
+    const bare = new Database(':memory:'); // zero tables — the OnCell "runner crashed before schema" shape
+
+    expect(getDueOutboundMessages(bare)).toEqual([]);
+    // Stable across repeat polls (warn-once path).
+    expect(getDueOutboundMessages(bare)).toEqual([]);
+    bare.close();
+  });
+});

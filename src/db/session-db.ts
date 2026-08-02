@@ -7,6 +7,7 @@
  */
 import Database from 'better-sqlite3';
 
+import { log } from '../log.js';
 import { INBOUND_SCHEMA, OUTBOUND_SCHEMA } from './schema.js';
 
 /** Apply the inbound or outbound schema to a DB file. Idempotent. */
@@ -256,7 +257,29 @@ export interface OutboundMessage {
   in_reply_to: string | null;
 }
 
+/** Paths already warned about a schema-less outbound.db — warn once, not per poll. */
+const bareOutboundWarned = new Set<string>();
+
 export function getDueOutboundMessages(db: Database.Database): OutboundMessage[] {
+  // Defensive: a session outbound.db can exist as a bare, schema-less file.
+  // On the OnCell runtime the cell-side copy is created by the RUNNER (the
+  // file's sole writer) — a runner that crashed before its schema-ensure
+  // leaves an empty database, which the session pump then pulls over the
+  // host copy. A missing messages_out table must read as "no messages yet"
+  // (same convention as getContainerState below), never throw — a throw
+  // here turned every web poll into a 500.
+  const hasMessagesOut = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_out' LIMIT 1`)
+    .get();
+  if (!hasMessagesOut) {
+    if (!bareOutboundWarned.has(db.name)) {
+      bareOutboundWarned.add(db.name);
+      log.warn('outbound.db has no messages_out table — treating as empty until the runner writes its schema', {
+        path: db.name,
+      });
+    }
+    return [];
+  }
   return db
     .prepare(
       `SELECT * FROM messages_out

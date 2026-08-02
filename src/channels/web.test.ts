@@ -427,6 +427,20 @@ describe('web channel — GET /web/:group/messages', () => {
     expect(body.messages.map((m) => m.id)).toEqual(['out-1', 'out-2']);
   });
 
+  it('returns 200 empty over a bare, schema-less outbound.db (never a 500)', async () => {
+    // The OnCell pump can pull a cell-side outbound.db that the runner
+    // created but never got to schema (crash before schema-ensure). The
+    // poll must read that as "no messages yet", not blow up the endpoint.
+    const barePath = (await import('../session-manager.js')).outboundDbPath('ag-web', sessionId);
+    fs.rmSync(barePath, { force: true });
+    const bare = new Database(barePath); // fresh sqlite file, zero tables
+    bare.close();
+
+    const res = await req(`/web/${GROUP}/messages`, { headers: auth() });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({ messages: [], cursor: '' });
+  });
+
   it('returns an empty stream (not an error) before any session exists', async () => {
     createAgentGroup({ id: 'ag-2', name: 'Second', folder: 'second', agent_provider: null, created_at: now() });
     createMessagingGroup({

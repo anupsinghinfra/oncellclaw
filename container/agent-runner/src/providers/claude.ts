@@ -22,6 +22,29 @@ function log(msg: string): void {
   console.error(`[claude-provider] ${msg}`);
 }
 
+/**
+ * Where the Claude Code CLI lives, per runtime:
+ *
+ *  - docker: the image's pnpm global bin (container/Dockerfile ENV
+ *    PNPM_HOME="/pnpm"; `pnpm add -g` shims land as /pnpm/claude).
+ *  - OnCell cell (NANOCLAW_CELL=1): the service bootstrap installs it with
+ *    `npm i -g --prefix $HOME/.claw-tools` (claw/service-start.sh, generated
+ *    by src/cell-runner.ts buildServiceBootstrapScript) — the shim is
+ *    $HOME/.claw-tools/bin/claude. A structural test pins both sides to
+ *    this one canonical location.
+ *
+ * The docker path used to be passed unconditionally — on cells the SDK then
+ * failed every query with "native binary not found at /pnpm/claude" while
+ * the triggering messages were consumed (errored batches ack completed, no
+ * redelivery): user messages silently burned.
+ */
+export function claudeExecutablePath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.NANOCLAW_CELL === '1') {
+    return path.join(env.HOME || '/workspace', '.claw-tools', 'bin', 'claude');
+  }
+  return '/pnpm/claude';
+}
+
 export interface SdkRateLimitInfo {
   status?: string;
   resetsAt?: number;
@@ -536,7 +559,7 @@ export class ClaudeProvider implements AgentProvider {
         cwd: input.cwd,
         additionalDirectories: this.additionalDirectories,
         resume: input.continuation,
-        pathToClaudeCodeExecutable: '/pnpm/claude',
+        pathToClaudeCodeExecutable: claudeExecutablePath(),
         systemPrompt: instructions
           ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
           : undefined,

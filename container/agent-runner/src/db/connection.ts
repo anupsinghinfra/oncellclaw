@@ -84,6 +84,33 @@ export function getOutboundDb(): Database {
     _outbound.exec('PRAGMA journal_mode = DELETE');
     _outbound.exec('PRAGMA busy_timeout = 5000');
     _outbound.exec('PRAGMA foreign_keys = ON');
+    // The runner is outbound.db's sole WRITER, so it owns the schema. On the
+    // docker path the host pre-creates these tables and the bind mount shares
+    // the file, so this is a no-op; on the OnCell runtime the cell-side file
+    // starts as a fresh (bare) database the host never touches — without
+    // this, the first query ("no such table: processing_ack") was fatal and
+    // the runner crash-looped forever. Must stay column-identical to
+    // OUTBOUND_SCHEMA in src/db/schema.ts (host side).
+    _outbound.exec(`
+      CREATE TABLE IF NOT EXISTS messages_out (
+        id             TEXT PRIMARY KEY,
+        seq            INTEGER UNIQUE,
+        in_reply_to    TEXT,
+        timestamp      TEXT NOT NULL,
+        deliver_after  TEXT,
+        recurrence     TEXT,
+        kind           TEXT NOT NULL,
+        platform_id    TEXT,
+        channel_type   TEXT,
+        thread_id      TEXT,
+        content        TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS processing_ack (
+        message_id     TEXT PRIMARY KEY,
+        status         TEXT NOT NULL,
+        status_changed TEXT NOT NULL
+      );
+    `);
     // Lightweight forward-compat: session_state was added after the initial
     // v2 schema, so older session DBs don't have it. Create it on demand
     // instead of requiring a formal migration pass. Also handle the case
