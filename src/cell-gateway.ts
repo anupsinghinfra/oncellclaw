@@ -64,8 +64,15 @@ export function _setGatewayClientForTesting(client: GatewayClient | null | undef
   loggedRawMode = false;
 }
 
+let configuredOverride: boolean | undefined;
+
+/** Test seam: force the configured/raw posture (undefined resets). */
+export function _setOneCliConfiguredForTesting(value: boolean | undefined): void {
+  configuredOverride = value;
+}
+
 export function isOneCliConfigured(): boolean {
-  return Boolean(ONECLI_URL || ONECLI_API_KEY);
+  return configuredOverride ?? Boolean(ONECLI_URL || ONECLI_API_KEY);
 }
 
 async function resolveGatewayClient(): Promise<GatewayClient> {

@@ -1,12 +1,13 @@
 ---
 name: onecli-gateway
 description: >-
-  OneCLI Gateway: transparent HTTPS proxy that injects stored credentials
-  into outbound calls. You MUST use this skill when the user asks you to
-  read emails, check calendar, access GitHub repos, create issues, check
-  Stripe payments, or interact with ANY external service or API. Do NOT
-  use browser extensions or OAuth CLI tools. Make HTTP requests directly;
-  the gateway injects credentials automatically.
+  LEGACY: OneCLI Gateway — transparent HTTPS proxy that injects stored
+  credentials into outbound calls. Applies ONLY when a OneCLI gateway is
+  actually configured on this install (HTTPS_PROXY set by the host at
+  launch). The default integrations path is the oncell-integrations skill;
+  use this one only on installs running their own OneCLI gateway. When it
+  applies: make HTTP requests directly and the gateway injects credentials;
+  do NOT use browser extensions or OAuth CLI tools.
 compatibility: Requires HTTPS_PROXY set in environment (automatic when launched via `onecli run`)
 metadata:
   author: onecli

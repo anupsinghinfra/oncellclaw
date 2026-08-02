@@ -116,3 +116,64 @@ describe('composeGroupClaudeMd scheduling instructions (ncl tasks reach-in)', ()
     expect(imports).not.toContain('@./.claude-fragments/module-cli.md');
   });
 });
+
+describe('gateway posture — onecli-gateway fragment', () => {
+  it('raw posture: the legacy vault fragment is DROPPED and oncell-integrations carries the guidance', async () => {
+    const { _setOneCliConfiguredForTesting } = await import('./cell-gateway.js');
+    _setOneCliConfiguredForTesting(false);
+    try {
+      const ag = group('ag-raw', 'raw-posture');
+      seed(ag);
+      composeGroupClaudeMd(ag);
+
+      const fragDir = path.join(GROUPS_DIR, 'raw-posture', '.claude-fragments');
+      // No OneCLI vault instructions anywhere near the agent… (lstat: the
+      // fragment would be a dangling symlink, invisible to existsSync)
+      expect(() => fs.lstatSync(path.join(fragDir, 'skill-onecli-gateway.md'))).toThrow();
+      expect(importsOf('raw-posture')).not.toContain('@./.claude-fragments/skill-onecli-gateway.md');
+      // …the OnCell integrations skill is the default path instead. The
+      // fragment is a symlink to a container path (dangling on host), so
+      // lstat/readlink, never existsSync (which follows the link).
+      const integrationsFrag = path.join(fragDir, 'skill-oncell-integrations.md');
+      expect(fs.lstatSync(integrationsFrag).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(integrationsFrag)).toBe('/app/skills/oncell-integrations/instructions.md');
+      expect(importsOf('raw-posture')).toContain('@./.claude-fragments/skill-oncell-integrations.md');
+    } finally {
+      _setOneCliConfiguredForTesting(undefined);
+    }
+  });
+
+  it('configured posture: the real vault instructions symlink is kept', async () => {
+    const { _setOneCliConfiguredForTesting } = await import('./cell-gateway.js');
+    _setOneCliConfiguredForTesting(true);
+    try {
+      const ag = group('ag-vault', 'vault-posture');
+      seed(ag);
+      composeGroupClaudeMd(ag);
+
+      const fragPath = path.join(GROUPS_DIR, 'vault-posture', '.claude-fragments', 'skill-onecli-gateway.md');
+      expect(fs.lstatSync(fragPath).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(fragPath)).toBe('/app/skills/onecli-gateway/instructions.md');
+    } finally {
+      _setOneCliConfiguredForTesting(undefined);
+    }
+  });
+
+  it('a posture flip swaps the fragment in place (reconcile pass)', async () => {
+    const { _setOneCliConfiguredForTesting } = await import('./cell-gateway.js');
+    try {
+      const ag = group('ag-flip', 'flip-posture');
+      seed(ag);
+      _setOneCliConfiguredForTesting(false);
+      composeGroupClaudeMd(ag);
+      const fragPath = path.join(GROUPS_DIR, 'flip-posture', '.claude-fragments', 'skill-onecli-gateway.md');
+      expect(() => fs.lstatSync(fragPath)).toThrow();
+
+      _setOneCliConfiguredForTesting(true);
+      composeGroupClaudeMd(ag);
+      expect(fs.lstatSync(fragPath).isSymbolicLink()).toBe(true);
+    } finally {
+      _setOneCliConfiguredForTesting(undefined);
+    }
+  });
+});

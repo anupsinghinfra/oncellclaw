@@ -164,6 +164,20 @@ async function sweep(): Promise<void> {
   }
   // MODULE-HOOK:approvals-reason-sweep:end
 
+  // Durable scheduler wake (hosted posture only): reconcile the platform
+  // wake for THIS claw's hosting cell with the earliest due task, so a
+  // paused cell still comes back for its 9am job. First tick after boot is
+  // the boot re-registration; no-op on laptop/docker. Once per tick,
+  // deduped inside.
+  // MODULE-HOOK:scheduling-durable-wake:start
+  try {
+    const { refreshDurableWake } = await import('./modules/scheduling/durable-wake.js');
+    await refreshDurableWake();
+  } catch (err) {
+    log.error('Durable wake reconcile hook failed', { err });
+  }
+  // MODULE-HOOK:scheduling-durable-wake:end
+
   setTimeout(sweep, SWEEP_INTERVAL_MS);
 }
 

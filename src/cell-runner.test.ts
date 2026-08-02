@@ -15,6 +15,8 @@ vi.mock('./config.js', async () => {
     ...actual,
     DATA_DIR: '/tmp/oncellclaw-test-cell-runner/data',
     GROUPS_DIR: '/tmp/oncellclaw-test-cell-runner/groups',
+    ONCELL_API_KEY: 'oncell-test-key',
+    ONCELL_API_URL: '',
   };
 });
 
@@ -316,6 +318,13 @@ describe('service plumbing helpers', () => {
     expect(env.NANOCLAW_CELL).toBe('1');
   });
 
+  it('buildServiceEnv forwards the OnCell key + API URL for the integrations proxy', () => {
+    const config = { timezone: 'UTC' } as unknown as ContainerConfig;
+    const env = buildServiceEnv('/ws', config);
+    expect(env.ONCELL_API_KEY).toBe('oncell-test-key');
+    expect(env.ONCELL_API_URL).toBe('https://api.oncell.ai'); // default when unset
+  });
+
   it('buildServiceEnv withholds raw credentials in gateway (vault) mode', () => {
     const config = { timezone: 'UTC' } as unknown as ContainerConfig;
     const env = buildServiceEnv('/ws', config, { ANTHROPIC_BASE_URL: 'https://gw.onecli.sh/v1' });
@@ -351,6 +360,33 @@ describe('service plumbing helpers', () => {
       hooks: { PreCompact: Array<{ hooks: Array<{ command: string }> }> };
     };
     expect(settings.hooks.PreCompact[0].hooks[0].command).toBe('bun /ws/claw/runner/src/compact-instructions.ts');
+  });
+
+  it('buildSyncSources withholds the onecli-gateway skill in raw posture, keeps it when configured', async () => {
+    const { _setOneCliConfiguredForTesting } = await import('./cell-gateway.js');
+    const config = { skills: ['welcome', 'onecli-gateway'] } as unknown as ContainerConfig;
+    const ag = { id: GROUP_ID, name: 'Main Chat', folder: GROUP_FOLDER, agent_provider: null, created_at: '' };
+    try {
+      _setOneCliConfiguredForTesting(false);
+      const rawPaths = buildSyncSources(ag, config).map((s) => s.cellPath);
+      expect(rawPaths).toContain('claw/app/skills/welcome');
+      expect(rawPaths).not.toContain('claw/app/skills/onecli-gateway');
+
+      _setOneCliConfiguredForTesting(true);
+      const vaultPaths = buildSyncSources(ag, config).map((s) => s.cellPath);
+      expect(vaultPaths).toContain('claw/app/skills/onecli-gateway');
+    } finally {
+      _setOneCliConfiguredForTesting(undefined);
+    }
+  });
+
+  it('installCellPackages fails fast with an agent-relayable message (exec has no network)', async () => {
+    const { installCellPackages } = await import('./cell-runner.js');
+    getDb().prepare(`UPDATE container_configs SET packages_npm = '["cowsay"]' WHERE agent_group_id = ?`).run(GROUP_ID);
+    await expect(installCellPackages(GROUP_ID)).rejects.toThrow(/not yet supported on the hosted/);
+    // Never reached the cell API — no createCell, no exec.
+    expect(fake.createCellCalls).toEqual([]);
+    expect(fake.execCmds).toEqual([]);
   });
 
   it('buildSyncSources mirrors group dir, shared CLAUDE.md and the runner — never a .env source', () => {

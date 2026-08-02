@@ -24,6 +24,8 @@ import {
   CONTAINER_PIDS_LIMIT,
   DATA_DIR,
   GROUPS_DIR,
+  ONCELL_API_KEY,
+  ONCELL_API_URL,
   ONECLI_API_KEY,
   ONECLI_URL,
   TIMEZONE,
@@ -502,6 +504,15 @@ async function buildContainerArgs(
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${containerConfig.timezone ?? TIMEZONE}`);
+
+  // OnCell-native integrations (oncell-integrations skill): laptop installs
+  // with an OnCell key reach the same credential-injecting proxy the hosted
+  // cells do. Absent key = the skill tells the user integrations are
+  // unavailable on this install.
+  if (ONCELL_API_KEY) {
+    args.push('-e', `ONCELL_API_KEY=${ONCELL_API_KEY}`);
+    args.push('-e', `ONCELL_API_URL=${ONCELL_API_URL || 'https://api.oncell.ai'}`);
+  }
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {

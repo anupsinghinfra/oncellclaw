@@ -16,6 +16,7 @@
 import fs from 'fs';
 import path from 'path';
 
+import { isOneCliConfigured } from './cell-gateway.js';
 import { GROUPS_DIR } from './config.js';
 import type { McpServerConfig } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
@@ -70,12 +71,19 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
   if (fs.existsSync(skillsHostDir)) {
     for (const skillName of fs.readdirSync(skillsHostDir)) {
       const hostFragment = path.join(skillsHostDir, skillName, 'instructions.md');
-      if (fs.existsSync(hostFragment)) {
-        desired.set(`skill-${skillName}.md`, {
-          type: 'symlink',
-          content: `${SHARED_SKILLS_CONTAINER_BASE}/${skillName}/instructions.md`,
-        });
+      if (!fs.existsSync(hostFragment)) continue;
+      // Posture-aware: the onecli-gateway skill is the LEGACY integrations
+      // path and only applies when a OneCLI gateway is actually configured.
+      // Without one its instructions gaslight users toward a dashboard that
+      // doesn't exist — drop the fragment; the oncell-integrations skill
+      // carries the default integrations guidance on every install.
+      if (skillName === 'onecli-gateway' && !isOneCliConfigured()) {
+        continue;
       }
+      desired.set(`skill-${skillName}.md`, {
+        type: 'symlink',
+        content: `${SHARED_SKILLS_CONTAINER_BASE}/${skillName}/instructions.md`,
+      });
     }
   }
 

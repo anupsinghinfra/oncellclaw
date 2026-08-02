@@ -1,3 +1,9 @@
+> **Legacy path.** These instructions apply ONLY when a OneCLI gateway is
+> configured on this install (the host sets `HTTPS_PROXY` at launch). On
+> installs without one — including hosted claws — use the
+> `oncell-integrations` skill instead; never direct users to a OneCLI
+> dashboard that this deployment does not run.
+
 # Credentials & External Services
 
 Your HTTP requests go through the OneCLI proxy, which injects real credentials automatically. Just call any API directly (Gmail, GitHub, Slack, etc.) — the proxy adds auth before it reaches the service.

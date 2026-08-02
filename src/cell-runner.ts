@@ -31,7 +31,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { GROUPS_DIR, TIMEZONE } from './config.js';
+import { GROUPS_DIR, ONCELL_API_KEY, ONCELL_API_URL, TIMEZONE } from './config.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { materializeContainerJson, type ContainerConfig } from './container-config.js';
 import { getAgentGroup } from './db/agent-groups.js';
@@ -42,7 +42,7 @@ import { initGroupFilesystem } from './group-init.js';
 import { log } from './log.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { isNoAppRunning, type OnCellClient } from './oncell-client.js';
-import { applyCellGatewayConfig } from './cell-gateway.js';
+import { applyCellGatewayConfig, isOneCliConfigured } from './cell-gateway.js';
 import { cellCustomerIdForGroup, getCellClient } from './cell-runtime.js';
 import { syncToCell, type SyncSource } from './cell-sync.js';
 import {
@@ -67,7 +67,6 @@ import type { AgentGroup, Session } from './types.js';
 const PUMP_INTERVAL_MS = 1500;
 const SERVICE_CHECK_EVERY_TICKS = 4;
 const MAX_CONSECUTIVE_PUMP_FAILURES = 10;
-const BOOTSTRAP_TIMEOUT_MS = 600_000;
 /** Cell path of the generated service bootstrap script (see buildServiceBootstrapScript). */
 export const BOOTSTRAP_SCRIPT_CELL_PATH = 'claw/service-start.sh';
 
@@ -253,16 +252,26 @@ export function buildSyncSources(agentGroup: AgentGroup, containerConfig: Contai
  * cell-runner import cycle.
  */
 function selectedSkillNames(containerConfig: ContainerConfig): string[] {
-  if (containerConfig.skills !== 'all') return containerConfig.skills;
-  const sharedSkillsDir = path.join(process.cwd(), 'container', 'skills');
-  if (!fs.existsSync(sharedSkillsDir)) return [];
-  return fs.readdirSync(sharedSkillsDir).filter((entry) => {
-    try {
-      return fs.statSync(path.join(sharedSkillsDir, entry)).isDirectory();
-    } catch {
-      return false;
-    }
-  });
+  const names =
+    containerConfig.skills !== 'all'
+      ? containerConfig.skills
+      : (() => {
+          const sharedSkillsDir = path.join(process.cwd(), 'container', 'skills');
+          if (!fs.existsSync(sharedSkillsDir)) return [];
+          return fs.readdirSync(sharedSkillsDir).filter((entry) => {
+            try {
+              return fs.statSync(path.join(sharedSkillsDir, entry)).isDirectory();
+            } catch {
+              return false;
+            }
+          });
+        })();
+  // Posture-aware: the onecli-gateway skill's own description tells the
+  // agent it MUST route external-service requests through the vault — on a
+  // raw-posture install (no gateway) that leads it to invent dashboards and
+  // connect steps. Withhold the skill entirely; the CLAUDE.md compose
+  // injects the honest "integrations not connected yet" note instead.
+  return isOneCliConfigured() ? names : names.filter((name) => name !== 'onecli-gateway');
 }
 
 async function resolveCellWorkspaceRoot(client: OnCellClient, cellId: string): Promise<string> {
@@ -473,6 +482,10 @@ export function buildServiceEnv(
     NANOCLAW_WORKSPACE_ROOT: `${workspaceAbs}/claw/session`,
     CLAUDE_CONFIG_DIR: `${workspaceAbs}/claw/claude`,
     NANOCLAW_CELL: '1',
+    // OnCell-native integrations (oncell-integrations skill): the agent
+    // calls the credential-injecting proxy with the same developer key that
+    // runs its cell. Env-only, like every other credential here.
+    ...(ONCELL_API_KEY ? { ONCELL_API_KEY, ONCELL_API_URL: ONCELL_API_URL || 'https://api.oncell.ai' } : {}),
     ...(gatewayEnv ?? {}),
   };
 }
@@ -657,24 +670,22 @@ export async function installCellPackages(agentGroupId: string): Promise<void> {
     throw new Error('No packages to install. Use install_packages first.');
   }
 
-  const client = getCellClient();
-  const cell = await client.createCell(cellCustomerIdForGroup(agentGroup.folder));
-  if (aptPackages.length > 0) {
-    const list = aptPackages.join(' ');
-    await client.exec(cell.cell_id, {
-      cmd: `apt-get update && apt-get install -y ${list} || sudo apt-get update && sudo apt-get install -y ${list}`,
-      timeoutMs: BOOTSTRAP_TIMEOUT_MS,
-      expectSuccess: true,
-    });
-  }
-  if (npmPackages.length > 0) {
-    await client.exec(cell.cell_id, {
-      cmd: `npm install -g ${npmPackages.join(' ')}`,
-      timeoutMs: BOOTSTRAP_TIMEOUT_MS,
-      expectSuccess: true,
-    });
-  }
-  log.info('Cell packages installed', { agentGroupId, apt: aptPackages, npm: npmPackages });
+  // HONESTY GUARD (OnCell runtime): cell exec sandboxes have NO network, so
+  // apt/npm installs over exec black-hole for minutes and then die with an
+  // opaque gateway timeout (the old implementation did exactly that — see
+  // git history for the exec-based body). Until installs run through the
+  // service pattern (like the runner bootstrap in
+  // buildServiceBootstrapScript), fail fast with a message the agent can
+  // relay verbatim instead of hanging the approval flow.
+  log.warn('Cell package install refused — exec has no network on cells', {
+    agentGroupId,
+    apt: aptPackages,
+    npm: npmPackages,
+  });
+  throw new Error(
+    'Package installs are not yet supported on the hosted (OnCell) runtime — coming soon. ' +
+      'Tell the user their package request is noted but cannot be installed in this deployment yet.',
+  );
 }
 
 /** Test seam: clear module-level session registries. */
