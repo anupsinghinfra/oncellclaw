@@ -215,6 +215,15 @@ describe('routing', () => {
     expect(routing.channelType).toBe('discord');
     expect(routing.threadId).toBe('thread-456');
     expect(routing.inReplyTo).toBe('m1');
+    // A chat batch is chat-origin — the salvage path's gate.
+    expect(routing.chatOrigin).toBe(true);
+  });
+
+  it('non-chat batches are not chat-origin', () => {
+    insertMessage('t1', 'task', { prompt: 'check feeds' });
+    insertMessage('w1', 'webhook', { source: 'github', event: 'push', payload: {} });
+    const routing = extractRouting(getPendingMessages());
+    expect(routing.chatOrigin).toBe(false);
   });
 });
 
@@ -435,10 +444,94 @@ describe('error result with no <message> envelope', () => {
     expect(pushes).toHaveLength(0);
   });
 
-  it('still nudges (and does not deliver) a normal unwrapped result', async () => {
+  it('still nudges (and does not deliver) an unwrapped result on a NON-chat batch', async () => {
     const { query, pushes } = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
 
+    // ERR_ROUTING carries no chatOrigin — the strict contract holds.
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]).toContain('was not delivered');
+  });
+});
+
+// --- Tagless-reply salvage: bare chat output delivers instead of re-running ---
+
+const CHAT_ROUTING = { ...ERR_ROUTING, chatOrigin: true };
+
+describe('unwrapped chat salvage', () => {
+  it('delivers bare text to the originating conversation without a nudge', async () => {
+    const { query, pushes } = makeResultQuery({ type: 'result', text: 'Here is your answer.' });
+
+    await processQuery(query, CHAT_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('Here is your answer.');
+    expect(out[0].platform_id).toBe('chan-1');
+    expect(out[0].channel_type).toBe('discord');
+    expect(out[0].in_reply_to).toBe('m1');
+    // The whole point: no re-wrap retry turn.
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('strips <internal> scratchpad from the salvaged text', async () => {
+    const { query } = makeResultQuery({
+      type: 'result',
+      text: '<internal>let me think</internal>The visible part.',
+    });
+
+    await processQuery(query, CHAT_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('The visible part.');
+  });
+
+  it('never salvages on a task run — bare text stays the run log', async () => {
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield { type: 'result', text: 'checked feeds — nothing new' };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+
+    await processQuery(
+      query,
+      { ...TASK_ROUTING, chatOrigin: false },
+      ['t1'],
+      'claude',
+      undefined,
+      'prompt',
+      undefined,
+    );
+
+    // Run log only — nothing delivered as chat.
+    expect(getUndeliveredMessages().filter((m) => m.kind === 'chat')).toHaveLength(0);
+  });
+
+  it('internal-only output salvages nothing and delivers nothing', async () => {
+    const { query, pushes } = makeResultQuery({ type: 'result', text: '<internal>only scratchpad</internal>' });
+
+    await processQuery(query, CHAT_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+    // Empty visible output is a legitimate quiet turn — no nudge either.
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('chat batches without an originating conversation keep the strict path', async () => {
+    const { query, pushes } = makeResultQuery({ type: 'result', text: 'bare text' });
+
+    await processQuery(
+      query,
+      { platformId: null, channelType: null, threadId: null, inReplyTo: null, chatOrigin: true },
+      ['m1'],
+      'claude',
+      undefined,
+      'prompt',
+      undefined,
+    );
 
     expect(getUndeliveredMessages()).toHaveLength(0);
     expect(pushes).toHaveLength(1);

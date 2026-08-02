@@ -114,20 +114,40 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
-  it('bare text produces no outbound messages (scratchpad only)', async () => {
+  it('bare text on a chat batch is SALVAGED to the originating conversation', async () => {
     insertMessage('m1', { sender: 'Alice', text: 'hello' }, { platformId: 'chan-1', channelType: 'discord' });
 
-    // Agent responds with bare text — no <message to="..."> wrapping
+    // Agent responds with bare text — no <message to="..."> wrapping. Old
+    // behavior discarded it and burned a re-wrap turn; a direct chat batch
+    // now delivers the raw text to where the question came from.
     const provider = new MockProvider({}, () => 'I am thinking about this...');
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
 
-    // Wait long enough for the poll loop to process
-    await sleep(1000);
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
     controller.abort();
 
     const out = getUndeliveredMessages();
-    expect(out).toHaveLength(0);
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('I am thinking about this...');
+    expect(out[0].platform_id).toBe('chan-1');
+    expect(out[0].channel_type).toBe('discord');
+    expect(out[0].in_reply_to).toBe('m1');
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('internal-only chat output still delivers nothing (no empty salvage)', async () => {
+    insertMessage('m1', { sender: 'Alice', text: 'hello' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new MockProvider({}, () => '<internal>just planning, nothing to say yet</internal>');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await sleep(1000);
+    controller.abort();
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
 
     await loopPromise.catch(() => {});
   });
@@ -362,7 +382,15 @@ describe('poll loop — exchange hook (onExchangeComplete)', () => {
   });
 
   it('does not report the internal wrapping-retry nudge as a user prompt', async () => {
-    insertMessage('m1', { sender: 'Alice', text: 'wrap this later' }, { platformId: 'chan-1', channelType: 'discord' });
+    // A NON-chat batch (webhook): unwrapped text still takes the strict
+    // nudge path there — chat batches now salvage instead (see the salvage
+    // tests above), so the nudge flow is exercised where it still exists.
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, content)
+         VALUES ('m1', 'webhook', datetime('now'), 'pending', 'chan-1', 'discord', ?)`,
+      )
+      .run(JSON.stringify({ source: 'github', event: 'push', payload: { note: 'wrap this later' } }));
 
     let calls = 0;
     const provider = new HookedMockProvider({}, () => {

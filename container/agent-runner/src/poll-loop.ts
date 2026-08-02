@@ -830,6 +830,27 @@ export function dispatchResultText(
     log(`[scratchpad] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`);
   }
 
+  // Salvage: a chat turn that produced real text but forgot the <message>
+  // envelope used to be discarded and re-run via the wrapping nudge — a
+  // whole wasted LLM turn (~half the user's wait on a cold cell). When the
+  // batch came from a direct chat message and has an originating
+  // conversation to answer, deliver the raw text there instead. Non-chat
+  // batches (webhooks, task runs) keep the strict contract — they may
+  // legitimately produce no outbound, and their text is not a user reply.
+  if (sent === 0 && scratchpad && !routing.taskRun && routing.chatOrigin && routing.platformId && routing.channelType) {
+    log('Salvaged unwrapped chat reply — delivering raw text to the originating conversation');
+    writeMessageOut({
+      id: generateId(),
+      in_reply_to: routing.inReplyTo,
+      kind: 'chat',
+      platform_id: routing.platformId,
+      channel_type: routing.channelType,
+      thread_id: routing.threadId,
+      content: JSON.stringify({ text: scratchpad, ...(turnCostUsd !== undefined ? { costUsd: turnCostUsd } : {}) }),
+    });
+    return { sent: 1, hasUnwrapped: false, taskBlocks };
+  }
+
   // In a task run, plain final text is the NORMAL ending (it becomes the run
   // log) — never treat it as an undelivered reply or nudge the agent to wrap it.
   const hasUnwrapped = !routing.taskRun && sent === 0 && !!scratchpad;

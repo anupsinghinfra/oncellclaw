@@ -102,6 +102,10 @@ export interface RoutingContext {
    *  delivers from a task session; final-text `<message to>` blocks are inert
    *  and the final text auto-appends to the series run log. */
   taskRun: boolean;
+  /** Batch contains a direct chat message (kind chat/chat-sdk). Unwrapped
+   *  final text on such a batch is SALVAGED to the originating conversation
+   *  instead of burning a re-wrap retry turn (see dispatchResultText). */
+  chatOrigin?: boolean;
 }
 
 /**
@@ -116,6 +120,7 @@ export function extractRouting(messages: MessageInRow[]): RoutingContext {
     threadId: first?.thread_id ?? null,
     inReplyTo: first?.id ?? null,
     taskRun: messages.length > 0 && messages.every((m) => m.kind === 'task'),
+    chatOrigin: messages.some((m) => m.kind === 'chat' || m.kind === 'chat-sdk'),
   };
 }
 
