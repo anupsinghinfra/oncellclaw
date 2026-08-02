@@ -56,6 +56,13 @@ export interface MessagingGroup {
    * the column itself defaults to NULL in SQLite.
    */
   denied_at?: string | null;
+  /**
+   * Web channel archive epoch: a transcript cursor; /transcript and /stream
+   * render only rows after it (POST /web/{group}/archive). NULL = never
+   * archived. Optional on the TS type per the denied_at convention
+   * (migration 021 defaults the column to NULL).
+   */
+  archive_epoch?: string | null;
   created_at: string;
 }
 

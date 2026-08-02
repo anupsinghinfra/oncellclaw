@@ -152,6 +152,17 @@ export function setMessagingGroupDeniedAt(id: string, deniedAt: string | null): 
   getDb().prepare('UPDATE messaging_groups SET denied_at = ? WHERE id = ?').run(deniedAt, id);
 }
 
+/**
+ * Persist the web channel's archive epoch (a transcript cursor) for one
+ * messaging group. The epoch is a VIEW boundary, not a deletion: every row
+ * stays durable in the session DBs; /transcript and /stream simply render
+ * only rows after it. Passing null unsets the epoch (full history renders
+ * again).
+ */
+export function setMessagingGroupArchiveEpoch(id: string, epoch: string | null): void {
+  getDb().prepare('UPDATE messaging_groups SET archive_epoch = ? WHERE id = ?').run(epoch, id);
+}
+
 // ── Messaging Group Agents ──
 
 /**

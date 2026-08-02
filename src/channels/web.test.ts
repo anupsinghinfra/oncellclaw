@@ -928,6 +928,127 @@ describe('web channel — GET /web/:group/transcript', () => {
   });
 });
 
+describe('web channel — POST /web/:group/archive', () => {
+  let sessionId: string;
+
+  beforeEach(async () => {
+    seedGroup();
+    sessionId = resolveSession('ag-web', 'mg-web', null, 'shared').session.id;
+    await startChannels({ token: TOKEN });
+  });
+
+  interface TranscriptBody {
+    messages: Array<{ id: string; cursor: string }>;
+    cursor: string;
+    epoch: string;
+  }
+
+  async function transcript(query = ''): Promise<TranscriptBody> {
+    return (await (await req(`/web/${GROUP}/transcript${query}`, { headers: auth() })).json()) as TranscriptBody;
+  }
+
+  async function archive(): Promise<{ ok: boolean; epoch: string }> {
+    const res = await req(`/web/${GROUP}/archive`, { method: 'POST', headers: auth() });
+    expect(res.status).toBe(200);
+    return (await res.json()) as { ok: boolean; epoch: string };
+  }
+
+  it('requires auth', async () => {
+    expect((await req(`/web/${GROUP}/archive`, { method: 'POST' })).status).toBe(401);
+  });
+
+  it('404s an unknown group', async () => {
+    expect((await req('/web/nope/archive', { method: 'POST', headers: auth() })).status).toBe(404);
+  });
+
+  it('snapshots the tail as the epoch — transcript renders only post-epoch rows', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'setup noise', 'alice');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'Error: experiment', 'u1');
+
+    const before = await transcript();
+    expect(before.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+    expect(before.epoch).toBe('');
+
+    const archived = await archive();
+    expect(archived.ok).toBe(true);
+    expect(archived.epoch).toBe(before.messages[1]!.cursor);
+
+    // The view is clear; the epoch is reported and echoed as the resume cursor.
+    const after = await transcript();
+    expect(after.messages).toEqual([]);
+    expect(after.epoch).toBe(archived.epoch);
+    expect(after.cursor).toBe(archived.epoch);
+
+    // Rows landing after the epoch render normally, with continuing cursors.
+    seedInbound(sessionId, 'u2', '2026-01-01T00:00:03.000Z', 'fresh start', 'alice');
+    seedOutbound(sessionId, 'a2', '2026-01-01T00:00:04.000Z', 'hello again', 'u2');
+    const fresh = await transcript();
+    expect(fresh.messages.map((m) => m.id)).toEqual(['u2', 'a2']);
+    expect(fresh.messages[0]!.cursor > archived.epoch).toBe(true);
+  });
+
+  it('a pre-epoch `after` cursor lands exactly at the epoch (no re-delivery)', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'one');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'two', 'u1');
+    const before = await transcript();
+    await archive();
+    seedInbound(sessionId, 'u2', '2026-01-01T00:00:03.000Z', 'three');
+
+    const resumed = await transcript(`?after=${encodeURIComponent(before.messages[0]!.cursor)}`);
+    expect(resumed.messages.map((m) => m.id)).toEqual(['u2']);
+  });
+
+  it('is idempotent — an empty view keeps the prior epoch', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'only row');
+    const first = await archive();
+    const second = await archive();
+    expect(second.epoch).toBe(first.epoch);
+    expect((await transcript()).messages).toEqual([]);
+  });
+
+  it('archiving an empty transcript returns an empty epoch and hides nothing later', async () => {
+    const empty = await archive();
+    expect(empty.epoch).toBe('');
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'first ever');
+    expect((await transcript()).messages.map((m) => m.id)).toEqual(['u1']);
+  });
+
+  it('the epoch survives a channel restart (persisted, not in-memory)', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'old');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'old reply', 'u1');
+    const archived = await archive();
+
+    await teardownChannelAdapters();
+    await stopWebhookServer();
+    await startChannels({ token: TOKEN });
+
+    const after = await transcript();
+    expect(after.messages).toEqual([]);
+    expect(after.epoch).toBe(archived.epoch);
+  });
+
+  it('no data is deleted — session DB rows remain durable after archive', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'kept forever');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'also kept', 'u1');
+    await archive();
+
+    const inbound = new Database(inboundDbPath('ag-web', sessionId), { readonly: true });
+    try {
+      const rows = inbound.prepare('SELECT id FROM messages_in ORDER BY seq').all() as Array<{ id: string }>;
+      expect(rows.map((r) => r.id)).toContain('u1');
+    } finally {
+      inbound.close();
+    }
+  });
+
+  it('is exempt from the message limiter', async () => {
+    await startChannels({ token: TOKEN, messagesPerMin: '1' });
+    await req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text: 'x' }) });
+    // Budget is spent — a second message would 429, but archive still works.
+    expect((await req(`/web/${GROUP}/archive`, { method: 'POST', headers: auth() })).status).toBe(200);
+  });
+});
+
 describe('web channel — GET /web/:group/stream (SSE)', () => {
   let sessionId: string;
 
@@ -991,6 +1112,18 @@ describe('web channel — GET /web/:group/stream (SSE)', () => {
     await vi.waitFor(() => expect(stream.events().length).toBe(4), { timeout: 3000 });
     expect(stream.events()[3]).toMatchObject({ direction: 'assistant', text: 'live reply' });
 
+    stream.close();
+  });
+
+  it('replay starts after the archive epoch', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'archived away');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'also archived', 'u1');
+    await req(`/web/${GROUP}/archive`, { method: 'POST', headers: auth() });
+    seedInbound(sessionId, 'u2', '2026-01-01T00:00:03.000Z', 'post-epoch');
+
+    const stream = await openStream(`/web/${GROUP}/stream`);
+    await vi.waitFor(() => expect(stream.events().length).toBe(1));
+    expect(stream.events()[0]).toMatchObject({ id: 'u2' });
     stream.close();
   });
 

@@ -35,6 +35,15 @@
  *        causally pinned after their `in_reply_to` question. Exact resume:
  *        after=<cursor of row N> returns rows N+1… .
  *
+ *   POST /web/:group/archive
+ *        → 200 { "ok": true, "epoch": "<cursor>" }
+ *        Snapshots the transcript tail as the group's ARCHIVE EPOCH:
+ *        /transcript and /stream render only rows after it, so the
+ *        dashboard's "clear view" is a view boundary, not a deletion —
+ *        every row stays durable in the session DBs (durable memory is
+ *        the product). Idempotent; an empty view keeps the prior epoch.
+ *        Never message-rate-limited: a cheap local write, no agent wake.
+ *
  *   GET  /web/:group/stream?after=<cursor>          (Server-Sent Events)
  *        `event: message` frames whose data is one transcript row (same
  *        JSON as /transcript), pushed on arrival — no client polling.
@@ -96,6 +105,7 @@ import {
   getMessagingGroupAgents,
   getMessagingGroupByPlatform,
   getMessagingGroupsByChannel,
+  setMessagingGroupArchiveEpoch,
 } from '../db/messaging-groups.js';
 import { getDueOutboundMessages, getInboundTranscriptRows } from '../db/session-db.js';
 import { getSessionsByMessagingGroup } from '../db/sessions.js';
@@ -736,16 +746,24 @@ function createAdapter(): ChannelAdapter | null {
     return items;
   }
 
-  /** Rows strictly after a transcript cursor (null/garbage = from the start). */
+  /**
+   * Rows strictly after a transcript cursor (null/garbage = from the start),
+   * floored by the group's archive epoch when one is set: an archived row is
+   * still durable and still occupies its cursor index, it just never renders
+   * here again. The floor composes with `after` by taking the max, so a
+   * client resuming from a pre-epoch cursor lands exactly at the epoch.
+   */
   function transcriptAfter(
     messagingGroupId: string,
     slug: string,
     after: string | null,
     limit: number,
+    epoch: string | null = null,
   ): WebTranscriptItem[] {
     const all = transcriptRows(messagingGroupId, slug);
     const afterIndex = parseTranscriptCursorIndex(after);
-    const from = afterIndex === null ? 0 : afterIndex + 1;
+    const epochIndex = parseTranscriptCursorIndex(epoch);
+    const from = Math.max(afterIndex === null ? 0 : afterIndex + 1, epochIndex === null ? 0 : epochIndex + 1);
     return all.slice(from, from + limit);
   }
 
@@ -878,15 +896,24 @@ function createAdapter(): ChannelAdapter | null {
         Number.parseInt(url.searchParams.get('limit') ?? '', 10) || DEFAULT_TRANSCRIPT_LIMIT,
         MAX_TRANSCRIPT_LIMIT,
       );
-      const messages = transcriptAfter(mg.id, slug, after, limit);
+      const epoch = mg.archive_epoch ?? null;
+      const messages = transcriptAfter(mg.id, slug, after, limit, epoch);
       sendJson(res, 200, {
         messages,
-        cursor: messages.length > 0 ? messages[messages.length - 1]!.cursor : (after ?? ''),
+        cursor: messages.length > 0 ? messages[messages.length - 1]!.cursor : (after ?? epoch ?? ''),
+        epoch: epoch ?? '',
       });
       return;
     }
+    if (req.method === 'POST' && action === 'archive') {
+      // Deliberately NOT under the message budget: archiving is a cheap
+      // local write that never wakes the agent — same reasoning as the
+      // pairing endpoints. Auth was already enforced above.
+      handleArchive(res, mg, slug);
+      return;
+    }
     if (req.method === 'GET' && action === 'stream') {
-      handleStream(req, res, mg.id, slug, url.searchParams.get('after'));
+      handleStream(req, res, mg.id, slug, url.searchParams.get('after'), mg.archive_epoch ?? null);
       return;
     }
     sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'GET, POST' });
@@ -962,6 +989,7 @@ function createAdapter(): ChannelAdapter | null {
     messagingGroupId: string,
     slug: string,
     after: string | null,
+    epoch: string | null = null,
   ): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -992,7 +1020,10 @@ function createAdapter(): ChannelAdapter | null {
     const push = (): void => {
       if (closed) return;
       try {
-        for (const item of transcriptAfter(messagingGroupId, slug, lastCursor, MAX_TRANSCRIPT_LIMIT)) {
+        // The archive epoch is captured at connect time: rows landing after
+        // the connection are post-epoch by construction, and a mid-stream
+        // archive applies on the client's next connect.
+        for (const item of transcriptAfter(messagingGroupId, slug, lastCursor, MAX_TRANSCRIPT_LIMIT, epoch)) {
           res.write(`event: message\ndata: ${JSON.stringify(item)}\n\n`);
           lastCursor = item.cursor;
         }
@@ -1022,6 +1053,35 @@ function createAdapter(): ChannelAdapter | null {
     };
     res.on('close', cleanup);
     req.on('close', cleanup);
+  }
+
+  /**
+   * POST /web/{group}/archive — snapshot the transcript tail as the group's
+   * archive epoch (persisted on messaging_groups; survives restarts). No
+   * data is deleted: the epoch only moves where /transcript and /stream
+   * start rendering. Idempotent — re-archiving an already-empty view keeps
+   * the prior epoch, and the epoch never moves backwards.
+   */
+  function handleArchive(
+    res: http.ServerResponse,
+    mg: { id: string; archive_epoch?: string | null },
+    slug: string,
+  ): void {
+    try {
+      const rows = transcriptRows(mg.id, slug);
+      const tail = rows.length > 0 ? rows[rows.length - 1]!.cursor : null;
+      const previous = mg.archive_epoch ?? null;
+      const tailIndex = parseTranscriptCursorIndex(tail);
+      const previousIndex = parseTranscriptCursorIndex(previous);
+      const advances = tailIndex !== null && (previousIndex === null || tailIndex > previousIndex);
+      const epoch = advances ? tail : previous;
+      if (advances && epoch) setMessagingGroupArchiveEpoch(mg.id, epoch);
+      log.info('Web transcript archived', { slug, epoch: epoch ?? '' });
+      sendJson(res, 200, { ok: true, epoch: epoch ?? '' });
+    } catch (err) {
+      log.error('Archive endpoint failed', { slug, err });
+      sendJson(res, 500, { error: 'archive_failed' });
+    }
   }
 
   /** Close every open SSE stream (channel teardown). */
