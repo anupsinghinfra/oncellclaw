@@ -99,6 +99,13 @@ export interface OutboundFile {
 
 /** Outbound message from host to adapter. */
 export interface OutboundMessage {
+  /**
+   * The messages_out row id, when the delivery poll is the caller. Adapters
+   * that stage per-message state on disk (web file attachments) key it by
+   * this id so transcript rows can find it later. Optional: direct callers
+   * (approval cards, tests) may not have a row id.
+   */
+  id?: string;
   kind: string;
   content: unknown; // parsed JSON from messages_out
   files?: OutboundFile[]; // file attachments from the session outbox

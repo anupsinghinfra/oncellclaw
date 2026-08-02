@@ -69,6 +69,8 @@ export interface ChannelDeliveryAdapter {
     /** Delivering adapter instance (defaults to channelType downstream).
      *  Host-internal only — containers never see instance. */
     instance?: string,
+    /** messages_out row id — lets adapters key per-message staged state. */
+    messageId?: string,
   ): Promise<string | undefined>;
   setTyping?(channelType: string, platformId: string, threadId: string | null, instance?: string): Promise<void>;
 }
@@ -402,6 +404,7 @@ async function deliverMessage(
     msg.content,
     files,
     deliverInstance,
+    msg.id,
   );
   log.info('Message delivered', {
     id: msg.id,

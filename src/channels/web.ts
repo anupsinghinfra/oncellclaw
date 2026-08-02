@@ -85,12 +85,24 @@
  *    they are cheap reads of local SQLite and the dashboard polls steadily.
  *  - /health stays unlimited and unauthenticated.
  *
+ *   GET  /web/:group/files/:fileId                          (token-authed)
+ *        → 200 <raw bytes> with Content-Disposition: attachment
+ *        Serves an outbound file attachment the agent sent (send_file).
+ *        deliver() stages the buffers under DATA_DIR/web-files/<group>/
+ *        at ack time — the session outbox is cleared right after delivery,
+ *        so the staged copy is the durable one this endpoint reads.
+ *        Transcript rows whose message carried files include
+ *        `files: [{ id, filename, size, url }]` pointing here. Served as
+ *        application/octet-stream + nosniff (never rendered inline — an
+ *        HTML attachment must not become same-origin script).
+ *
  * Delivery semantics: `deliver()` is an acknowledgement, not a send. The
  * outbound row is already durable in the session's outbound.db, which is
  * what the poll endpoint reads; acknowledging keeps the delivery poll from
  * retrying and eventually marking a perfectly good message failed. File
- * attachments are not carried — the outbox is cleared after delivery, and
- * this channel has no file transport.
+ * attachments ARE carried: deliver() stages them (see /files above), since
+ * the outbox is cleared after delivery and this channel's transport is the
+ * poll/stream read path.
  */
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
@@ -100,6 +112,8 @@ import path from 'path';
 
 import { parse as parseYaml } from 'yaml';
 
+import { isSafeAttachmentName } from '../attachment-safety.js';
+import { DATA_DIR } from '../config.js';
 import { readEnvFile } from '../env.js';
 import {
   getMessagingGroupAgents,
@@ -114,7 +128,7 @@ import { openInboundDb, openOutboundDb } from '../session-manager.js';
 import { envFilePath, removeEnvVar, upsertEnvVar } from '../env.js';
 import { getCodeVersion } from '../upgrade-state.js';
 import { registerHttpRoute, unregisterHttpRoute } from '../webhook-server.js';
-import type { ChannelAdapter, ChannelDefaults, ChannelSetup } from './adapter.js';
+import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundFile } from './adapter.js';
 import {
   getActiveAdapters,
   getRegisteredChannelNames,
@@ -375,6 +389,15 @@ export function collectWebOutbound(
   return items.slice(0, limit);
 }
 
+/** One file attachment as a transcript row renders it. */
+export interface WebTranscriptFile {
+  id: string;
+  filename: string;
+  size: number;
+  /** Same-origin download path: /web/{group}/files/{id} (token-authed). */
+  url: string;
+}
+
 /** One transcript row — both directions share this shape. */
 export interface WebTranscriptItem {
   id: string;
@@ -387,6 +410,8 @@ export interface WebTranscriptItem {
   userId?: string;
   kind: string;
   text: string | null;
+  /** Staged outbound attachments (assistant rows that carried files). */
+  files?: WebTranscriptFile[];
 }
 
 /** A merged row before cursor assignment (see the transcript registry). */
@@ -397,6 +422,7 @@ export interface WebTranscriptRow {
   userId?: string;
   kind: string;
   text: string | null;
+  files?: WebTranscriptFile[];
 }
 
 interface TranscriptSourceRow {
@@ -407,8 +433,95 @@ interface TranscriptSourceRow {
   direction: 'user' | 'assistant';
   userId?: string;
   text: string | null;
+  files?: WebTranscriptFile[];
   /** Assistant rows: the inbound message id this answers (causal anchor). */
   inReplyTo?: string | null;
+}
+
+// ── Outbound file staging ─────────────────────────────────────────────────
+//
+// The session outbox (the only place send_file buffers live) is cleared
+// right after delivery, so deliver() copies the buffers into a
+// channel-owned staging area, keyed by the messages_out row id:
+//
+//   DATA_DIR/web-files/<group>/<messageId>-<n>            file bytes
+//   DATA_DIR/web-files/<group>/<messageId>.files.json     [{id,filename,size}]
+//
+// The web channel is the single writer here (same invariant as every other
+// store in this system). Staged files are durable like the transcript rows
+// that reference them — durable memory is the product; there is no TTL.
+
+/** One staged attachment as recorded in the sidecar index. */
+export interface WebFileRef {
+  id: string;
+  filename: string;
+  size: number;
+}
+
+export function webFilesDir(slug: string): string {
+  return path.join(DATA_DIR, 'web-files', slug);
+}
+
+/**
+ * Stage a delivered message's file buffers and write the sidecar index.
+ * Defensive on every input — an unsafe message id or filename skips staging
+ * of that piece rather than failing the delivery ack (the message text is
+ * already on screen; a staging problem must not re-deliver it).
+ */
+export function stageWebFiles(slug: string, messageId: string | undefined, files: OutboundFile[]): WebFileRef[] {
+  if (!messageId || !isSafeAttachmentName(messageId) || !isSafeAttachmentName(slug)) {
+    log.warn('Web file staging skipped — unsafe or missing message id/slug', { slug, messageId });
+    return [];
+  }
+  try {
+    const dir = webFilesDir(slug);
+    fs.mkdirSync(dir, { recursive: true });
+    const refs: WebFileRef[] = [];
+    files.forEach((file, index) => {
+      if (!isSafeAttachmentName(file.filename)) {
+        log.warn('Web file staging skipped an unsafe filename', { slug, messageId, filename: file.filename });
+        return;
+      }
+      const id = `${messageId}-${index}`;
+      fs.writeFileSync(path.join(dir, id), file.data);
+      refs.push({ id, filename: file.filename, size: file.data.length });
+    });
+    if (refs.length > 0) {
+      fs.writeFileSync(path.join(dir, `${messageId}.files.json`), JSON.stringify(refs));
+    }
+    return refs;
+  } catch (err) {
+    log.warn('Web file staging failed', { slug, messageId, err });
+    return [];
+  }
+}
+
+/** Staged refs for one message — [] when nothing was staged (or malformed). */
+export function readWebFileRefs(slug: string, messageId: string): WebFileRef[] {
+  if (!isSafeAttachmentName(messageId) || !isSafeAttachmentName(slug)) return [];
+  try {
+    const raw = fs.readFileSync(path.join(webFilesDir(slug), `${messageId}.files.json`), 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is WebFileRef =>
+        !!entry &&
+        typeof entry === 'object' &&
+        typeof (entry as WebFileRef).id === 'string' &&
+        typeof (entry as WebFileRef).filename === 'string' &&
+        typeof (entry as WebFileRef).size === 'number',
+    );
+  } catch {
+    return []; // no sidecar (pre-feature delivery, or files never staged)
+  }
+}
+
+/** Transcript-facing refs for one outbound row: staged refs + download URL. */
+function webTranscriptFiles(slug: string, messageId: string): WebTranscriptFile[] {
+  return readWebFileRefs(slug, messageId).map((ref) => ({
+    ...ref,
+    url: `/${WEB_ROUTE}/${encodeURIComponent(slug)}/files/${encodeURIComponent(ref.id)}`,
+  }));
 }
 
 /**
@@ -465,6 +578,12 @@ export function buildWebTranscript(messagingGroupId: string, platformId: string)
         for (const row of getDueOutboundMessages(db)) {
           if (row.channel_type !== WEB_CHANNEL_TYPE || row.platform_id !== platformId) continue;
           const content = safeParseContent(row.content);
+          // Rows whose content declared files get their staged refs attached.
+          // Degrades to no refs when nothing was staged (pre-feature
+          // deliveries, or staging skipped) — the text still renders.
+          const fileRefs = Array.isArray((content as { files?: unknown }).files)
+            ? webTranscriptFiles(platformId, row.id)
+            : [];
           outboundRows.push({
             id: row.id,
             seq: row.seq ?? 0,
@@ -472,6 +591,7 @@ export function buildWebTranscript(messagingGroupId: string, platformId: string)
             kind: row.kind,
             direction: 'assistant',
             text: typeof content.text === 'string' ? content.text : null,
+            ...(fileRefs.length > 0 ? { files: fileRefs } : {}),
             inReplyTo: row.in_reply_to,
           });
         }
@@ -531,6 +651,7 @@ export function buildWebTranscript(messagingGroupId: string, platformId: string)
       ...(row.userId !== undefined ? { userId: row.userId } : {}),
       kind: row.kind,
       text: row.text,
+      ...(row.files !== undefined ? { files: row.files } : {}),
     });
   }
   return merged;
@@ -740,6 +861,7 @@ function createAdapter(): ChannelAdapter | null {
         ...(row.userId !== undefined ? { userId: row.userId } : {}),
         kind: row.kind,
         text: row.text,
+        ...(row.files !== undefined ? { files: row.files } : {}),
       };
     });
     items.sort((a, b) => registry!.byId.get(a.id)!.index - registry!.byId.get(b.id)!.index);
@@ -842,10 +964,11 @@ function createAdapter(): ChannelAdapter | null {
       return;
     }
 
-    if (parts.length !== 3 || parts[0] !== WEB_ROUTE) {
+    const isFileRoute = parts.length === 4 && parts[2] === 'files';
+    if (parts[0] !== WEB_ROUTE || (parts.length !== 3 && !isFileRoute)) {
       sendJson(res, 404, {
         error: 'not_found',
-        hint: '/web/{group}/message | /web/{group}/messages | /web/status',
+        hint: '/web/{group}/message | /web/{group}/messages | /web/{group}/files/{id} | /web/status',
       });
       return;
     }
@@ -865,6 +988,24 @@ function createAdapter(): ChannelAdapter | null {
     const mg = getMessagingGroupByPlatform(WEB_CHANNEL_TYPE, slug);
     if (!mg) {
       sendJson(res, 404, { error: 'unknown_group', group: slug });
+      return;
+    }
+
+    if (isFileRoute) {
+      // A read like the poll endpoints — token-authed above, never
+      // message-rate-limited.
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'GET' });
+        return;
+      }
+      let fileId: string;
+      try {
+        fileId = decodeURIComponent(parts[3]!);
+      } catch {
+        sendJson(res, 400, { error: 'bad_file_id' });
+        return;
+      }
+      handleFile(req, res, slug, fileId);
       return;
     }
 
@@ -1053,6 +1194,56 @@ function createAdapter(): ChannelAdapter | null {
     };
     res.on('close', cleanup);
     req.on('close', cleanup);
+  }
+
+  /**
+   * GET /web/{group}/files/{fileId} — serve one staged outbound attachment.
+   *
+   * The fileId is `<messageId>-<index>` (see stageWebFiles); the sidecar
+   * index is the authority — a fileId that isn't listed there 404s even if
+   * a same-named file existed. Everything is validated against traversal
+   * (isSafeAttachmentName on both id and slug) before touching the
+   * filesystem. Always application/octet-stream + attachment disposition +
+   * nosniff: an agent-produced HTML/SVG file must download, never render
+   * same-origin.
+   */
+  function handleFile(req: http.IncomingMessage, res: http.ServerResponse, slug: string, fileId: string): void {
+    const parsed = /^(.+)-(\d+)$/.exec(fileId);
+    if (!parsed || !isSafeAttachmentName(fileId) || !isSafeAttachmentName(slug)) {
+      sendJson(res, 404, { error: 'unknown_file' });
+      return;
+    }
+    const ref = readWebFileRefs(slug, parsed[1]!).find((entry) => entry.id === fileId);
+    if (!ref) {
+      sendJson(res, 404, { error: 'unknown_file' });
+      return;
+    }
+
+    let data: Buffer;
+    try {
+      const blobPath = path.join(webFilesDir(slug), fileId);
+      const stat = fs.lstatSync(blobPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        sendJson(res, 404, { error: 'unknown_file' });
+        return;
+      }
+      data = fs.readFileSync(blobPath);
+    } catch {
+      sendJson(res, 404, { error: 'unknown_file' });
+      return;
+    }
+
+    // ASCII-safe fallback filename for the disposition header; the exact
+    // original name is available in the transcript row's file ref.
+    const asciiName = ref.filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': data.length,
+      'Content-Disposition': `attachment; filename="${asciiName}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, no-store',
+    });
+    res.end(req.method === 'HEAD' ? undefined : data);
   }
 
   /**
@@ -1252,8 +1443,17 @@ function createAdapter(): ChannelAdapter | null {
       return mounted;
     },
 
-    async deliver(platformId): Promise<string | undefined> {
-      // Acknowledge only — see the header note on delivery semantics. The
+    async deliver(platformId, _threadId, message): Promise<string | undefined> {
+      // Stage file attachments BEFORE acknowledging: the delivery poll
+      // clears the session outbox right after this returns, so these
+      // buffers are the last chance to keep the bytes. Staging is
+      // best-effort — a failure logs and the ack still happens (the text
+      // is durable in outbound.db; re-delivering it would duplicate it on
+      // the user's screen).
+      if (message.files && message.files.length > 0) {
+        stageWebFiles(platformId, message.id, message.files);
+      }
+      // Acknowledge — see the header note on delivery semantics. The
       // ack IS the outbound push point: the row is durably in outbound.db
       // (that's what the delivery poll just read), so streams can see it.
       emitTranscriptEvent(platformId);

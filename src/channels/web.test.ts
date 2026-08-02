@@ -928,6 +928,125 @@ describe('web channel — GET /web/:group/transcript', () => {
   });
 });
 
+describe('web channel — file attachments (/web/:group/files/:id)', () => {
+  let sessionId: string;
+
+  beforeEach(async () => {
+    seedGroup();
+    sessionId = resolveSession('ag-web', 'mg-web', null, 'shared').session.id;
+    await startChannels({ token: TOKEN });
+  });
+
+  /** Outbound row whose content declares files (what send_file writes). */
+  function seedOutboundFiles(id: string, timestamp: string, text: string, files: string[]): void {
+    const db = openOutboundDbRw('ag-web', sessionId);
+    try {
+      db.prepare(
+        `INSERT INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content, in_reply_to)
+         VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 2 FROM messages_out), ?, 'chat', ?, 'web', NULL, ?, NULL)`,
+      ).run(id, timestamp, GROUP, JSON.stringify({ text, files }));
+    } finally {
+      db.close();
+    }
+  }
+
+  /** Simulate the delivery poll acking this row through the web adapter. */
+  async function deliverWithFiles(id: string, files: Array<{ filename: string; data: Buffer }>): Promise<void> {
+    const webAdapter = getActiveAdapters().find((a) => a.channelType === 'web')!;
+    await webAdapter.deliver(GROUP, null, { id, kind: 'chat', content: { text: 'x' }, files });
+  }
+
+  interface FileRef {
+    id: string;
+    filename: string;
+    size: number;
+    url: string;
+  }
+
+  async function transcriptFiles(rowId: string): Promise<FileRef[] | undefined> {
+    const body = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string; files?: FileRef[] }>;
+    };
+    return body.messages.find((m) => m.id === rowId)?.files;
+  }
+
+  it('stages delivered files, carries refs in the transcript, and serves the bytes', async () => {
+    const bytes = Buffer.from('quarterly numbers\n');
+    seedOutboundFiles('a1', '2026-01-01T00:00:01.000Z', 'here is the report', ['report.csv']);
+    await deliverWithFiles('a1', [{ filename: 'report.csv', data: bytes }]);
+
+    const files = await transcriptFiles('a1');
+    expect(files).toHaveLength(1);
+    expect(files![0]).toMatchObject({ id: 'a1-0', filename: 'report.csv', size: bytes.length });
+    expect(files![0].url).toBe(`/web/${GROUP}/files/a1-0`);
+
+    const res = await req(files![0].url, { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer()).equals(bytes)).toBe(true);
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-disposition')).toBe('attachment; filename="report.csv"');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('multiple attachments on one message get distinct ids', async () => {
+    seedOutboundFiles('a1', '2026-01-01T00:00:01.000Z', 'two files', ['one.txt', 'two.txt']);
+    await deliverWithFiles('a1', [
+      { filename: 'one.txt', data: Buffer.from('1') },
+      { filename: 'two.txt', data: Buffer.from('22') },
+    ]);
+
+    const files = await transcriptFiles('a1');
+    expect(files!.map((f) => [f.id, f.filename, f.size])).toEqual([
+      ['a1-0', 'one.txt', 1],
+      ['a1-1', 'two.txt', 2],
+    ]);
+    const second = await req(`/web/${GROUP}/files/a1-1`, { headers: auth() });
+    expect(await second.text()).toBe('22');
+  });
+
+  it('requires auth and 404s unknown or traversal-shaped ids', async () => {
+    expect((await req(`/web/${GROUP}/files/a1-0`)).status).toBe(401);
+    expect((await req(`/web/${GROUP}/files/a1-0`, { headers: auth() })).status).toBe(404);
+    expect((await req(`/web/${GROUP}/files/..%2F..%2Fsecrets-0`, { headers: auth() })).status).toBe(404);
+    expect((await req('/web/nope/files/a1-0', { headers: auth() })).status).toBe(404);
+  });
+
+  it('a row declaring files with nothing staged degrades to no files field', async () => {
+    // Pre-feature delivery: the outbox was cleared before staging existed.
+    seedOutboundFiles('a1', '2026-01-01T00:00:01.000Z', 'old message', ['gone.pdf']);
+    const body = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string; files?: unknown; text: string | null }>;
+    };
+    expect(body.messages[0]!.text).toBe('old message');
+    expect(body.messages[0]!.files).toBeUndefined();
+  });
+
+  it('staged files survive a channel restart (durable on disk, not in-memory)', async () => {
+    const bytes = Buffer.from('survives');
+    seedOutboundFiles('a1', '2026-01-01T00:00:01.000Z', 'durable', ['keep.bin']);
+    await deliverWithFiles('a1', [{ filename: 'keep.bin', data: bytes }]);
+
+    await teardownChannelAdapters();
+    await stopWebhookServer();
+    await startChannels({ token: TOKEN });
+
+    const files = await transcriptFiles('a1');
+    expect(files).toHaveLength(1);
+    const res = await req(files![0].url, { headers: auth() });
+    expect(Buffer.from(await res.arrayBuffer()).equals(bytes)).toBe(true);
+  });
+
+  it('an unsafe filename is skipped while safe siblings still stage', async () => {
+    seedOutboundFiles('a1', '2026-01-01T00:00:01.000Z', 'mixed', ['../evil', 'good.txt']);
+    await deliverWithFiles('a1', [
+      { filename: '../evil', data: Buffer.from('nope') },
+      { filename: 'good.txt', data: Buffer.from('ok') },
+    ]);
+    const files = await transcriptFiles('a1');
+    expect(files!.map((f) => f.filename)).toEqual(['good.txt']);
+  });
+});
+
 describe('web channel — POST /web/:group/archive', () => {
   let sessionId: string;
 
