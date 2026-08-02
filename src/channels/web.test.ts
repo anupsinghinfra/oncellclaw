@@ -44,6 +44,7 @@ import {
 } from './channel-registry.js';
 // Self-registers the `web` channel into the registry.
 import './web.js';
+import { setDiscordGatewaySocketFactory } from './discord.js';
 
 const TEST_DIR = '/tmp/nanoclaw-test-web-channel';
 const PORT = 3921;
@@ -830,6 +831,144 @@ describe('web channel — POST /web/channels/telegram/pair', () => {
       404,
     );
     expect((await req('/web/channels/telegram', { method: 'GET', headers: auth() })).status).toBe(405);
+  });
+});
+
+describe('web channel — POST /web/channels/discord/pair', () => {
+  const DC_PORT = 3960;
+  const GOOD_TOKEN = `${'A'.repeat(24)}.${'B'.repeat(6)}.${'C'.repeat(27)}`;
+  const ENV_FILE = `${TEST_DIR}/discord-pairing.env`;
+  let dcStub: import('http').Server | null = null;
+  let meCalls = 0;
+
+  async function startDiscordStub(): Promise<void> {
+    meCalls = 0;
+    const http = await import('http');
+    await new Promise<void>((resolve) => {
+      dcStub = http.createServer((dcReq, dcRes) => {
+        const send = (status: number, body: unknown): void => {
+          dcRes.writeHead(status, { 'content-type': 'application/json' });
+          dcRes.end(JSON.stringify(body));
+        };
+        if (dcReq.url === '/api/v10/users/@me') {
+          meCalls += 1;
+          if (dcReq.headers.authorization === `Bot ${GOOD_TOKEN}`) {
+            send(200, { id: '77', username: 'PairBot' });
+          } else {
+            send(401, { message: 'Unauthorized' });
+          }
+          return;
+        }
+        send(404, { message: 'not found' });
+      });
+      dcStub!.listen(DC_PORT, '127.0.0.1', () => resolve());
+    });
+  }
+
+  beforeEach(async () => {
+    process.env.DISCORD_API_BASE = `http://127.0.0.1:${DC_PORT}`;
+    process.env.ONCELLCLAW_ENV_FILE = ENV_FILE;
+    // Fake gateway socket that completes the handshake immediately, so the
+    // adapter reports connected without any live Discord.
+    setDiscordGatewaySocketFactory((_url) => {
+      const socket = {
+        send: () => {},
+        close: () => {},
+        onopen: null as (() => void) | null,
+        onmessage: null as ((event: { data: unknown }) => void) | null,
+        onclose: null as ((event: { code?: number }) => void) | null,
+        onerror: null as ((err: unknown) => void) | null,
+      };
+      setTimeout(() => {
+        socket.onmessage?.({ data: JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } }) });
+        socket.onmessage?.({ data: JSON.stringify({ op: 0, s: 1, t: 'READY', d: {} }) });
+      }, 0);
+      return socket;
+    });
+    await startDiscordStub();
+    seedGroup();
+    await startChannels({ token: TOKEN });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => (dcStub ? dcStub.close(() => resolve()) : resolve()));
+    dcStub = null;
+    setDiscordGatewaySocketFactory(null);
+    delete process.env.DISCORD_API_BASE;
+    delete process.env.ONCELLCLAW_ENV_FILE;
+    delete process.env.DISCORD_BOT_TOKEN;
+  });
+
+  const pair = (body: unknown, headers: Record<string, string> = auth()) =>
+    req('/web/channels/discord/pair', { method: 'POST', headers, body: JSON.stringify(body) });
+
+  it('pairs a valid token: 200 with bot username, credential persisted, status flips live', async () => {
+    const res = await pair({ botToken: GOOD_TOKEN });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, bot: { username: 'PairBot' } });
+
+    // Canonical store: the .env the CLI path writes.
+    expect(fs.readFileSync(ENV_FILE, 'utf-8')).toContain(`DISCORD_BOT_TOKEN=${GOOD_TOKEN}`);
+
+    await vi.waitFor(async () => {
+      const status = (await (await req('/web/status', { headers: auth() })).json()) as {
+        channels: Array<{ type: string; configured: boolean; connected: boolean | null; detail?: string }>;
+      };
+      const discord = status.channels.find((c) => c.type === 'discord');
+      expect(discord).toMatchObject({ configured: true, connected: true, detail: '@PairBot' });
+    });
+  });
+
+  it('rejects a malformed token with 400 and never calls Discord', async () => {
+    const res = await pair({ botToken: 'not-a-token' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_token' });
+    expect(meCalls).toBe(0);
+
+    expect((await pair({})).status).toBe(400);
+  });
+
+  it('maps a Discord rejection to 400 invalid_token', async () => {
+    const res = await pair({ botToken: `${'X'.repeat(24)}.${'Y'.repeat(6)}.${'Z'.repeat(27)}` });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_token' });
+    expect(meCalls).toBe(1);
+  });
+
+  it('maps an unreachable Discord to 502', async () => {
+    await new Promise<void>((resolve) => dcStub!.close(() => resolve()));
+    dcStub = null;
+    const res = await pair({ botToken: GOOD_TOKEN });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'discord_unreachable' });
+  });
+
+  it('requires the web bearer token', async () => {
+    expect((await pair({ botToken: GOOD_TOKEN }, {})).status).toBe(401);
+    expect(meCalls).toBe(0);
+  });
+
+  it('DELETE unpairs: adapter stopped, credential removed, status back to unconfigured', async () => {
+    expect((await pair({ botToken: GOOD_TOKEN })).status).toBe(200);
+
+    const res = await req('/web/channels/discord', { method: 'DELETE', headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(fs.readFileSync(ENV_FILE, 'utf-8')).not.toContain('DISCORD_BOT_TOKEN');
+
+    const status = (await (await req('/web/status', { headers: auth() })).json()) as {
+      channels: Array<{ type: string; configured: boolean; connected: boolean | null; detail?: string }>;
+    };
+    expect(status.channels.find((c) => c.type === 'discord')).toEqual({
+      type: 'discord',
+      configured: false,
+      connected: null,
+      detail: 'not set up — pair to enable',
+    });
+  });
+
+  it('wrong method on /web/channels/discord 405s', async () => {
+    expect((await req('/web/channels/discord', { method: 'GET', headers: auth() })).status).toBe(405);
   });
 });
 

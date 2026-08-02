@@ -145,6 +145,7 @@ import {
   stopChannelAdapter,
 } from './channel-registry.js';
 import { parseRatePerMin, SlidingWindowLimiter, TokenBucketLimiter } from './rate-limit.js';
+import { DISCORD_CHANNEL_TYPE, DISCORD_TOKEN_ENV_KEY, verifyDiscordToken } from './discord.js';
 import { TELEGRAM_CHANNEL_TYPE, TELEGRAM_TOKEN_ENV_KEY, verifyTelegramToken } from './telegram.js';
 
 /** Channel type + registry key. */
@@ -1359,22 +1360,40 @@ function createAdapter(): ChannelAdapter | null {
    *          → 502 {"error":"telegram_unreachable"} transport failure to Telegram
    *   DELETE /web/channels/telegram
    *          → 200 {"ok":true}                      adapter stopped, credential removed
+   *
+   *   POST   /web/channels/discord/pair    {"botToken": "..."}
+   *          → 200 {"ok":true,"bot":{"username":"..."}}
+   *          → 400 {"error":"invalid_token"}        bad shape or /users/@me rejected
+   *          → 502 {"error":"discord_unreachable"}  transport failure to Discord
+   *   DELETE /web/channels/discord
+   *          → 200 {"ok":true}                      adapter stopped, credential removed
    */
   async function handleChannels(req: http.IncomingMessage, res: http.ServerResponse, rest: string[]): Promise<void> {
-    if (rest[0] !== TELEGRAM_CHANNEL_TYPE) {
-      sendJson(res, 404, { error: 'unknown_channel', hint: '/web/channels/telegram' });
+    if (rest[0] === TELEGRAM_CHANNEL_TYPE) {
+      if (req.method === 'POST' && rest[1] === 'pair' && rest.length === 2) {
+        await pairTelegram(req, res);
+        return;
+      }
+      if (req.method === 'DELETE' && rest.length === 1) {
+        await unpairTelegram(res);
+        return;
+      }
+      sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'POST, DELETE' });
       return;
     }
-
-    if (req.method === 'POST' && rest[1] === 'pair' && rest.length === 2) {
-      await pairTelegram(req, res);
+    if (rest[0] === DISCORD_CHANNEL_TYPE) {
+      if (req.method === 'POST' && rest[1] === 'pair' && rest.length === 2) {
+        await pairDiscord(req, res);
+        return;
+      }
+      if (req.method === 'DELETE' && rest.length === 1) {
+        await unpairDiscord(res);
+        return;
+      }
+      sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'POST, DELETE' });
       return;
     }
-    if (req.method === 'DELETE' && rest.length === 1) {
-      await unpairTelegram(res);
-      return;
-    }
-    sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'POST, DELETE' });
+    sendJson(res, 404, { error: 'unknown_channel', hint: '/web/channels/telegram | /web/channels/discord' });
   }
 
   async function pairTelegram(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1436,6 +1455,70 @@ function createAdapter(): ChannelAdapter | null {
     removeEnvVar(TELEGRAM_TOKEN_ENV_KEY, webEnvFilePath());
     delete process.env[TELEGRAM_TOKEN_ENV_KEY];
     log.info('Telegram unpaired — adapter stopped, credential removed');
+    sendJson(res, 200, { ok: true });
+  }
+
+  /** Mirrors pairTelegram — same body shape, same 200/400/502 contract. */
+  async function pairDiscord(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    let raw: string;
+    try {
+      raw = await readBody(req);
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJson(res, 413, { error: 'payload_too_large', maxBytes: MAX_BODY_BYTES });
+        return;
+      }
+      throw err;
+    }
+
+    let payload: { botToken?: unknown };
+    try {
+      payload = JSON.parse(raw) as { botToken?: unknown };
+    } catch {
+      sendJson(res, 400, { error: 'invalid_json' });
+      return;
+    }
+    const botToken = typeof payload.botToken === 'string' ? payload.botToken.trim() : '';
+    if (!botToken) {
+      sendJson(res, 400, { error: 'invalid_token' });
+      return;
+    }
+
+    // Shape check + live GET /users/@me (the getMe equivalent). Shape
+    // failures never reach the network.
+    const verified = await verifyDiscordToken(botToken);
+    if (!verified.ok) {
+      sendJson(res, verified.reason === 'invalid_token' ? 400 : 502, { error: verified.reason });
+      return;
+    }
+
+    // Persist where the CLI path persists (the ONE canonical store), and
+    // export to process.env so the adapter factory sees it immediately.
+    upsertEnvVar(DISCORD_TOKEN_ENV_KEY, botToken, webEnvFilePath());
+    process.env[DISCORD_TOKEN_ENV_KEY] = botToken;
+
+    try {
+      const adapter = await startChannelAdapter(DISCORD_CHANNEL_TYPE);
+      if (!adapter) {
+        // Factory declined despite the credential — should not happen; be loud.
+        sendJson(res, 502, { error: 'discord_unreachable' });
+        return;
+      }
+    } catch (err) {
+      log.error('Discord adapter failed to start after pairing', { err });
+      sendJson(res, 502, { error: 'discord_unreachable' });
+      return;
+    }
+
+    log.info('Discord paired', { bot: `@${verified.bot.username}` });
+    sendJson(res, 200, { ok: true, bot: { username: verified.bot.username } });
+  }
+
+  async function unpairDiscord(res: http.ServerResponse): Promise<void> {
+    await stopChannelAdapter(DISCORD_CHANNEL_TYPE);
+    removeEnvVar(DISCORD_TOKEN_ENV_KEY, webEnvFilePath());
+    delete process.env[DISCORD_TOKEN_ENV_KEY];
+    log.info('Discord unpaired — adapter stopped, credential removed');
     sendJson(res, 200, { ok: true });
   }
 
