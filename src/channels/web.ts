@@ -29,6 +29,14 @@
  *        Unauthenticated by design: it exposes no message content, and a
  *        health probe has no token to present.
  *
+ *   GET  /web/status                                       (token-authed)
+ *        → 200 { version, groups, channels, skills }
+ *        Introspection for the dashboard's Connections & Integrations
+ *        panel: channels from the adapter registry with honestly-knowable
+ *        configured/connected state, skills as name+description only (no
+ *        file contents). Never message-rate-limited (it is a read, like
+ *        the poll endpoint), though auth failures still spend IP budget.
+ *
  * Auth: `Authorization: Bearer $ONCELLCLAW_WEB_TOKEN` on every /web/ route,
  * compared in constant time. When ONCELLCLAW_WEB_TOKEN is unset the channel
  * REFUSES TO START unless ONCELLCLAW_WEB_ALLOW_INSECURE=1 (local dev only).
@@ -55,7 +63,11 @@
  * this channel has no file transport.
  */
 import crypto from 'crypto';
+import fs from 'fs';
 import type http from 'http';
+import path from 'path';
+
+import { parse as parseYaml } from 'yaml';
 
 import { readEnvFile } from '../env.js';
 import {
@@ -67,9 +79,10 @@ import { getDueOutboundMessages } from '../db/session-db.js';
 import { getSessionsByMessagingGroup } from '../db/sessions.js';
 import { log } from '../log.js';
 import { openOutboundDb } from '../session-manager.js';
+import { getCodeVersion } from '../upgrade-state.js';
 import { registerHttpRoute, unregisterHttpRoute } from '../webhook-server.js';
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup } from './adapter.js';
-import { registerChannelAdapter } from './channel-registry.js';
+import { getActiveAdapters, getRegisteredChannelNames, registerChannelAdapter } from './channel-registry.js';
 import { parseRatePerMin, SlidingWindowLimiter, TokenBucketLimiter } from './rate-limit.js';
 
 /** Channel type + registry key. */
@@ -317,6 +330,77 @@ function generateId(): string {
   return `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** One channel's honestly-knowable state, as /web/status reports it. */
+export interface WebChannelStatus {
+  type: string;
+  configured: boolean;
+  /** Live adapter's own isConnected(); null when there is no adapter to ask. */
+  connected: boolean | null;
+  detail?: string;
+}
+
+/**
+ * Enumerate every registered channel with what the registry can honestly
+ * say. A registration whose factory produced an adapter is configured; the
+ * adapter's own isConnected() is the connection truth (web = mounted,
+ * socket channels = live connection). A factory that returned null means
+ * the channel's credentials/state are absent — configured false, and
+ * connected is null because there is nothing to ask.
+ */
+export function collectChannelStatuses(): WebChannelStatus[] {
+  const active = getActiveAdapters();
+  return getRegisteredChannelNames().map((name) => {
+    const adapter = active.find((a) => (a.instance ?? a.channelType) === name) ?? active.find((a) => a.name === name);
+    if (!adapter) {
+      return {
+        type: name,
+        configured: false,
+        connected: null,
+        detail: 'adapter not started (credentials missing or channel disabled)',
+      };
+    }
+    return { type: adapter.channelType, configured: true, connected: adapter.isConnected() };
+  });
+}
+
+/** name + description only — /web/status never exposes skill file contents. */
+export interface WebSkillInfo {
+  name: string;
+  description: string;
+}
+
+/**
+ * Catalog of shared skills from container/skills/<name>/SKILL.md YAML
+ * frontmatter. Malformed or frontmatter-less skills degrade to their
+ * directory name with an empty description rather than breaking status.
+ */
+export function collectSkillCatalog(): WebSkillInfo[] {
+  const skillsDir = path.join(process.cwd(), 'container', 'skills');
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(skillsDir).filter((entry) => fs.statSync(path.join(skillsDir, entry)).isDirectory());
+  } catch {
+    return []; // no shared skills directory in this install
+  }
+
+  return entries.map((dirName) => {
+    let name = dirName;
+    let description = '';
+    try {
+      const raw = fs.readFileSync(path.join(skillsDir, dirName, 'SKILL.md'), 'utf-8');
+      const frontmatter = /^---\n([\s\S]*?)\n---/.exec(raw)?.[1];
+      if (frontmatter) {
+        const meta = parseYaml(frontmatter) as { name?: unknown; description?: unknown } | null;
+        if (typeof meta?.name === 'string' && meta.name.trim()) name = meta.name.trim();
+        if (typeof meta?.description === 'string') description = meta.description.trim();
+      }
+    } catch {
+      // unreadable/malformed SKILL.md — keep the directory-name fallback
+    }
+    return { name, description };
+  });
+}
+
 function createAdapter(): ChannelAdapter | null {
   const { token, allowInsecure, authFailuresPerMin, messagesPerMin } = readWebChannelEnv();
   if (!token && !allowInsecure) {
@@ -383,8 +467,23 @@ function createAdapter(): ChannelAdapter | null {
 
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parts = url.pathname.split('/').filter((p) => p.length > 0);
+
+    // Introspection for the dashboard. Authed (we are past the token gate),
+    // never message-rate-limited — a read, like the poll endpoint.
+    if (parts.length === 2 && parts[0] === WEB_ROUTE && parts[1] === 'status') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'GET' });
+        return;
+      }
+      handleStatus(res);
+      return;
+    }
+
     if (parts.length !== 3 || parts[0] !== WEB_ROUTE) {
-      sendJson(res, 404, { error: 'not_found', hint: '/web/{group}/message | /web/{group}/messages' });
+      sendJson(res, 404, {
+        error: 'not_found',
+        hint: '/web/{group}/message | /web/{group}/messages | /web/status',
+      });
       return;
     }
 
@@ -484,6 +583,31 @@ function createAdapter(): ChannelAdapter | null {
     });
 
     sendJson(res, 202, { ok: true, id });
+  }
+
+  function handleStatus(res: http.ServerResponse): void {
+    try {
+      let version = 'unknown';
+      try {
+        version = getCodeVersion();
+      } catch {
+        // package.json unreadable — report 'unknown' rather than failing status
+      }
+      const groups = getMessagingGroupsByChannel(WEB_CHANNEL_TYPE).map((mg) => ({
+        slug: mg.platform_id,
+        name: mg.name,
+        agents: getMessagingGroupAgents(mg.id).length,
+      }));
+      sendJson(res, 200, {
+        version,
+        groups,
+        channels: collectChannelStatuses(),
+        skills: collectSkillCatalog(),
+      });
+    } catch (err) {
+      log.error('Status endpoint failed', { err });
+      sendJson(res, 500, { error: 'status_failed' });
+    }
   }
 
   function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse): void {

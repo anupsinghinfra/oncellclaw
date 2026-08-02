@@ -67,6 +67,9 @@ curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" -H 'Content-Type: applicat
 curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
      'https://<host>/web/assistant/messages?after='                      # → 200 {"messages":[…],"cursor":"…"}
 curl https://<host>/web/health                                           # → 200 {"ok":true,"groups":[…]}
+# introspection for dashboards (token-authed): version, groups, channels, skills
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     https://<host>/web/status                                           # → 200 {"version":…,"channels":[…],…}
 ```
 
 **First boot:** the script binds `$PORT` immediately — before downloading anything — with a tiny placeholder server, because service supervisors (the OnCell cell supervisor included) kill a service that isn't accepting connections within seconds, and a cold install takes minutes. While bootstrap runs, **every** path (including `/web/health`) answers `503` with `{"ok":false,"phase":"…"}`, where `phase` walks `starting → clone → toolchain → install → build → provision → handoff`. A brief connection-refused gap follows while the placeholder hands the port to the real host, then `/web/health` returns `200 {"ok":true,…}` — poll it until `ok` is true to know the assistant is live. Warm restarts skip the download and install work and hand off in seconds.
@@ -92,6 +95,7 @@ That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the inte
 | `ONCELLCLAW_REF` | `main` | Branch, tag, or commit sha. A full 40-hex sha skips ref resolution and warm-restarts offline. |
 | `ONCELLCLAW_DIR` | `$HOME/oncellclaw` | Persistent base: `src-<sha>/` checkouts, the `current` symlink, `state/` (`data`, `groups`, `store`, `.env`) and `toolchain/`. State survives every update. |
 | `ONCELLCLAW_RUNTIME` | `oncell` | `oncell` or `docker` (see [Runtimes](#runtimes-oncell-cells-or-local-docker)). |
+| `ONCELLCLAW_CELL_NAMESPACE` | install slug | Isolates this instance's agent-group cells (`clawg-{namespace}-{group}`) from other claws in the same OnCell account. Kebab-case, ≤24 chars. Hosted: the dashboard sets a unique value per instance; self-host: the default (sha1 of the checkout path) is fine. |
 | `ONCELL_API_KEY` | — | Required when the runtime is `oncell`. |
 | `ONCELL_API_URL` | — | Optional API endpoint override. |
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Agent credential. Exactly one is required. |
@@ -241,7 +245,9 @@ The runtime is selected at startup (`src/runtime-select.ts`):
 | unset | set | OnCell (the fork's default) |
 | unset | unset | Docker (upstream behavior, fully local) |
 
-On the OnCell runtime the file protocol above is unchanged — the bind mount is replaced by a sync pump. One cell per agent group (`claw-<group-folder>`): the group folder, composed `CLAUDE.md`, skills, and the agent-runner source are mirrored into the cell incrementally (content-hash manifest in the cell KV), the runner runs as the cell's supervised service, and a per-session pump pushes `inbound.db`/inbox and pulls `outbound.db`/heartbeat/outbox through the cell request door. Credentials are passed only in the service environment at start — never written into cell files. Host-side delivery and sweep read the same local session files they always did.
+On the OnCell runtime the file protocol above is unchanged — the bind mount is replaced by a sync pump. One cell per agent group, named `clawg-{namespace}-{group}`: the `namespace` (`ONCELLCLAW_CELL_NAMESPACE`, default = the install slug) isolates this instance's cells from any other oncellclaw sharing the OnCell account — hosted instances themselves live in `claw-*` cells, a separate namespace this code never creates or stops. The group folder, composed `CLAUDE.md`, skills, and the agent-runner source are mirrored into the cell incrementally (content-hash manifest in the cell KV), the runner runs as the cell's supervised service, and a per-session pump pushes `inbound.db`/inbox and pulls `outbound.db`/heartbeat/outbox through the cell request door. Credentials are passed only in the service environment at start — never written into cell files. Host-side delivery and sweep read the same local session files they always did.
+
+> **Migrating from pre-namespace installs:** group cells used to be named `claw-{group}`. Those are no longer matched — on its next wake each group starts a fresh `clawg-{namespace}-{group}` cell without the old cell's files or memory, and the host logs a `Legacy cell naming detected` warning at boot listing the old and new customer ids. To keep the old state, migrate manually via the OnCell API (fork or rename the legacy cell to the new customer id), then delete the legacy cell. The host never auto-adopts `claw-*` cells: that prefix is also used for hosting cells, so ownership of any given one is ambiguous.
 
 Config (`.env`):
 

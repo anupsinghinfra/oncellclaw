@@ -52,6 +52,13 @@
 #   ONCELLCLAW_WEB_TOKEN       bearer token for the web channel (required
 #                              unless ONCELLCLAW_WEB_ALLOW_INSECURE=1)
 #   ONCELLCLAW_WEB_ALLOW_INSECURE=1   run the web channel unauthenticated
+#   ONCELLCLAW_CELL_NAMESPACE  isolates this instance's agent-group cells
+#                              (clawg-{namespace}-{group}) from other claws
+#                              in the same OnCell account. Kebab-case, ≤24
+#                              chars. Hosted: set by the dashboard, unique
+#                              per instance. Unset: defaults to the install
+#                              slug — fine for self-hosting. Passed through
+#                              to the host via the environment.
 #   ONCELLCLAW_GROUP           agent group slug        (default: assistant)
 #   ONCELLCLAW_PERSONA         standing instructions   (optional)
 #   PORT                       HTTP listen port. The cell supervisor always
@@ -252,6 +259,14 @@ fi
 if [ -e "$BASE/.git" ]; then
   die "$BASE is a git checkout. This script owns its base directory (src-<sha>/ + state/ layout) — point ONCELLCLAW_DIR somewhere else, e.g. \$HOME/oncellclaw-hosted."
 fi
+# Mirror the host's namespace validation (src/cell-runtime.ts) so a bad
+# value dies here, in the readable config stage, not minutes later at boot.
+if [ -n "${ONCELLCLAW_CELL_NAMESPACE:-}" ]; then
+  if ! printf '%s' "$ONCELLCLAW_CELL_NAMESPACE" | grep -qE '^[a-z0-9]+(-[a-z0-9]+)*$' ||
+    [ "${#ONCELLCLAW_CELL_NAMESPACE}" -gt 24 ]; then
+    die "ONCELLCLAW_CELL_NAMESPACE must be kebab-case, at most 24 chars (got: ${ONCELLCLAW_CELL_NAMESPACE})"
+  fi
+fi
 
 # Derive owner/repo from the GitHub URL — the tarball endpoints need them.
 case "$ONCELLCLAW_REPO" in
@@ -271,6 +286,7 @@ fi
 info "repo:    github.com/${gh_owner}/${gh_repo} @ ${ONCELLCLAW_REF}"
 info "base:    ${BASE}"
 info "runtime: ${ONCELLCLAW_RUNTIME}"
+info "cells:   clawg-${ONCELLCLAW_CELL_NAMESPACE:-<install-slug>}-{group}"
 info "group:   ${ONCELLCLAW_GROUP}"
 info "port:    ${PORT}"
 info "auth:    $([ -n "${ONCELLCLAW_WEB_TOKEN:-}" ] && echo 'bearer token' || echo 'DISABLED (insecure flag set)')"

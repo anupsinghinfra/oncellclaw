@@ -169,7 +169,10 @@ describe('wakeCellSession', () => {
 
     expect(woke).toBe(true);
     expect(fake.createCellCalls).toEqual([cellCustomerIdForGroup(GROUP_FOLDER)]);
-    expect(fake.createCellCalls[0]).toBe('claw-main-chat');
+    // Namespaced scheme: clawg-{instance namespace}-{group folder} — the
+    // bare claw-* prefix belongs to hosting cells and must never appear.
+    expect(fake.createCellCalls[0]).toMatch(/^clawg-[a-z0-9-]+-main-chat$/);
+    expect(fake.createCellCalls[0]!.startsWith('claw-')).toBe(false);
     expect(fake.serviceStarts.length).toBe(1);
     expect(fake.serviceStarts[0].cmd).toContain('cell-service.ts');
     expect(isCellSessionRunning(session.id)).toBe(true);

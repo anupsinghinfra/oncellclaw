@@ -561,3 +561,73 @@ describe('web channel — rate limiting', () => {
     }
   });
 });
+
+describe('web channel — GET /web/status', () => {
+  beforeEach(async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN });
+  });
+
+  it('requires the bearer token', async () => {
+    expect((await req('/web/status')).status).toBe(401);
+    expect((await req('/web/status', { headers: auth('wrong') })).status).toBe(401);
+  });
+
+  it('returns version, groups, channels and skills in the documented shape', async () => {
+    // A registered channel whose factory returned null (missing creds) must
+    // be reported honestly: configured false, connected unknowable.
+    const { registerChannelAdapter } = await import('./channel-registry.js');
+    registerChannelAdapter('fake-unconfigured', { factory: () => null });
+
+    const res = await req('/web/status', { headers: auth() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      version: string;
+      groups: Array<{ slug: string; name: string | null; agents: number }>;
+      channels: Array<{ type: string; configured: boolean; connected: boolean | null; detail?: string }>;
+      skills: Array<{ name: string; description: string }>;
+    };
+
+    // Version is the running package.json version.
+    const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8')) as { version: string };
+    expect(body.version).toBe(pkg.version);
+
+    expect(body.groups).toEqual([{ slug: GROUP, name: 'Assistant', agents: 1 }]);
+
+    // Channels come from the registry. web is live (configured+connected);
+    // the null-factory registration reports configured:false, connected:null.
+    const web = body.channels.find((c) => c.type === 'web');
+    expect(web).toMatchObject({ configured: true, connected: true });
+    const unconfigured = body.channels.find((c) => c.type === 'fake-unconfigured');
+    expect(unconfigured).toMatchObject({ configured: false, connected: null });
+    expect(unconfigured!.detail).toMatch(/not started/);
+    for (const channel of body.channels) {
+      expect(typeof channel.type).toBe('string');
+      expect(typeof channel.configured).toBe('boolean');
+      expect(channel.connected === null || typeof channel.connected === 'boolean').toBe(true);
+    }
+
+    // Skills: name + description from SKILL.md frontmatter, nothing else.
+    const welcome = body.skills.find((s) => s.name === 'welcome');
+    expect(welcome).toBeDefined();
+    expect(welcome!.description.length).toBeGreaterThan(0);
+    for (const skill of body.skills) {
+      expect(Object.keys(skill).sort()).toEqual(['description', 'name']);
+    }
+  });
+
+  it('is not message-rate-limited', async () => {
+    // Saturate the per-group message budget, then hit status repeatedly.
+    await startChannels({ token: TOKEN, messagesPerMin: '1' });
+    await req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text: 'x' }) });
+
+    for (let i = 0; i < 5; i++) {
+      expect((await req('/web/status', { headers: auth() })).status).toBe(200);
+    }
+  });
+
+  it('405s non-GET methods', async () => {
+    const res = await req('/web/status', { method: 'POST', headers: auth(), body: '{}' });
+    expect(res.status).toBe(405);
+  });
+});

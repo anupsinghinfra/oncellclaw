@@ -114,4 +114,31 @@ describe('createOnCellClient', () => {
 
     await expect(client.exec('c', { cmd: 'false', expectSuccess: true })).rejects.toThrow(/exit 1/);
   });
+
+  it('attaches an abort-timeout signal to every request', async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const fetchImpl: FetchLike = (_url, init) => {
+      signals.push(init.signal);
+      return Promise.resolve(jsonResponse(200, { cells: [] }));
+    };
+    const client = createOnCellClient({ apiKey: 'k', fetchImpl });
+
+    await client.listCells();
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  it('maps an aborted request to a loud TIMEOUT error instead of hanging', async () => {
+    const timeoutErr = new Error('The operation was aborted due to timeout');
+    timeoutErr.name = 'TimeoutError';
+    const fetchImpl: FetchLike = () => Promise.reject(timeoutErr);
+    const client = createOnCellClient({ apiKey: 'k', fetchImpl });
+
+    await expect(client.listCells()).rejects.toMatchObject({
+      name: 'OnCellApiError',
+      code: 'TIMEOUT',
+      message: expect.stringMatching(/timed out after \d+ms/),
+    });
+  });
 });

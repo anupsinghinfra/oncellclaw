@@ -18,6 +18,20 @@ export const DEFAULT_ONCELL_API_URL = 'https://api.oncell.ai';
 const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([502, 503]);
 const DEFAULT_RETRY_BACKOFF_MS = 250;
 
+/**
+ * Every request carries an AbortSignal timeout so a hung API connection
+ * fails loudly instead of hanging the caller (boot's listCells used to hang
+ * forever on a black-holed connection). Control-plane requests get a tight
+ * budget; exec — whose body legitimately runs a command for up to its own
+ * timeout_ms — gets that budget plus slack for provision/transfer.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const EXEC_TIMEOUT_SLACK_MS = 60_000;
+/** Fallback exec HTTP budget when the caller sets no exec timeout. */
+const DEFAULT_EXEC_TIMEOUT_MS = 300_000;
+/** Service + cell mutations can wait on cold provisioning — allow more. */
+const MUTATION_TIMEOUT_MS = 120_000;
+
 /** A cell record as returned by the API. cell_id = {developerId}--{customer_id}. */
 export interface CellRecord {
   readonly cell_id: string;
@@ -76,7 +90,7 @@ export interface FetchResponseLike {
 }
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body?: string },
+  init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<FetchResponseLike>;
 
 export class OnCellApiError extends Error {
@@ -126,6 +140,8 @@ interface RequestSpec {
   readonly path: string;
   readonly body?: unknown;
   readonly idempotent: boolean;
+  /** HTTP budget for this request; DEFAULT_REQUEST_TIMEOUT_MS when unset. */
+  readonly timeoutMs?: number;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -156,6 +172,7 @@ export function createOnCellClient(options: OnCellClientOptions): OnCellClient {
   const backoffMs = options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS;
 
   async function attempt(spec: RequestSpec): Promise<FetchResponseLike> {
+    const timeoutMs = spec.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     try {
       return await fetchImpl(`${baseUrl}${spec.path}`, {
         method: spec.method,
@@ -164,12 +181,18 @@ export function createOnCellClient(options: OnCellClientOptions): OnCellClient {
           ...(spec.body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         ...(spec.body !== undefined ? { body: JSON.stringify(spec.body) } : {}),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'network request failed';
+      const isTimeout = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+      const message = isTimeout
+        ? `timed out after ${timeoutMs}ms`
+        : err instanceof Error
+          ? err.message
+          : 'network request failed';
       throw new OnCellApiError({
         status: 0,
-        code: 'NETWORK_ERROR',
+        code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
         message: `${spec.method} ${spec.path}: ${message}`,
       });
     }
@@ -205,7 +228,13 @@ export function createOnCellClient(options: OnCellClientOptions): OnCellClient {
   return {
     // Idempotent-by-identity: re-create returns the existing cell record.
     createCell: (customerId) =>
-      send<CellRecord>({ method: 'POST', path: '/api/v1/cells', body: { customer_id: customerId }, idempotent: true }),
+      send<CellRecord>({
+        method: 'POST',
+        path: '/api/v1/cells',
+        body: { customer_id: customerId },
+        idempotent: true,
+        timeoutMs: MUTATION_TIMEOUT_MS,
+      }),
     getCell: (cellId) => send<CellRecord>({ method: 'GET', path: cellPath(cellId), idempotent: true }),
     listCells: async () => {
       const data = await send<unknown>({ method: 'GET', path: '/api/v1/cells', idempotent: true });
@@ -214,13 +243,21 @@ export function createOnCellClient(options: OnCellClientOptions): OnCellClient {
       if (Array.isArray(nested)) return nested as CellRecord[];
       throw new OnCellApiError({ status: 200, code: 'UNEXPECTED_RESPONSE', message: 'expected a cells array' });
     },
-    resumeCell: (cellId) => send<CellRecord>({ method: 'POST', path: cellPath(cellId, '/resume'), idempotent: true }),
+    resumeCell: (cellId) =>
+      send<CellRecord>({
+        method: 'POST',
+        path: cellPath(cellId, '/resume'),
+        idempotent: true,
+        timeoutMs: MUTATION_TIMEOUT_MS,
+      }),
     exec: async (cellId, input) => {
       const result = await send<ExecResult>({
         method: 'POST',
         path: cellPath(cellId, '/exec'),
         body: { cmd: input.cmd, ...(input.timeoutMs !== undefined ? { timeout_ms: input.timeoutMs } : {}) },
         idempotent: false,
+        // The HTTP request must outlive the command it carries.
+        timeoutMs: input.timeoutMs !== undefined ? input.timeoutMs + EXEC_TIMEOUT_SLACK_MS : DEFAULT_EXEC_TIMEOUT_MS,
       });
       if (input.expectSuccess === true && result.exit_code !== 0) {
         throw new OnCellApiError({
@@ -243,6 +280,7 @@ export function createOnCellClient(options: OnCellClientOptions): OnCellClient {
         path: cellPath(cellId, '/service'),
         body: { cmd, ...(env !== undefined ? { env } : {}) },
         idempotent: false,
+        timeoutMs: MUTATION_TIMEOUT_MS,
       }),
     getService: (cellId) =>
       send<ServiceRecord>({ method: 'GET', path: cellPath(cellId, '/service'), idempotent: false }),

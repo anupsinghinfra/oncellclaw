@@ -23,6 +23,7 @@ const envConfig = readEnvFile([
   'ONCELL_API_KEY',
   'ONCELL_API_URL',
   'ONCELLCLAW_RUNTIME',
+  'ONCELLCLAW_CELL_NAMESPACE',
 ]);
 
 /**
@@ -108,6 +109,11 @@ export const ACTIVE_RUNTIME: RuntimeKind = resolveRuntimeKind({
   runtimeOverride: process.env.ONCELLCLAW_RUNTIME || envConfig.ONCELLCLAW_RUNTIME,
   oncellApiKey: ONCELL_API_KEY,
 });
+// Raw (unvalidated) per-instance cell namespace. Validation + the
+// install-slug default live in src/cell-runtime.ts (resolveCellNamespace) —
+// config.ts only carries the configured value.
+export const ONCELLCLAW_CELL_NAMESPACE =
+  process.env.ONCELLCLAW_CELL_NAMESPACE || envConfig.ONCELLCLAW_CELL_NAMESPACE || '';
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.
