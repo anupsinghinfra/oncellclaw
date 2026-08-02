@@ -14,6 +14,7 @@ import { runMigrations } from './db/migrations/index.js';
 import { cleanupRuntimeOrphans, ensureRuntimeReady } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
+import { prewarmDefaultGroupCell } from './prewarm.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
@@ -157,6 +158,11 @@ async function main(): Promise<void> {
 
   // 7. Start the `ncl` CLI socket server (data/ncl.sock).
   await startCliServer();
+
+  // 8. Pre-warm the default group's cell in the background — the first
+  // message then finds bun + Claude Code already installed instead of
+  // paying the whole bootstrap. Fire-and-forget: never blocks readiness.
+  prewarmDefaultGroupCell();
 
   log.info('NanoClaw running');
 }
