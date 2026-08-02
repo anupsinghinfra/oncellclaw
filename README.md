@@ -11,8 +11,9 @@
 </p>
 
 <p align="center">
-  <a href="https://nanoclaw.dev">nanoclaw.dev</a>&nbsp; • &nbsp;
-  <a href="https://docs.nanoclaw.dev">docs</a>&nbsp; • &nbsp;
+  <a href="https://oncellclaw.com">oncellclaw.com</a>&nbsp; • &nbsp;
+  <a href="https://claw.oncell.ai">hosted&nbsp;(claw.oncell.ai)</a>&nbsp; • &nbsp;
+  <a href="https://oncell.ai/docs">OnCell&nbsp;docs</a>&nbsp; • &nbsp;
   <a href="README_zh.md">中文</a>&nbsp; • &nbsp;
   <a href="README_ja.md">日本語</a>&nbsp; • &nbsp;
   <a href="README_ko.md">한국어</a>&nbsp; • &nbsp;
@@ -38,11 +39,16 @@ NanoClaw's security thesis is OS-level isolation. OnCell extends it: each agent 
 
 The host process shrinks to a channel router: messages in, messages out. Everything the agent does happens in its cell. No `ONCELL_API_KEY`? Everything still runs fully local on Docker, exactly like upstream NanoClaw.
 
-## Quick Start
+## Two ways to run it
+
+- **Hosted — [claw.oncell.ai](https://claw.oncell.ai)**: sign in, pair a channel, message your assistant. No install; your agents live in OnCell cells from the first message. *(Rolling out.)*
+- **Self-hosted** — clone this repo and run the setup below. Your machine is the channel router; agents run on OnCell (or fully local on Docker, exactly like upstream NanoClaw).
+
+## Quick Start (self-hosted)
 
 ```bash
-git clone https://github.com/nanocoai/nanoclaw.git nanoclaw-v2
-cd nanoclaw-v2
+git clone https://github.com/anupsinghinfra/oncellclaw.git
+cd oncellclaw
 bash nanoclaw.sh
 ```
 
@@ -56,7 +62,7 @@ To run agents on OnCell instead of local Docker, add `ONCELL_API_KEY=oncell_sk_.
 Run from a fresh v2 checkout next to your v1 install:
 
 ```bash
-git clone https://github.com/nanocoai/nanoclaw.git nanoclaw-v2
+git clone https://github.com/anupsinghinfra/oncellclaw.git nanoclaw-v2
 cd nanoclaw-v2
 bash migrate-v2.sh
 ```
