@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://oncellclaw.com">oncellclaw.com</a>&nbsp; • &nbsp;
+  <a href="https://oncell.ai/claw">oncell.ai/claw</a>&nbsp; • &nbsp;
   <a href="https://oncell.ai/claw">hosted&nbsp;(oncell.ai/claw)</a>&nbsp; • &nbsp;
   <a href="https://oncell.ai/docs">OnCell&nbsp;docs</a>&nbsp; • &nbsp;
   <a href="https://discord.gg/ZmzTebH9xv"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
