@@ -72,6 +72,18 @@ export function getSessionsByAgentGroup(agentGroupId: string): Session[] {
   return getDb().prepare('SELECT * FROM sessions WHERE agent_group_id = ?').all(agentGroupId) as Session[];
 }
 
+/**
+ * Every session bound to a messaging group, across all wired agents and
+ * threads, active or not. Used by read-side surfaces that present a chat as
+ * one stream (the `web` channel's poll endpoint) rather than per-agent —
+ * fan-out means a single chat can own several sessions.
+ */
+export function getSessionsByMessagingGroup(messagingGroupId: string): Session[] {
+  return getDb()
+    .prepare('SELECT * FROM sessions WHERE messaging_group_id = ? ORDER BY created_at ASC')
+    .all(messagingGroupId) as Session[];
+}
+
 export function findSystemSession(agentGroupId: string, threadId: string): Session | undefined {
   return getDb()
     .prepare(

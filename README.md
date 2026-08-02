@@ -43,6 +43,41 @@ The host process shrinks to a channel router: messages in, messages out. Everyth
 - **Hosted — [oncell.ai/claw](https://oncell.ai/claw)**: sign in, pair a channel, message your assistant. No install; your agents live in OnCell cells from the first message. *(Rolling out.)*
 - **Self-hosted** — clone this repo and run the setup below. Your machine is the channel router; agents run on OnCell (or fully local on Docker, exactly like upstream NanoClaw).
 
+## Hosted (how it works)
+
+There is no separate hosted codebase. A hosted instance is *this* repo running as the service inside your own OnCell cell, started by [`scripts/cloud-start.sh`](scripts/cloud-start.sh) — the same script [oncell.ai/dashboard/claw](https://oncell.ai/claw) runs for you, and the same one you can run yourself on any box that has internet. It goes from an empty machine to a live assistant in one command: ensure git/Node/pnpm, clone (or fast-forward) the checkout, install, build, provision one agent group paired to the built-in [`web` channel](src/channels/web.ts), then `exec` the host so your supervisor owns the process. Every stage is idempotent, so a restart converges instead of duplicating — it fast-forwards rather than re-cloning, and finds the agent group it already made rather than making a second one. With `ONCELLCLAW_RUNTIME=oncell` the host's own agent groups live in sibling cells under the same account, so the host cell stays a thin router. The `web` channel puts the whole conversation on the process's single HTTP port (`$PORT`), which is what the cell's public preview URL maps to:
+
+```bash
+# talk to it
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"text":"hello"}' https://<host>/web/assistant/message          # → 202 {"ok":true,"id":"web-…"}
+# poll for replies (echo `cursor` back as `after` next time)
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/assistant/messages?after='                      # → 200 {"messages":[…],"cursor":"…"}
+curl https://<host>/health                                               # → 200 {"ok":true,"groups":[…]}
+```
+
+**First boot:** the script binds `$PORT` immediately — before cloning anything — with a tiny placeholder server, because service supervisors (the OnCell cell supervisor included) kill a service that isn't accepting connections within seconds, and a cold install takes minutes. While bootstrap runs, **every** path (including `/health`) answers `503` with `{"ok":false,"phase":"…"}`, where `phase` walks `starting → toolchain → clone → install → build → provision → handoff`. A brief connection-refused gap follows while the placeholder hands the port to the real host, then `/health` returns `200 {"ok":true,…}` — poll it until `ok` is true to know the assistant is live. Warm restarts skip the install work and hand off in seconds.
+
+That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the internet and your assistant: the channel refuses to start without one unless you explicitly set `ONCELLCLAW_WEB_ALLOW_INSECURE=1` for a trusted local network. Nothing here writes a secret to disk — credentials travel in the process environment only.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ONCELLCLAW_WEB_TOKEN` | — | Bearer token for every `/web/…` request. **Required** unless the insecure flag is set. Generate with `openssl rand -hex 32`. |
+| `ONCELLCLAW_WEB_ALLOW_INSECURE` | unset | `1` runs the `web` channel with no authentication. Local development only. |
+| `PORT` | `3000` | HTTP listen port. Always set by the cell supervisor on hosted runs — the fallback is for bare self-hosting only. `WEBHOOK_PORT` still overrides it. |
+| `ONCELLCLAW_GROUP` | `assistant` | Agent group to provision. Also the URL slug: `/web/<group>/message`. |
+| `ONCELLCLAW_PERSONA` | — | Standing instructions for that group, staged once as its persona. Never overwrites an edited one. |
+| `ONCELLCLAW_REPO` | this repo | Git URL to run. |
+| `ONCELLCLAW_REF` | `main` | Branch, tag, or commit sha. |
+| `ONCELLCLAW_DIR` | `$HOME/oncellclaw` | Persistent checkout. `data/`, `groups/`, `store/` and `.env` live here and survive updates. |
+| `ONCELLCLAW_RUNTIME` | `oncell` | `oncell` or `docker` (see [Runtimes](#runtimes-oncell-cells-or-local-docker)). |
+| `ONCELL_API_KEY` | — | Required when the runtime is `oncell`. |
+| `ONCELL_API_URL` | — | Optional API endpoint override. |
+| `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Agent credential. Exactly one is required. |
+
+The `web` channel is not hosted-only — it ships in main like `cli` does, so a self-hoster can point a browser, a script, or their own frontend at a local oncellclaw with the same three endpoints. See [config-examples/hosted.env.example](config-examples/hosted.env.example).
+
 ## Quick Start (self-hosted)
 
 ```bash
@@ -210,6 +245,10 @@ Key files:
 - `src/oncell-client.ts` — minimal self-contained OnCell API client
 - `src/db/` — central DB (users, roles, agent groups, messaging groups, wiring, migrations)
 - `src/channels/` — channel adapter infra (adapters installed via `/add-<channel>` skills)
+- `src/channels/web.ts` — built-in `web` channel: HTTP chat + `/health` on the one port
+- `src/webhook-server.ts` — that one HTTP port (`WEBHOOK_PORT`, else `PORT`, else 3000)
+- `src/web-provision.ts` / `scripts/provision.ts` — non-interactive setup: one group paired to `web`
+- `scripts/cloud-start.sh` — empty machine → running host; the hosted bootstrap
 - `src/providers/` — host-side provider config (`claude` baked in; others via skills)
 - `container/agent-runner/` — Bun agent-runner: poll loop, MCP tools, provider abstraction
 - `groups/<folder>/` — per-agent-group filesystem (`CLAUDE.md`, skills, container config)

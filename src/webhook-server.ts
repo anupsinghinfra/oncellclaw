@@ -1,14 +1,25 @@
 /**
- * Minimal HTTP server for Chat SDK adapter webhooks.
+ * Minimal HTTP server — the process's ONE inbound HTTP surface.
  *
- * Starts lazily on first adapter registration. Routes requests by path:
+ * Starts lazily on first registration. Routes requests by path:
  *   /webhook/{adapterName} → chat.webhooks[adapterName](request)
  *   /webhook/{path}        → raw handler from registerWebhookHandler(path, ...)
+ *   /{segment}[/...]       → raw handler from registerHttpRoute(segment, ...)
  *
  * Multiple Chat instances can register adapters — each adapter name maps
  * to its owning Chat instance. Raw routes let modules receive non-Chat-SDK
  * webhooks (GitHub, payment providers, health checks) on the same server
  * without editing this file or opening a second port.
+ *
+ * Top-level routes (registerHttpRoute) exist for surfaces that aren't
+ * webhooks at all and shouldn't pretend to be: the `web` channel's
+ * `/web/{group}/...` chat endpoints and its `/health` liveness probe. Same
+ * server, same port, no second listener.
+ *
+ * Port resolution, first set wins: WEBHOOK_PORT, PORT, 3000. PORT is what a
+ * process supervisor hands a service (including an OnCell cell running
+ * oncellclaw as its service); WEBHOOK_PORT stays the explicit override, so
+ * existing installs are unaffected. Bound on 0.0.0.0.
  */
 import http from 'http';
 
@@ -28,6 +39,8 @@ export type RawWebhookHandler = (req: http.IncomingMessage, res: http.ServerResp
 
 const routes = new Map<string, WebhookEntry>();
 const rawRoutes = new Map<string, RawWebhookHandler>();
+/** Top-level path segments claimed via registerHttpRoute (not under /webhook). */
+const httpRoutes = new Map<string, RawWebhookHandler>();
 let server: http.Server | null = null;
 
 /** Convert Node.js IncomingMessage to a Web API Request. */
@@ -107,13 +120,68 @@ export function registerWebhookHandler(path: string, handler: RawWebhookHandler)
   log.info('Webhook handler registered', { path: `/webhook/${path}` });
 }
 
+/**
+ * Claim a TOP-LEVEL path segment (`/{segment}` and everything under it) on
+ * the shared server. `/webhook` is reserved for the routes above and cannot
+ * be claimed here. Starts the server lazily on first call.
+ *
+ * The handler owns the request/response directly and receives the full,
+ * unmodified `req.url` — sub-path and query parsing are its business.
+ */
+export function registerHttpRoute(segment: string, handler: RawWebhookHandler): void {
+  if (segment === 'webhook') {
+    throw new Error("registerHttpRoute: '/webhook' is reserved — use registerWebhookHandler");
+  }
+  httpRoutes.set(segment, handler);
+  ensureServer();
+  log.info('HTTP route registered', { path: `/${segment}` });
+}
+
+/** Release a top-level segment claimed by registerHttpRoute (adapter teardown). */
+export function unregisterHttpRoute(segment: string): void {
+  httpRoutes.delete(segment);
+}
+
+/** Effective listen port: WEBHOOK_PORT, then PORT, then the 3000 default. */
+export function resolveWebhookPort(): number {
+  for (const raw of [process.env.WEBHOOK_PORT, process.env.PORT]) {
+    if (!raw) continue;
+    const port = Number.parseInt(raw, 10);
+    if (Number.isInteger(port) && port > 0 && port < 65536) return port;
+    log.warn('Ignoring unusable HTTP port value', { value: raw });
+  }
+  return DEFAULT_PORT;
+}
+
 function ensureServer(): void {
   if (server) return;
 
-  const port = parseInt(process.env.WEBHOOK_PORT || String(DEFAULT_PORT), 10);
+  const port = resolveWebhookPort();
 
   server = http.createServer(async (req, res) => {
     const url = req.url || '/';
+
+    const first = url.match(/^\/([^/?]+)/)?.[1];
+
+    // Route: /{segment} — top-level claims (web channel, health probe).
+    if (first && first !== 'webhook') {
+      const httpHandler = httpRoutes.get(first);
+      if (!httpHandler) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found');
+        return;
+      }
+      try {
+        await httpHandler(req, res);
+      } catch (err) {
+        log.error('HTTP route handler error', { route: first, url: req.url, err });
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        }
+      }
+      return;
+    }
 
     // Route: /webhook/{adapterName}
     const match = url.match(/^\/webhook\/([^/?]+)/);
@@ -160,7 +228,7 @@ function ensureServer(): void {
   });
 
   server.listen(port, '0.0.0.0', () => {
-    log.info('Webhook server started', { port, adapters: [...routes.keys()] });
+    log.info('HTTP server started', { port, adapters: [...routes.keys()], routes: [...httpRoutes.keys()] });
   });
 }
 
@@ -171,6 +239,7 @@ export async function stopWebhookServer(): Promise<void> {
     server = null;
     routes.clear();
     rawRoutes.clear();
-    log.info('Webhook server stopped');
+    httpRoutes.clear();
+    log.info('HTTP server stopped');
   }
 }
