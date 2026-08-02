@@ -147,6 +147,12 @@ import {
 import { parseRatePerMin, SlidingWindowLimiter, TokenBucketLimiter } from './rate-limit.js';
 import { DISCORD_CHANNEL_TYPE, DISCORD_TOKEN_ENV_KEY, verifyDiscordToken } from './discord.js';
 import { TELEGRAM_CHANNEL_TYPE, TELEGRAM_TOKEN_ENV_KEY, verifyTelegramToken } from './telegram.js';
+import {
+  currentWhatsappQrState,
+  ensureWhatsappPairing,
+  onWhatsappQrChange,
+  stopWhatsappPairing,
+} from './whatsapp-qr.js';
 
 /** Channel type + registry key. */
 export const WEB_CHANNEL_TYPE = 'web';
@@ -1367,6 +1373,17 @@ function createAdapter(): ChannelAdapter | null {
    *          → 502 {"error":"discord_unreachable"}  transport failure to Discord
    *   DELETE /web/channels/discord
    *          → 200 {"ok":true}                      adapter stopped, credential removed
+   *
+   *   GET    /web/channels/whatsapp/qr             (?stream=1 for SSE)
+   *          → 200 { status, qr, pngBase64, error?, version }
+   *          QR pairing relay: starts (or attaches to) a pairing session
+   *          driven by the canonical setup/whatsapp-auth step and serves
+   *          the current rotating QR until the phone scans it. `status`
+   *          walks starting → qr_ready → paired | already_paired | failed.
+   *          With ?stream=1 the same JSON rides SSE `event: qr` frames,
+   *          pushed on every rotation, ending after a terminal state.
+   *          See src/channels/whatsapp-qr.ts for the trunk boundaries
+   *          (Baileys/qrcode are add-whatsapp-installed).
    */
   async function handleChannels(req: http.IncomingMessage, res: http.ServerResponse, rest: string[]): Promise<void> {
     if (rest[0] === TELEGRAM_CHANNEL_TYPE) {
@@ -1393,7 +1410,74 @@ function createAdapter(): ChannelAdapter | null {
       sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'POST, DELETE' });
       return;
     }
-    sendJson(res, 404, { error: 'unknown_channel', hint: '/web/channels/telegram | /web/channels/discord' });
+    if (rest[0] === 'whatsapp') {
+      // QR relay only — WhatsApp has no token to POST; pairing IS the scan.
+      if ((req.method === 'GET' || req.method === 'HEAD') && rest[1] === 'qr' && rest.length === 2) {
+        handleWhatsappQr(req, res);
+        return;
+      }
+      sendJson(res, 404, { error: 'not_found', hint: '/web/channels/whatsapp/qr' });
+      return;
+    }
+    sendJson(res, 404, {
+      error: 'unknown_channel',
+      hint: '/web/channels/telegram | /web/channels/discord | /web/channels/whatsapp/qr',
+    });
+  }
+
+  /**
+   * GET /web/channels/whatsapp/qr — the pairing relay. A read like the
+   * other GETs (token-authed upstream, never message-rate-limited). The
+   * first request starts the pairing session; every request returns the
+   * current state. `?stream=1` upgrades to SSE and pushes a frame per
+   * rotation until a terminal state closes the stream.
+   */
+  function handleWhatsappQr(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const state = ensureWhatsappPairing();
+
+    if (url.searchParams.get('stream') !== '1') {
+      sendJson(res, 200, state);
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(': connected\n\n');
+
+    let closed = false;
+    let lastVersion = -1;
+    const cleanup = (): void => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    const push = (): void => {
+      if (closed) return;
+      const current = currentWhatsappQrState() ?? state;
+      if (current.version === lastVersion) return;
+      lastVersion = current.version;
+      res.write(`event: qr\ndata: ${JSON.stringify(current)}\n\n`);
+      if (current.status === 'paired' || current.status === 'already_paired' || current.status === 'failed') {
+        cleanup();
+        res.end();
+      }
+    };
+    const unsubscribe = onWhatsappQrChange(push);
+    const heartbeat = setInterval(() => {
+      if (closed) return;
+      res.write(': hb\n\n');
+      push(); // catch-up sweep, same belt-and-braces as the transcript stream
+    }, sseHeartbeatMs());
+    res.on('close', cleanup);
+    req.on('close', cleanup);
+
+    push(); // initial frame (may already be terminal)
   }
 
   async function pairTelegram(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1581,6 +1665,7 @@ function createAdapter(): ChannelAdapter | null {
       unregisterHttpRoute(WEB_ROUTE);
       unregisterHttpRoute(HEALTH_ROUTE);
       closeAllStreams();
+      stopWhatsappPairing();
       mounted = false;
     },
 

@@ -972,6 +972,137 @@ describe('web channel — POST /web/channels/discord/pair', () => {
   });
 });
 
+describe('web channel — GET /web/channels/whatsapp/qr', () => {
+  const STUB_PATH = `${TEST_DIR}/wa-stub.cjs`;
+  const AUTH_DIR = `${TEST_DIR}/wa-auth`;
+  const SPAWN_MARKER = `${TEST_DIR}/wa-stub-ran`;
+
+  /**
+   * Stands in for `setup/index.ts --step whatsapp-auth -- --method qr` — the
+   * REAL pairing source in production — emitting the exact status-block
+   * protocol that step's header documents (WHATSAPP_AUTH_QR / WHATSAPP_AUTH).
+   */
+  const STUB_SOURCE = `
+    const fs = require('fs');
+    fs.writeFileSync(process.env.WA_STUB_MARKER, 'ran');
+    const block = (name, fields) => {
+      const lines = ['=== NANOCLAW SETUP: ' + name + ' ==='];
+      for (const [k, v] of Object.entries(fields)) lines.push(k + ': ' + v);
+      lines.push('=== END ===');
+      console.log(lines.join('\\n'));
+    };
+    const mode = process.env.WA_STUB_MODE || 'success';
+    if (mode === 'failed') {
+      setTimeout(() => { block('WHATSAPP_AUTH', { STATUS: 'failed', ERROR: 'timeout' }); process.exit(1); }, 30);
+    } else {
+      block('WHATSAPP_AUTH_QR', { QR: 'qr-payload-one' });
+      setTimeout(() => block('WHATSAPP_AUTH_QR', { QR: 'qr-payload-two' }), 120);
+      setTimeout(() => { block('WHATSAPP_AUTH', { STATUS: 'success', PHONE: '14155551234' }); process.exit(0); }, 260);
+    }
+    setInterval(() => {}, 1000); // hold the process open until a timeout above exits it
+  `;
+
+  interface QrState {
+    status: string;
+    qr: string | null;
+    pngBase64: string | null;
+    error?: string;
+    version: number;
+  }
+
+  beforeEach(async () => {
+    fs.writeFileSync(STUB_PATH, STUB_SOURCE);
+    process.env.ONCELLCLAW_WA_AUTH_CMD = `node ${STUB_PATH}`;
+    process.env.ONCELLCLAW_WA_AUTH_DIR = AUTH_DIR;
+    process.env.WA_STUB_MARKER = SPAWN_MARKER;
+    process.env.WA_STUB_MODE = 'success';
+    // Long enough for a poll to OBSERVE the failed state, short enough that
+    // the retry test's second phase respawns within its waitFor window.
+    process.env.ONCELLCLAW_WA_QR_RETRY_HOLDOFF_MS = '500';
+    seedGroup();
+    await startChannels({ token: TOKEN });
+  });
+
+  afterEach(() => {
+    delete process.env.ONCELLCLAW_WA_AUTH_CMD;
+    delete process.env.ONCELLCLAW_WA_AUTH_DIR;
+    delete process.env.WA_STUB_MARKER;
+    delete process.env.WA_STUB_MODE;
+    delete process.env.ONCELLCLAW_WA_QR_RETRY_HOLDOFF_MS;
+  });
+
+  const getQr = async (): Promise<QrState> =>
+    (await (await req('/web/channels/whatsapp/qr', { headers: auth() })).json()) as QrState;
+
+  it('requires auth', async () => {
+    expect((await req('/web/channels/whatsapp/qr')).status).toBe(401);
+    // The pairing subprocess must not have been spawned by an unauthorized hit.
+    expect(fs.existsSync(SPAWN_MARKER)).toBe(false);
+  });
+
+  it('starts a session, serves the rotating QR, and lands on paired', async () => {
+    const first = await getQr();
+    expect(['starting', 'qr_ready']).toContain(first.status);
+
+    // Rotation: the second QR replaces the first.
+    await vi.waitFor(async () => expect((await getQr()).qr).toBe('qr-payload-two'), { timeout: 3000 });
+    // Terminal: the scan completed; the QR is cleared from the state.
+    await vi.waitFor(async () => expect((await getQr()).status).toBe('paired'), { timeout: 3000 });
+    expect((await getQr()).qr).toBeNull();
+    // qrcode is an add-whatsapp-installed dependency — absent here, so the
+    // PNG stays null and the raw payload was the served surface.
+    expect((await getQr()).pngBase64).toBeNull();
+  });
+
+  it('streams SSE frames per rotation and closes after the terminal state', async () => {
+    const res = await req('/web/channels/whatsapp/qr?stream=1', { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+
+    const raw = await res.text(); // resolves when the server ends the stream
+    const frames = raw
+      .split('\n\n')
+      .filter((b) => b.includes('event: qr'))
+      .map((b) => JSON.parse(b.split('data: ')[1]!) as QrState);
+    expect(frames.length).toBeGreaterThanOrEqual(2);
+    expect(frames.some((f) => f.qr === 'qr-payload-one' || f.qr === 'qr-payload-two')).toBe(true);
+    expect(frames.at(-1)!.status).toBe('paired');
+  });
+
+  it('a failed pairing step surfaces the error, and a later request retries', async () => {
+    process.env.WA_STUB_MODE = 'failed';
+    await vi.waitFor(
+      async () => {
+        const state = await getQr();
+        expect(state.status).toBe('failed');
+        expect(state.error).toContain('timeout');
+      },
+      { timeout: 3000 },
+    );
+
+    // Once the holdoff lapses, the next request spawns a fresh (now
+    // healthy) session — "request the QR again" is the retry gesture.
+    process.env.WA_STUB_MODE = 'success';
+    await vi.waitFor(async () => expect((await getQr()).status).toBe('paired'), { timeout: 4000 });
+  });
+
+  it('reports already_paired without spawning when creds exist', async () => {
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+    fs.writeFileSync(`${AUTH_DIR}/creds.json`, JSON.stringify({ me: { id: '14155551234:1@s.whatsapp.net' } }));
+
+    const state = await getQr();
+    expect(state.status).toBe('already_paired');
+    expect(fs.existsSync(SPAWN_MARKER)).toBe(false);
+  });
+
+  it('is exempt from the message limiter and 404s other whatsapp paths', async () => {
+    await startChannels({ token: TOKEN, messagesPerMin: '1' });
+    await req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text: 'x' }) });
+    expect((await req('/web/channels/whatsapp/qr', { headers: auth() })).status).toBe(200);
+    expect((await req('/web/channels/whatsapp/nope', { headers: auth() })).status).toBe(404);
+  });
+});
+
 describe('web channel — /web/status supported-channel manifest', () => {
   it('always lists all six supported channels with honest states', async () => {
     seedGroup();
