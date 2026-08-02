@@ -54,7 +54,7 @@ describe('scanInstall path groups', () => {
       fs.mkdirSync(path.join(root, dir));
     }
     fs.writeFileSync(path.join(root, '.env'), 'KEY=v');
-    fs.writeFileSync(path.join(root, 'start-nanoclaw.sh'), '#!/bin/bash');
+    fs.writeFileSync(path.join(root, 'start-oncellclaw.sh'), '#!/bin/bash');
 
     const inv = scanInstall(deps());
 
@@ -62,7 +62,7 @@ describe('scanInstall path groups', () => {
       'data',
       'logs',
       '.env',
-      'start-nanoclaw.sh',
+      'start-oncellclaw.sh',
     ]);
     expect(inv.runtime.map((i) => path.basename(i.path))).toEqual([
       'dist',

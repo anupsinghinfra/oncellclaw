@@ -442,12 +442,12 @@ function setupNohupFallback(
 ): void {
   log.warn('No systemd detected — generating nohup wrapper script');
 
-  const wrapperPath = path.join(projectRoot, 'start-nanoclaw.sh');
+  const wrapperPath = path.join(projectRoot, 'start-oncellclaw.sh');
   const pidFile = path.join(projectRoot, 'nanoclaw.pid');
 
   const lines = [
     '#!/bin/bash',
-    '# start-nanoclaw.sh — Start NanoClaw without systemd',
+    '# start-oncellclaw.sh — Start NanoClaw without systemd',
     `# To stop: kill \\$(cat ${pidFile})`,
     '',
     'set -euo pipefail',

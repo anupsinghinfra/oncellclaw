@@ -9,4 +9,4 @@ for arg in "$@"; do
     *)  ARGS+=("$arg") ;;
   esac
 done
-exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanoclaw.sh" --uninstall "${ARGS[@]}"
+exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/oncellclaw.sh" --uninstall "${ARGS[@]}"

@@ -99,7 +99,7 @@ export function scanInstall(deps: ScanDeps): Inventory {
     { rel: 'data', what: 'Database & conversations' },
     { rel: 'logs', what: 'Logs' },
     { rel: '.env', what: 'Secrets / API keys (.env)', where: 'backed up before removal' },
-    { rel: 'start-nanoclaw.sh', what: 'Start script', where: 'start-nanoclaw.sh' },
+    { rel: 'start-oncellclaw.sh', what: 'Start script', where: 'start-oncellclaw.sh' },
     { rel: 'nanoclaw.pid', what: 'PID file', where: 'nanoclaw.pid' },
   ]);
 

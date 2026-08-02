@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# NanoClaw — end-to-end setup entry point.
+# oncellclaw — end-to-end setup entry point.
 #
 # Runs two parts from the user's perspective as one continuous flow:
 #   - bash-side: install the basics (Node + pnpm + native modules) under a
@@ -45,7 +45,7 @@ for arg in "$@"; do
     source "$PROJECT_ROOT/setup/lib/install-slug.sh"
     UNINSTALL_RUNTIME="${CONTAINER_RUNTIME:-docker}"
     echo "Can't run the uninstaller: dependencies are missing (node_modules/)."
-    echo "Either re-run 'bash nanoclaw.sh' once to restore them, or clean up manually:"
+    echo "Either re-run 'bash oncellclaw.sh' once to restore them, or clean up manually:"
     echo ""
     if [ "$(uname -s)" = "Darwin" ]; then
       echo "  launchctl unload ~/Library/LaunchAgents/$(launchd_label).plist"
@@ -87,7 +87,7 @@ write_header() {
   commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
   {
     echo "## ${ts} · setup:auto started"
-    echo "  invocation: nanoclaw.sh"
+    echo "  invocation: oncellclaw.sh"
     echo "  user: $(whoami)"
     echo "  cwd: ${PROJECT_ROOT}"
     echo "  branch: ${branch}"
@@ -279,7 +279,7 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -eq 0 ]; then
       printf '  %s\n' "$(dim '4. Log out:                     exit')"
       printf '  %s\n' "$(dim '5. Log back in as the new user: ssh nanoclaw@your-server')"
       printf '  %s\n' "$(dim '6. Clone the repo:              git clone https://github.com/nanocoai/nanoclaw.git && cd nanoclaw')"
-      printf '  %s\n\n' "$(dim '7. Re-run setup:               bash nanoclaw.sh')"
+      printf '  %s\n\n' "$(dim '7. Re-run setup:               bash oncellclaw.sh')"
       exit 1
       ;;
   esac
@@ -320,7 +320,7 @@ if [ "$(uname -s)" = "Darwin" ] && ! command -v brew >/dev/null 2>&1; then
       if ! command -v brew >/dev/null 2>&1; then
         printf '\n  %s %s\n' "$(red '✗')" "Homebrew install didn't complete."
         printf '  %s\n\n' \
-          "$(dim 'Install manually from https://brew.sh and re-run: bash nanoclaw.sh')"
+          "$(dim 'Install manually from https://brew.sh and re-run: bash oncellclaw.sh')"
         exit 1
       fi
       printf '\n'

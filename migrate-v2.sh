@@ -176,7 +176,7 @@ else
 fi
 
 # setup.sh may have installed pnpm to a prefix not on our PATH — replay
-# the same lookup nanoclaw.sh does.
+# the same lookup oncellclaw.sh does.
 if ! command -v pnpm >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
   NPM_PREFIX="$(npm config get prefix 2>/dev/null)"
   if [ -n "$NPM_PREFIX" ] && [ -x "$NPM_PREFIX/bin/pnpm" ]; then

@@ -27,7 +27,7 @@ function inventory(overrides: Partial<Inventory> = {}): Inventory {
       item('/proj/data', 'Database & conversations'),
       item('/proj/logs', 'Logs'),
       item('/proj/.env', 'Secrets / API keys (.env)'),
-      item('/proj/start-nanoclaw.sh', 'Start script'),
+      item('/proj/start-oncellclaw.sh', 'Start script'),
     ],
     runtime: [
       // node_modules deliberately FIRST — the planner must still order it last.

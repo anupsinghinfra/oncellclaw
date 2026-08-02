@@ -31,10 +31,10 @@ NanoClaw는 그와 동일한 핵심 기능을 제공하지만, 이해할 수 있
 ```bash
 git clone https://github.com/nanocoai/nanoclaw.git nanoclaw-v2
 cd nanoclaw-v2
-bash nanoclaw.sh
+bash oncellclaw.sh
 ```
 
-`nanoclaw.sh`는 갓 준비한 머신에서 시작해 메시지를 보낼 수 있는 이름 붙은 에이전트까지 안내합니다. 누락된 경우 Node, pnpm, Docker를 설치하고, Anthropic 자격 증명을 OneCLI에 등록하며, 에이전트 컨테이너를 빌드하고, 첫 채널(Telegram, Discord, WhatsApp 또는 로컬 CLI)을 페어링합니다. 어떤 단계가 실패하면 Claude Code가 자동으로 호출되어 원인을 진단하고 중단된 지점부터 재개합니다.
+`oncellclaw.sh`는 갓 준비한 머신에서 시작해 메시지를 보낼 수 있는 이름 붙은 에이전트까지 안내합니다. 누락된 경우 Node, pnpm, Docker를 설치하고, Anthropic 자격 증명을 OneCLI에 등록하며, 에이전트 컨테이너를 빌드하고, 첫 채널(Telegram, Discord, WhatsApp 또는 로컬 CLI)을 페어링합니다. 어떤 단계가 실패하면 Claude Code가 자동으로 호출되어 원인을 진단하고 중단된 지점부터 재개합니다.
 
 <details>
 <summary><strong>NanoClaw v1에서 마이그레이션하시나요?</strong></summary>
@@ -170,7 +170,7 @@ Docker는 크로스 플랫폼 지원(macOS, Linux, 그리고 WSL2 경유 Windows
 
 **Linux나 Windows에서 실행할 수 있나요?**
 
-네. Docker가 기본 런타임이며 macOS, Linux, Windows(WSL2 경유)에서 작동합니다. `bash nanoclaw.sh`를 실행하기만 하면 됩니다.
+네. Docker가 기본 런타임이며 macOS, Linux, Windows(WSL2 경유)에서 작동합니다. `bash oncellclaw.sh`를 실행하기만 하면 됩니다.
 
 **이것은 안전한가요?**
 
@@ -197,12 +197,12 @@ Claude Code에게 물어보세요. "스케줄러가 왜 실행되지 않지?" "�
 
 **설정이 왜 작동하지 않나요?**
 
-어떤 단계가 실패하면 `nanoclaw.sh`는 진단하고 재개하기 위해 Claude Code로 넘깁니다. 그래도 해결되지 않으면 `claude`를 실행한 뒤 `/debug`를 실행하세요. Claude가 다른 사용자에게도 영향을 줄 만한 문제를 발견하면, 관련 설정 단계나 스킬에 대한 PR을 열어주세요.
+어떤 단계가 실패하면 `oncellclaw.sh`는 진단하고 재개하기 위해 Claude Code로 넘깁니다. 그래도 해결되지 않으면 `claude`를 실행한 뒤 `/debug`를 실행하세요. Claude가 다른 사용자에게도 영향을 줄 만한 문제를 발견하면, 관련 설정 단계나 스킬에 대한 PR을 열어주세요.
 
 **NanoClaw를 어떻게 제거하나요?**
 
 ```bash
-bash nanoclaw.sh --uninstall
+bash oncellclaw.sh --uninstall
 ```
 
 모든 설치는 체크아웃별 ID로 태깅되므로, 제거 프로그램은 해당 사본에 속한 것만 제거합니다: 백그라운드 서비스, 컨테이너와 이미지, 앱 데이터와 로그, 에이전트 파일, 그리고 이 사본의 OneCLI 볼트 에이전트입니다. 공유되는 것 — OneCLI 앱과 여러분의 자격 증명, 머신의 다른 NanoClaw 사본 — 은 그대로 둡니다. 무엇을 발견했는지 정확히 보여주고 그룹별로 확인을 요청합니다. 여러분이 동의하기 전까지는 아무것도 삭제되지 않습니다. 변경 없이 미리 보려면 `--dry-run`을, 프롬프트를 건너뛰려면 `--yes`를 사용하세요. `.env`는 제거 전에 백업됩니다. 마무리하려면 체크아웃 폴더 자체를 삭제하세요.

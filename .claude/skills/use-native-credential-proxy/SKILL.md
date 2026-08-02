@@ -135,7 +135,7 @@ Run from your NanoClaw project root:
 source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 # Linux: systemctl --user restart $(systemd_unit)
-# WSL/manual: stop and re-run bash start-nanoclaw.sh
+# WSL/manual: stop and re-run bash start-oncellclaw.sh
 ```
 
 ### Verify

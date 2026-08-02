@@ -1,7 +1,7 @@
 # Setup flow
 
 This document is the contract for NanoClaw's end-to-end scripted setup
-(`bash nanoclaw.sh` → `pnpm run setup:auto`). Read it before adding a new
+(`bash oncellclaw.sh` → `pnpm run setup:auto`). Read it before adding a new
 step, fixing a regression, or changing how output is rendered.
 
 ## The three output levels
@@ -199,7 +199,7 @@ convention — [skill-engine-seam.md](skill-engine-seam.md) §6).
 
 | File | Role |
 |---|---|
-| `nanoclaw.sh` | Top-level wrapper. Phase 1 (bootstrap) and phase 2 (setup:auto) orchestration. Writes bootstrap's raw log + progression entry. `--uninstall` bypasses bootstrap entirely — it execs setup:auto directly (the flow lives in `setup/uninstall/`), or prints manual-cleanup guidance and exits 1 when the TS toolchain is missing. |
+| `oncellclaw.sh` | Top-level wrapper. Phase 1 (bootstrap) and phase 2 (setup:auto) orchestration. Writes bootstrap's raw log + progression entry. `--uninstall` bypasses bootstrap entirely — it execs setup:auto directly (the flow lives in `setup/uninstall/`), or prints manual-cleanup guidance and exits 1 when the TS toolchain is missing. |
 | `setup.sh` | Phase 1 bootstrap: Node, pnpm, native-module verify. Emits its own `BOOTSTRAP` status block (historically printed to stdout; now goes to the bootstrap raw log). |
 | `setup/auto.ts` | Phase 2 driver. Orchestrates the clack UI, step execution, user prompts, and writes to all three log levels for every step it spawns. |
 | `setup/logs.ts` | The logging primitives (`step`, `userInput`, `complete`, `stepRawLog`, `reset`). Single source of truth for level 2/3 formatting and file paths. |

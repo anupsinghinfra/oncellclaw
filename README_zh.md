@@ -31,10 +31,10 @@ NanoClaw 用一个您能轻松理解的代码库提供了同样的核心功能�
 ```bash
 git clone https://github.com/nanocoai/nanoclaw.git nanoclaw-v2
 cd nanoclaw-v2
-bash nanoclaw.sh
+bash oncellclaw.sh
 ```
 
-`nanoclaw.sh` 会把您从一台全新机器一直带到一个可以直接发消息的命名智能体。它会在缺失时安装 Node、pnpm 和 Docker，向 OneCLI 注册您的 Anthropic 凭据，构建智能体容器，并配对您的第一个渠道（Telegram、Discord、WhatsApp 或本地 CLI）。如果某一步失败，会自动调用 Claude Code 进行诊断并从中断处继续。
+`oncellclaw.sh` 会把您从一台全新机器一直带到一个可以直接发消息的命名智能体。它会在缺失时安装 Node、pnpm 和 Docker，向 OneCLI 注册您的 Anthropic 凭据，构建智能体容器，并配对您的第一个渠道（Telegram、Discord、WhatsApp 或本地 CLI）。如果某一步失败，会自动调用 Claude Code 进行诊断并从中断处继续。
 
 ## 设计哲学
 
@@ -147,7 +147,7 @@ Docker 提供跨平台支持（macOS、Linux、Windows via WSL2）和成熟的�
 
 **我可以在 Linux 或 Windows 上运行吗？**
 
-可以。Docker 是默认运行时，可在 macOS、Linux 以及 Windows（通过 WSL2）上工作。运行 `bash nanoclaw.sh` 就行。
+可以。Docker 是默认运行时，可在 macOS、Linux 以及 Windows（通过 WSL2）上工作。运行 `bash oncellclaw.sh` 就行。
 
 **这个项目安全吗？**
 
@@ -174,7 +174,7 @@ ANTHROPIC_AUTH_TOKEN=your-token-here
 
 **为什么安装对我不成功？**
 
-如果某一步失败，`nanoclaw.sh` 会把控制权交给 Claude Code 进行诊断并从中断处继续。如果还是没解决，运行 `claude`，然后 `/debug`。如果 Claude 发现一个可能影响其他用户的问题，请对相关的安装步骤或技能提 PR。
+如果某一步失败，`oncellclaw.sh` 会把控制权交给 Claude Code 进行诊断并从中断处继续。如果还是没解决，运行 `claude`，然后 `/debug`。如果 Claude 发现一个可能影响其他用户的问题，请对相关的安装步骤或技能提 PR。
 
 **什么样的更改会被接受进代码库？**
 

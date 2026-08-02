@@ -48,10 +48,10 @@ The host process shrinks to a channel router: messages in, messages out. Everyth
 ```bash
 git clone https://github.com/anupsinghinfra/oncellclaw.git
 cd oncellclaw
-bash nanoclaw.sh
+bash oncellclaw.sh
 ```
 
-`nanoclaw.sh` walks you from a fresh machine to a named agent you can message. It installs Node, pnpm, and Docker if missing, registers your Anthropic credential with OneCLI, builds the agent container, and pairs your first channel (iMessage, Telegram, Discord, WhatsApp, or a local CLI). If a step fails, Claude Code is invoked automatically to diagnose and resume from where it broke.
+`oncellclaw.sh` walks you from a fresh machine to a named agent you can message. It installs Node, pnpm, and Docker if missing, registers your Anthropic credential with OneCLI, builds the agent container, and pairs your first channel (iMessage, Telegram, Discord, WhatsApp, or a local CLI). If a step fails, Claude Code is invoked automatically to diagnose and resume from where it broke.
 
 To run agents on OnCell instead of local Docker, add `ONCELL_API_KEY=oncell_sk_...` to `.env` before (or after) setup — see [config-examples/oncell.env.example](config-examples/oncell.env.example). The Docker install step can then be skipped entirely.
 
@@ -222,7 +222,7 @@ Docker provides cross-platform support (macOS, Linux and Windows via WSL2) and a
 
 **Can I run this on Linux or Windows?**
 
-Yes. Docker is the default runtime and works on macOS, Linux, and Windows (via WSL2). Just run `bash nanoclaw.sh`.
+Yes. Docker is the default runtime and works on macOS, Linux, and Windows (via WSL2). Just run `bash oncellclaw.sh`.
 
 **Is this secure?**
 
@@ -249,12 +249,12 @@ Ask Claude Code. "Why isn't the scheduler running?" "What's in the recent logs?"
 
 **Why isn't the setup working for me?**
 
-If a step fails, `nanoclaw.sh` hands off to Claude Code to diagnose and resume. If that doesn't resolve it, run `claude`, then `/debug`. If Claude identifies an issue likely to affect other users, open a PR against the relevant setup step or skill.
+If a step fails, `oncellclaw.sh` hands off to Claude Code to diagnose and resume. If that doesn't resolve it, run `claude`, then `/debug`. If Claude identifies an issue likely to affect other users, open a PR against the relevant setup step or skill.
 
 **How do I uninstall NanoClaw?**
 
 ```bash
-bash nanoclaw.sh --uninstall
+bash oncellclaw.sh --uninstall
 ```
 
 Every install is tagged with a per-checkout id, so the uninstaller removes only what belongs to that copy: the background service, containers and image, app data and logs, your agents' files, and this copy's OneCLI vault agents. Shared things — the OneCLI app and your credentials, other NanoClaw copies on the machine — are left alone. It shows exactly what it found and asks for confirmation per group; nothing is deleted until you say yes. Use `--dry-run` to preview without changing anything, or `--yes` to skip the prompts. Your `.env` is backed up before removal. To finish, delete the checkout folder itself.

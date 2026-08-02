@@ -1159,7 +1159,7 @@ async function runAuthStep(): Promise<void> {
     setupLog.step('auth', 'skipped', 0, { REASON: 'user-skipped' });
     p.log.warn(
       brandBody(
-        'Claude sign-in skipped. Re-run setup or run `bash nanoclaw.sh` to finish later.',
+        'Claude sign-in skipped. Re-run setup or run `bash oncellclaw.sh` to finish later.',
       ),
     );
     return;
@@ -1692,7 +1692,7 @@ function printIntro(): void {
 }
 
 /**
- * Bootstrap (nanoclaw.sh) normally initializes logs/setup.log and writes
+ * Bootstrap (oncellclaw.sh) normally initializes logs/setup.log and writes
  * the bootstrap entry before we even boot. If someone runs `pnpm run
  * setup:auto` directly, start a fresh progression log here so we don't
  * append to a stale one from a previous run.

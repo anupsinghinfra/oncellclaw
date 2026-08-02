@@ -31,10 +31,10 @@ NanoClawは同じコア機能を提供しますが、理解できる規模のコ
 ```bash
 git clone https://github.com/nanocoai/nanoclaw.git nanoclaw-v2
 cd nanoclaw-v2
-bash nanoclaw.sh
+bash oncellclaw.sh
 ```
 
-`nanoclaw.sh`は、まっさらなマシンから、メッセージを送れる名前付きエージェントが動く状態までを一気通貫で案内します。NodeやpnpmやDockerが無ければインストールし、AnthropicクレデンシャルをOneCLIに登録し、エージェントコンテナをビルドし、最初のチャネル（Telegram、Discord、WhatsApp、またはローカルCLI）とペアリングします。途中でステップが失敗すれば自動的にClaude Codeが呼び出され、原因を診断して中断箇所から再開します。
+`oncellclaw.sh`は、まっさらなマシンから、メッセージを送れる名前付きエージェントが動く状態までを一気通貫で案内します。NodeやpnpmやDockerが無ければインストールし、AnthropicクレデンシャルをOneCLIに登録し、エージェントコンテナをビルドし、最初のチャネル（Telegram、Discord、WhatsApp、またはローカルCLI）とペアリングします。途中でステップが失敗すれば自動的にClaude Codeが呼び出され、原因を診断して中断箇所から再開します。
 
 ## 設計思想
 
@@ -147,7 +147,7 @@ Dockerはクロスプラットフォーム対応（macOS、Linux、WSL2経由の
 
 **LinuxやWindowsで実行できますか？**
 
-はい。Dockerがデフォルトのランタイムで、macOS、Linux、Windows（WSL2経由）で動作します。`bash nanoclaw.sh`を実行するだけです。
+はい。Dockerがデフォルトのランタイムで、macOS、Linux、Windows（WSL2経由）で動作します。`bash oncellclaw.sh`を実行するだけです。
 
 **セキュリティは大丈夫ですか？**
 
@@ -174,7 +174,7 @@ Claude Codeに聞いてください。「スケジューラーが動いていな
 
 **セットアップがうまくいかない場合は？**
 
-ステップが失敗した場合、`nanoclaw.sh`は診断と再開のためにClaude Codeへ制御を渡します。それでも解決しなければ、`claude`を実行して`/debug`を呼び出してください。他のユーザーにも影響しそうな問題をClaudeが特定した場合は、該当のセットアップステップまたはスキルにPRを送ってください。
+ステップが失敗した場合、`oncellclaw.sh`は診断と再開のためにClaude Codeへ制御を渡します。それでも解決しなければ、`claude`を実行して`/debug`を呼び出してください。他のユーザーにも影響しそうな問題をClaudeが特定した場合は、該当のセットアップステップまたはスキルにPRを送ってください。
 
 **どのような変更がコードベースに受け入れられますか？**
 
