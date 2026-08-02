@@ -14,6 +14,7 @@
   <a href="https://oncellclaw.com">oncellclaw.com</a>&nbsp; • &nbsp;
   <a href="https://claw.oncell.ai">hosted&nbsp;(claw.oncell.ai)</a>&nbsp; • &nbsp;
   <a href="https://oncell.ai/docs">OnCell&nbsp;docs</a>&nbsp; • &nbsp;
+  <a href="https://discord.gg/ZmzTebH9xv"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
   <a href="README_zh.md">中文</a>&nbsp; • &nbsp;
   <a href="README_ja.md">日本語</a>&nbsp; • &nbsp;
   <a href="README_ko.md">한국어</a>&nbsp; • &nbsp;
