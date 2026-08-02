@@ -66,6 +66,12 @@ curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" -H 'Content-Type: applicat
 # poll for replies (echo `cursor` back as `after` next time)
 curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
      'https://<host>/web/assistant/messages?after='                      # → 200 {"messages":[…],"cursor":"…"}
+# the full two-way conversation (user + assistant rows, ordered, resumable)
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/assistant/transcript?after='                    # → 200 {"messages":[{direction,…}],"cursor":"…"}
+# push instead of polling: Server-Sent Events, one `event: message` per row
+curl -N -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/assistant/stream'                               # replays, then streams live
 curl https://<host>/web/health                                           # → 200 {"ok":true,"groups":[…]}
 # introspection for dashboards (token-authed): version, groups, channels, skills
 curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
@@ -101,6 +107,25 @@ That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the inte
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Agent credential. Exactly one is required. |
 
 The `web` channel is not hosted-only — it ships in main like `cli` does, so a self-hoster can point a browser, a script, or their own frontend at a local oncellclaw with the same three endpoints. See [config-examples/hosted.env.example](config-examples/hosted.env.example).
+
+### Connect Telegram
+
+Main ships a dependency-free Telegram adapter that runs in **long-polling** mode — no public webhook, so it works identically on a hosted cell and on a laptop behind NAT. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`, copy the token it prints), then either:
+
+- **Dashboard**: Connections & Integrations → Telegram → Connect → paste the token. The panel is a thin client for the API below.
+- **API/curl**:
+
+```bash
+curl -X POST -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"botToken":"<token from BotFather>"}' https://<host>/web/channels/telegram/pair
+# → 200 {"ok":true,"bot":{"username":"YourBot"}}      paired; adapter is live immediately
+# → 400 {"error":"invalid_token"}                     bad shape, or Telegram rejected it
+# → 502 {"error":"telegram_unreachable"}              Telegram API not reachable from the host
+curl -X DELETE -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" https://<host>/web/channels/telegram
+# → 200 {"ok":true}                                   adapter stopped, credential removed
+```
+
+Pairing verifies the token against `getMe`, stores it as `TELEGRAM_BOT_TOKEN` in the install's `.env` (the same place the CLI setup path writes it — one credential store however you pair), and starts the adapter without a restart. `/web/status` reflects it immediately (`configured:true, connected:true, detail:"@YourBot"`), and always lists the full supported channel set (`web`, `cli`, `telegram`, `whatsapp`, `discord`, `imessage`) with honest states so a dashboard has a row to hang every Connect button on. Message your bot on Telegram and the assistant answers there; DMs from senders you haven't approved go through the normal unknown-sender approval flow.
 
 ## Quick Start (self-hosted)
 

@@ -32,7 +32,7 @@ import {
 } from '../db/index.js';
 import { findSession } from '../db/sessions.js';
 import { routeInbound } from '../router.js';
-import { inboundDbPath, openOutboundDbRw, resolveSession } from '../session-manager.js';
+import { inboundDbPath, openOutboundDbRw, resolveSession, writeSessionMessage } from '../session-manager.js';
 import { stopWebhookServer } from '../webhook-server.js';
 import type { ChannelAdapter, ChannelSetup } from './adapter.js';
 import {
@@ -143,16 +143,30 @@ function seedGroup(): void {
 }
 
 /** Write an outbound row with an explicit timestamp (deterministic cursors). */
-function seedOutbound(sessionId: string, id: string, timestamp: string, text: string): void {
+function seedOutbound(sessionId: string, id: string, timestamp: string, text: string, inReplyTo?: string): void {
   const db = openOutboundDbRw('ag-web', sessionId);
   try {
     db.prepare(
-      `INSERT INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content)
-       VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 2 FROM messages_out), ?, 'chat', ?, 'web', NULL, ?)`,
-    ).run(id, timestamp, GROUP, JSON.stringify({ text }));
+      `INSERT INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content, in_reply_to)
+       VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 2 FROM messages_out), ?, 'chat', ?, 'web', NULL, ?, ?)`,
+    ).run(id, timestamp, GROUP, JSON.stringify({ text }), inReplyTo ?? null);
   } finally {
     db.close();
   }
+}
+
+/** Write a user-direction inbound row with an explicit timestamp. */
+function seedInbound(sessionId: string, id: string, timestamp: string, text: string, userId = 'owner'): void {
+  writeSessionMessage('ag-web', sessionId, {
+    id,
+    kind: 'chat',
+    timestamp,
+    platformId: GROUP,
+    channelType: 'web',
+    threadId: null,
+    content: JSON.stringify({ text, sender: userId, senderId: `web:${userId}` }),
+    trigger: 1,
+  });
 }
 
 beforeEach(() => {
@@ -643,5 +657,380 @@ describe('web channel — GET /web/status', () => {
   it('405s non-GET methods', async () => {
     const res = await req('/web/status', { method: 'POST', headers: auth(), body: '{}' });
     expect(res.status).toBe(405);
+  });
+});
+
+describe('web channel — POST /web/channels/telegram/pair', () => {
+  const TG_PORT = 3958;
+  const GOOD_TOKEN = `123456:${'A'.repeat(35)}`;
+  const ENV_FILE = `${TEST_DIR}/pairing.env`;
+  let tgStub: import('http').Server | null = null;
+  let getMeCalls = 0;
+
+  async function startTelegramStub(): Promise<void> {
+    getMeCalls = 0;
+    const http = await import('http');
+    await new Promise<void>((resolve) => {
+      tgStub = http.createServer((tgReq, tgRes) => {
+        const send = (body: unknown): void => {
+          tgRes.writeHead(200, { 'content-type': 'application/json' });
+          tgRes.end(JSON.stringify(body));
+        };
+        const match = /^\/bot([^/]+)\/(\w+)$/.exec(tgReq.url ?? '');
+        const token = match?.[1];
+        const method = match?.[2];
+        if (method === 'getMe') {
+          getMeCalls += 1;
+          send(token === GOOD_TOKEN ? { ok: true, result: { id: 1, username: 'PairBot' } } : { ok: false });
+          return;
+        }
+        if (method === 'deleteWebhook') {
+          send({ ok: true, result: true });
+          return;
+        }
+        if (method === 'getUpdates') {
+          setTimeout(() => send({ ok: true, result: [] }), 150);
+          return;
+        }
+        send({ ok: true, result: {} });
+      });
+      tgStub!.listen(TG_PORT, '127.0.0.1', () => resolve());
+    });
+  }
+
+  beforeEach(async () => {
+    process.env.TELEGRAM_API_BASE = `http://127.0.0.1:${TG_PORT}`;
+    process.env.ONCELLCLAW_ENV_FILE = ENV_FILE;
+    await startTelegramStub();
+    seedGroup();
+    await startChannels({ token: TOKEN });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => (tgStub ? tgStub.close(() => resolve()) : resolve()));
+    tgStub = null;
+    delete process.env.TELEGRAM_API_BASE;
+    delete process.env.ONCELLCLAW_ENV_FILE;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+  });
+
+  const pair = (body: unknown, headers: Record<string, string> = auth()) =>
+    req('/web/channels/telegram/pair', { method: 'POST', headers, body: JSON.stringify(body) });
+
+  it('pairs a valid token: 200 with bot username, credential persisted, status flips live', async () => {
+    const res = await pair({ botToken: GOOD_TOKEN });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, bot: { username: 'PairBot' } });
+
+    // Canonical store: the .env the CLI path writes.
+    expect(fs.readFileSync(ENV_FILE, 'utf-8')).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_TOKEN}`);
+
+    const status = (await (await req('/web/status', { headers: auth() })).json()) as {
+      channels: Array<{ type: string; configured: boolean; connected: boolean | null; detail?: string }>;
+    };
+    const telegram = status.channels.find((c) => c.type === 'telegram');
+    expect(telegram).toMatchObject({ configured: true, connected: true, detail: '@PairBot' });
+  });
+
+  it('rejects a malformed token with 400 and never calls Telegram', async () => {
+    const res = await pair({ botToken: 'not-a-token' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_token' });
+    expect(getMeCalls).toBe(0);
+
+    expect((await pair({})).status).toBe(400);
+  });
+
+  it('maps a Telegram rejection to 400 invalid_token', async () => {
+    const res = await pair({ botToken: `999999:${'B'.repeat(35)}` });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_token' });
+    expect(getMeCalls).toBe(1);
+  });
+
+  it('maps an unreachable Telegram to 502', async () => {
+    await new Promise<void>((resolve) => tgStub!.close(() => resolve()));
+    tgStub = null;
+    const res = await pair({ botToken: GOOD_TOKEN });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'telegram_unreachable' });
+  });
+
+  it('requires the web bearer token; failures spend IP budget', async () => {
+    expect((await pair({ botToken: GOOD_TOKEN }, {})).status).toBe(401);
+    expect(getMeCalls).toBe(0);
+  });
+
+  it('is NOT throttled by the message limiter', async () => {
+    // Saturate the per-group message budget, then pair repeatedly — none 429.
+    await startChannels({ token: TOKEN, messagesPerMin: '1' });
+    await req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text: 'x' }) });
+    for (let i = 0; i < 3; i++) {
+      const res = await pair({ botToken: GOOD_TOKEN });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it('DELETE unpairs: adapter stopped, credential removed, status back to unconfigured', async () => {
+    expect((await pair({ botToken: GOOD_TOKEN })).status).toBe(200);
+
+    const res = await req('/web/channels/telegram', { method: 'DELETE', headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(fs.readFileSync(ENV_FILE, 'utf-8')).not.toContain('TELEGRAM_BOT_TOKEN');
+
+    const status = (await (await req('/web/status', { headers: auth() })).json()) as {
+      channels: Array<{ type: string; configured: boolean; connected: boolean | null; detail?: string }>;
+    };
+    expect(status.channels.find((c) => c.type === 'telegram')).toEqual({
+      type: 'telegram',
+      configured: false,
+      connected: null,
+      detail: 'not set up — pair to enable',
+    });
+  });
+
+  it('unknown channel segment 404s; wrong method 405s', async () => {
+    expect((await req('/web/channels/whatsapp/pair', { method: 'POST', headers: auth(), body: '{}' })).status).toBe(
+      404,
+    );
+    expect((await req('/web/channels/telegram', { method: 'GET', headers: auth() })).status).toBe(405);
+  });
+});
+
+describe('web channel — /web/status supported-channel manifest', () => {
+  it('always lists all six supported channels with honest states', async () => {
+    seedGroup();
+    await startChannels({ token: TOKEN });
+
+    const body = (await (await req('/web/status', { headers: auth() })).json()) as {
+      channels: Array<{ type: string; configured: boolean; connected: boolean | null; detail?: string }>;
+    };
+    const byType = new Map(body.channels.map((c) => [c.type, c]));
+
+    for (const type of ['web', 'cli', 'telegram', 'whatsapp', 'discord', 'imessage']) {
+      expect(byType.has(type), `missing channel row: ${type}`).toBe(true);
+    }
+    expect(byType.get('web')).toMatchObject({ configured: true, connected: true });
+    // telegram is registered but unpaired → same honest shape as uninstalled.
+    expect(byType.get('telegram')).toMatchObject({
+      configured: false,
+      connected: null,
+      detail: 'not set up — pair to enable',
+    });
+    expect(byType.get('whatsapp')).toMatchObject({ configured: false, connected: null });
+    expect(byType.get('imessage')).toMatchObject({
+      configured: false,
+      connected: null,
+      detail: 'requires a Mac — self-host only',
+    });
+  });
+});
+
+describe('web channel — GET /web/:group/transcript', () => {
+  let sessionId: string;
+
+  beforeEach(async () => {
+    seedGroup();
+    sessionId = resolveSession('ag-web', 'mg-web', null, 'shared').session.id;
+    await startChannels({ token: TOKEN });
+  });
+
+  it('merges both directions into one conversation with monotonic cursors', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'hello', 'alice');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'hi alice', 'u1');
+    seedInbound(sessionId, 'u2', '2026-01-01T00:00:03.000Z', 'and my calendar?', 'alice');
+    seedOutbound(sessionId, 'a2', '2026-01-01T00:00:04.000Z', 'two meetings today', 'u2');
+
+    const res = await req(`/web/${GROUP}/transcript`, { headers: auth() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      messages: Array<{ id: string; cursor: string; direction: string; userId?: string; text: string | null }>;
+      cursor: string;
+    };
+
+    expect(body.messages.map((m) => [m.id, m.direction])).toEqual([
+      ['u1', 'user'],
+      ['a1', 'assistant'],
+      ['u2', 'user'],
+      ['a2', 'assistant'],
+    ]);
+    expect(body.messages[0]).toMatchObject({ userId: 'alice', text: 'hello' });
+    expect(body.messages[1]!.userId).toBeUndefined();
+
+    // Cursors strictly increase and the trailing cursor is the last row's.
+    const cursors = body.messages.map((m) => m.cursor);
+    for (let i = 1; i < cursors.length; i++) expect(cursors[i]! > cursors[i - 1]!).toBe(true);
+    expect(body.cursor).toBe(cursors[cursors.length - 1]);
+  });
+
+  it('clock skew: a reply timestamped BEFORE its question still follows it, cursor stays monotonic', async () => {
+    // The live bug: cell clock behind host clock → assistant row carries an
+    // earlier timestamp than the user row that triggered it.
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:05.000Z', 'question');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:03.500Z', 'answer', 'u1');
+
+    const body = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string; cursor: string; timestamp: string }>;
+    };
+    expect(body.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+    // The reply's cursor is clamped forward past its question…
+    expect(body.messages[1]!.cursor > body.messages[0]!.cursor).toBe(true);
+    // …while its own recorded timestamp stays honest.
+    expect(body.messages[1]!.timestamp).toBe('2026-01-01T00:00:03.500Z');
+  });
+
+  it('tied timestamps stay deterministic with distinct cursors', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'same instant');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:01.000Z', 'also same instant');
+
+    const first = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string; cursor: string }>;
+    };
+    const second = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string; cursor: string }>;
+    };
+    expect(first.messages.map((m) => m.id)).toEqual(second.messages.map((m) => m.id));
+    expect(new Set(first.messages.map((m) => m.cursor)).size).toBe(first.messages.length);
+  });
+
+  it('after=<cursor of row N> returns exactly rows N+1…, and the tail echoes back', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'one');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'two', 'u1');
+    seedInbound(sessionId, 'u2', '2026-01-01T00:00:03.000Z', 'three');
+    seedOutbound(sessionId, 'a2', '2026-01-01T00:00:04.000Z', 'four', 'u2');
+
+    const all = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string; cursor: string }>;
+      cursor: string;
+    };
+    const afterSecond = encodeURIComponent(all.messages[1]!.cursor);
+    const rest = (await (await req(`/web/${GROUP}/transcript?after=${afterSecond}`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string }>;
+    };
+    expect(rest.messages.map((m) => m.id)).toEqual(['u2', 'a2']);
+
+    const drained = (await (
+      await req(`/web/${GROUP}/transcript?after=${encodeURIComponent(all.cursor)}`, { headers: auth() })
+    ).json()) as { messages: unknown[]; cursor: string };
+    expect(drained.messages).toEqual([]);
+    expect(drained.cursor).toBe(all.cursor);
+  });
+
+  it('/messages keeps its outbound-only contract (unchanged for existing pollers)', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'user text');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'assistant text');
+
+    const body = (await (await req(`/web/${GROUP}/messages`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string }>;
+    };
+    expect(body.messages.map((m) => m.id)).toEqual(['a1']);
+  });
+});
+
+describe('web channel — GET /web/:group/stream (SSE)', () => {
+  let sessionId: string;
+
+  beforeEach(async () => {
+    seedGroup();
+    sessionId = resolveSession('ag-web', 'mg-web', null, 'shared').session.id;
+    process.env.ONCELLCLAW_WEB_SSE_HEARTBEAT_MS = '100';
+    await startChannels({ token: TOKEN });
+  });
+
+  afterEach(() => {
+    delete process.env.ONCELLCLAW_WEB_SSE_HEARTBEAT_MS;
+  });
+
+  /** Open an SSE connection and expose a growing raw-text buffer. */
+  async function openStream(path: string, headers: Record<string, string> = auth()) {
+    const res = await req(path, { headers });
+    const reader = res.body!.getReader();
+    const state = { raw: '', done: false };
+    void (async () => {
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        state.raw += decoder.decode(value, { stream: true });
+      }
+      state.done = true;
+    })();
+    const events = (): Array<Record<string, unknown>> =>
+      state.raw
+        .split('\n\n')
+        .filter((block) => block.includes('event: message'))
+        .map((block) => JSON.parse(block.split('data: ')[1]!) as Record<string, unknown>);
+    return { res, state, events, close: () => reader.cancel().catch(() => {}) };
+  }
+
+  it('replays history after the cursor, then pushes live rows', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'история', 'alice');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'reply', 'u1');
+
+    const stream = await openStream(`/web/${GROUP}/stream`);
+    expect(stream.res.status).toBe(200);
+    expect(stream.res.headers.get('content-type')).toContain('text/event-stream');
+
+    await vi.waitFor(() => expect(stream.events().length).toBe(2));
+    expect(stream.events().map((e) => e.id)).toEqual(['u1', 'a1']);
+
+    // Live push: a real POST through the channel lands as a user event.
+    await req(`/web/${GROUP}/message`, {
+      method: 'POST',
+      headers: auth(),
+      body: JSON.stringify({ text: 'live one', userId: 'alice' }),
+    });
+    await vi.waitFor(() => expect(stream.events().length).toBe(3), { timeout: 3000 });
+    expect(stream.events()[2]).toMatchObject({ direction: 'user', text: 'live one', userId: 'alice' });
+
+    // And an outbound delivery ack pushes an assistant event.
+    seedOutbound(sessionId, 'a2', '2026-01-01T00:00:09.000Z', 'live reply');
+    const webAdapter = getActiveAdapters().find((a) => a.channelType === 'web')!;
+    await webAdapter.deliver(GROUP, null, { kind: 'chat', content: { text: 'live reply' } });
+    await vi.waitFor(() => expect(stream.events().length).toBe(4), { timeout: 3000 });
+    expect(stream.events()[3]).toMatchObject({ direction: 'assistant', text: 'live reply' });
+
+    stream.close();
+  });
+
+  it('resumes exactly from a supplied cursor', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'one');
+    seedOutbound(sessionId, 'a1', '2026-01-01T00:00:02.000Z', 'two', 'u1');
+
+    const full = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ cursor: string }>;
+    };
+    const stream = await openStream(`/web/${GROUP}/stream?after=${encodeURIComponent(full.messages[0]!.cursor)}`);
+    await vi.waitFor(() => expect(stream.events().length).toBe(1));
+    expect(stream.events()[0]).toMatchObject({ id: 'a1' });
+    stream.close();
+  });
+
+  it('sends comment heartbeats', async () => {
+    const stream = await openStream(`/web/${GROUP}/stream`);
+    await vi.waitFor(() => expect(stream.state.raw).toContain(': hb'), { timeout: 3000 });
+    stream.close();
+  });
+
+  it('requires auth and is exempt from the message limiter', async () => {
+    expect((await req(`/web/${GROUP}/stream`)).status).toBe(401);
+
+    await startChannels({ token: TOKEN, messagesPerMin: '1' });
+    await req(`/web/${GROUP}/message`, { method: 'POST', headers: auth(), body: JSON.stringify({ text: 'x' }) });
+    const stream = await openStream(`/web/${GROUP}/stream`);
+    expect(stream.res.status).toBe(200);
+    stream.close();
+  });
+
+  it('caps concurrent streams per group by dropping the oldest', async () => {
+    const streams: Array<Awaited<ReturnType<typeof openStream>>> = [];
+    for (let i = 0; i < 5; i++) {
+      streams.push(await openStream(`/web/${GROUP}/stream`));
+    }
+    // The first connection gets closed by the 5th's arrival.
+    await vi.waitFor(() => expect(streams[0]!.state.done).toBe(true), { timeout: 3000 });
+    expect(streams[4]!.state.done).toBe(false);
+    for (const s of streams) s.close();
   });
 });

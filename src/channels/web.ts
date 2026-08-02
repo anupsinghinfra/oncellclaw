@@ -19,9 +19,30 @@
  *   GET  /web/:group/messages?after=<cursor>&limit=<n>
  *        → 200 { "messages": [ { id, cursor, timestamp, kind, text, content } ],
  *                "cursor": "<cursor to pass as `after` next time>" }
- *        Poll-based. Reads the session outbound DBs the delivery path
+ *        Poll-based, OUTBOUND-ONLY (v1 — kept byte-stable for existing
+ *        pollers). Reads the session outbound DBs the delivery path
  *        already writes — there is no second store, and no message is lost
  *        if a client is offline (unlike the CLI channel's live socket).
+ *
+ *   GET  /web/:group/transcript?after=<cursor>&limit=<n>
+ *        → 200 { "messages": [ { id, cursor, timestamp, direction,
+ *                userId?, kind, text } ], "cursor": "…" }
+ *        The UNIFIED conversation: user rows from messages_in (the
+ *        router's canonical durable record) merged with assistant rows
+ *        from messages_out. Cursors are `timestamp|seq` with seq derived
+ *        from insertion order — strictly monotonic even when host/cell
+ *        clock skew makes a reply's timestamp regress, and replies are
+ *        causally pinned after their `in_reply_to` question. Exact resume:
+ *        after=<cursor of row N> returns rows N+1… .
+ *
+ *   GET  /web/:group/stream?after=<cursor>          (Server-Sent Events)
+ *        `event: message` frames whose data is one transcript row (same
+ *        JSON as /transcript), pushed on arrival — no client polling.
+ *        Replays history after `after` on connect; `: hb` comment
+ *        heartbeats every ~25s double as catch-up sweeps. Same Bearer
+ *        auth via headers (consume with fetch + ReadableStream). At most
+ *        4 concurrent streams per group; the oldest is dropped beyond
+ *        that.
  *
  *   GET  /health
  *        → 200 { "ok": true, "groups": [ { slug, name, agents } ] }
@@ -63,6 +84,7 @@
  * this channel has no file transport.
  */
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import type http from 'http';
 import path from 'path';
@@ -75,15 +97,23 @@ import {
   getMessagingGroupByPlatform,
   getMessagingGroupsByChannel,
 } from '../db/messaging-groups.js';
-import { getDueOutboundMessages } from '../db/session-db.js';
+import { getDueOutboundMessages, getInboundTranscriptRows } from '../db/session-db.js';
 import { getSessionsByMessagingGroup } from '../db/sessions.js';
 import { log } from '../log.js';
-import { openOutboundDb } from '../session-manager.js';
+import { openInboundDb, openOutboundDb } from '../session-manager.js';
+import { envFilePath, removeEnvVar, upsertEnvVar } from '../env.js';
 import { getCodeVersion } from '../upgrade-state.js';
 import { registerHttpRoute, unregisterHttpRoute } from '../webhook-server.js';
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup } from './adapter.js';
-import { getActiveAdapters, getRegisteredChannelNames, registerChannelAdapter } from './channel-registry.js';
+import {
+  getActiveAdapters,
+  getRegisteredChannelNames,
+  registerChannelAdapter,
+  startChannelAdapter,
+  stopChannelAdapter,
+} from './channel-registry.js';
 import { parseRatePerMin, SlidingWindowLimiter, TokenBucketLimiter } from './rate-limit.js';
+import { TELEGRAM_CHANNEL_TYPE, TELEGRAM_TOKEN_ENV_KEY, verifyTelegramToken } from './telegram.js';
 
 /** Channel type + registry key. */
 export const WEB_CHANNEL_TYPE = 'web';
@@ -99,6 +129,15 @@ const HEALTH_ROUTE = 'health';
 const MAX_BODY_BYTES = 256 * 1024;
 
 const DEFAULT_POLL_LIMIT = 100;
+const DEFAULT_TRANSCRIPT_LIMIT = 200;
+const MAX_TRANSCRIPT_LIMIT = 1000;
+/** Concurrent SSE streams per group — the oldest is dropped beyond this. */
+const MAX_STREAMS_PER_GROUP = 4;
+/** SSE heartbeat interval; overridable for tests (they must not wait 25s). */
+function sseHeartbeatMs(): number {
+  const raw = Number.parseInt(process.env.ONCELLCLAW_WEB_SSE_HEARTBEAT_MS ?? '', 10);
+  return Number.isInteger(raw) && raw > 0 ? raw : 25_000;
+}
 const MAX_POLL_LIMIT = 500;
 
 /** Sender handles become `users.id` primary keys — keep them boring. */
@@ -171,6 +210,13 @@ export function clientIpOf(req: Pick<http.IncomingMessage, 'headers' | 'socket'>
   const header = Array.isArray(raw) ? raw[0] : raw;
   const first = header?.split(',')[0]?.trim();
   return first || req.socket?.remoteAddress || 'unknown';
+}
+
+/** Where pairing persists credentials — the install's canonical .env.
+ *  ONCELLCLAW_ENV_FILE overrides it in tests so suites never touch a real
+ *  .env; production never sets it. */
+function webEnvFilePath(): string {
+  return process.env.ONCELLCLAW_ENV_FILE || envFilePath();
 }
 
 /**
@@ -319,6 +365,188 @@ export function collectWebOutbound(
   return items.slice(0, limit);
 }
 
+/** One transcript row — both directions share this shape. */
+export interface WebTranscriptItem {
+  id: string;
+  cursor: string;
+  /** The row's own recorded timestamp (may regress under clock skew; the
+   *  cursor, not this field, carries the ordering). */
+  timestamp: string;
+  direction: 'user' | 'assistant';
+  /** Posting user's handle (user rows only). */
+  userId?: string;
+  kind: string;
+  text: string | null;
+}
+
+/** A merged row before cursor assignment (see the transcript registry). */
+export interface WebTranscriptRow {
+  id: string;
+  timestamp: string;
+  direction: 'user' | 'assistant';
+  userId?: string;
+  kind: string;
+  text: string | null;
+}
+
+interface TranscriptSourceRow {
+  id: string;
+  seq: number;
+  timestamp: string;
+  kind: string;
+  direction: 'user' | 'assistant';
+  userId?: string;
+  text: string | null;
+  /** Assistant rows: the inbound message id this answers (causal anchor). */
+  inReplyTo?: string | null;
+}
+
+/**
+ * The unified conversation transcript for one web group: user rows from
+ * messages_in (the router's canonical durable record of accepted inbound)
+ * merged with assistant rows from messages_out — no second store.
+ *
+ * ORDERING. Each session DB file is an append-only stream in `seq` order
+ * (its writer's true insertion order). The merge walks all streams and picks
+ * the head with the smallest EFFECTIVE timestamp, where effective = max(row
+ * timestamp, last emitted) — i.e. timestamps decide interleaving, but a row
+ * whose clock regressed (host vs cell skew was producing replies "before"
+ * their questions) is clamped forward instead of violating order.
+ *
+ * This is the deterministic BASELINE order. Cursor assignment lives in the
+ * adapter's transcript registry, which discovers rows in this order but
+ * pins each id to the index it was FIRST seen at — so a late-arriving row
+ * whose timestamp lands mid-history still gets the next index (true
+ * insertion order), and live streams never skip or re-deliver.
+ */
+export function buildWebTranscript(messagingGroupId: string, platformId: string): WebTranscriptRow[] {
+  const streams: TranscriptSourceRow[][] = [];
+
+  for (const session of getSessionsByMessagingGroup(messagingGroupId)) {
+    const inboundRows: TranscriptSourceRow[] = [];
+    try {
+      const db = openInboundDb(session.agent_group_id, session.id);
+      try {
+        for (const row of getInboundTranscriptRows(db)) {
+          if (row.channel_type !== WEB_CHANNEL_TYPE || row.platform_id !== platformId) continue;
+          const content = safeParseContent(row.content);
+          inboundRows.push({
+            id: row.id,
+            seq: row.seq ?? 0,
+            timestamp: row.timestamp,
+            kind: row.kind,
+            direction: 'user',
+            userId: senderHandleOf(content),
+            text: typeof content.text === 'string' ? content.text : null,
+          });
+        }
+      } finally {
+        db.close();
+      }
+    } catch {
+      // session folder not materialized yet — no user rows from it
+    }
+    if (inboundRows.length > 0) streams.push(inboundRows);
+
+    const outboundRows: TranscriptSourceRow[] = [];
+    try {
+      const db = openOutboundDb(session.agent_group_id, session.id);
+      try {
+        for (const row of getDueOutboundMessages(db)) {
+          if (row.channel_type !== WEB_CHANNEL_TYPE || row.platform_id !== platformId) continue;
+          const content = safeParseContent(row.content);
+          outboundRows.push({
+            id: row.id,
+            seq: row.seq ?? 0,
+            timestamp: row.timestamp ?? '',
+            kind: row.kind,
+            direction: 'assistant',
+            text: typeof content.text === 'string' ? content.text : null,
+            inReplyTo: row.in_reply_to,
+          });
+        }
+      } finally {
+        db.close();
+      }
+    } catch {
+      // ditto
+    }
+    outboundRows.sort((a, b) => a.seq - b.seq);
+    if (outboundRows.length > 0) streams.push(outboundRows);
+  }
+
+  // K-way merge with monotonic clamp (see doc above), plus a CAUSAL guard:
+  // an assistant row that names its triggering inbound (in_reply_to) is
+  // ineligible until that user row has been emitted — under host/cell clock
+  // skew a reply can carry an EARLIER timestamp than its question, and
+  // timestamps alone would order the answer first (the live bug). Progress
+  // is guaranteed: user heads are always eligible, and the anchor is a user
+  // row, so a blocked stream unblocks once its anchor's stream drains to it.
+  const knownInboundIds = new Set(
+    streams.flatMap((stream) => stream.filter((row) => row.direction === 'user').map((row) => row.id)),
+  );
+  const emittedInboundIds = new Set<string>();
+  const pointers = streams.map(() => 0);
+  const merged: WebTranscriptRow[] = [];
+  let lastTs = '';
+  for (;;) {
+    let best = -1;
+    let bestTs = '';
+    for (let i = 0; i < streams.length; i++) {
+      const head = streams[i]![pointers[i]!];
+      if (!head) continue;
+      if (
+        head.direction === 'assistant' &&
+        head.inReplyTo &&
+        knownInboundIds.has(head.inReplyTo) &&
+        !emittedInboundIds.has(head.inReplyTo)
+      ) {
+        continue; // causally blocked — its question hasn't been emitted yet
+      }
+      const effective = head.timestamp > lastTs ? head.timestamp : lastTs;
+      if (best === -1 || effective < bestTs) {
+        best = i;
+        bestTs = effective;
+      }
+    }
+    if (best === -1) break;
+    const row = streams[best]![pointers[best]!]!;
+    pointers[best]! += 1;
+    lastTs = bestTs;
+    if (row.direction === 'user') emittedInboundIds.add(row.id);
+    merged.push({
+      id: row.id,
+      timestamp: row.timestamp,
+      direction: row.direction,
+      ...(row.userId !== undefined ? { userId: row.userId } : {}),
+      kind: row.kind,
+      text: row.text,
+    });
+  }
+  return merged;
+}
+
+function parseTranscriptCursorIndex(cursor: string | null): number | null {
+  if (!cursor) return null;
+  const raw = cursor.slice(cursor.lastIndexOf('|') + 1);
+  const index = Number.parseInt(raw, 10);
+  return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
+function senderHandleOf(content: { senderId?: unknown }): string | undefined {
+  if (typeof content.senderId !== 'string') return undefined;
+  const prefix = `${WEB_CHANNEL_TYPE}:`;
+  return content.senderId.startsWith(prefix) ? content.senderId.slice(prefix.length) : content.senderId;
+}
+
+function safeParseContent(raw: string): { text?: unknown; senderId?: unknown } {
+  try {
+    return JSON.parse(raw) as { text?: unknown; senderId?: unknown };
+  } catch {
+    return { text: raw };
+  }
+}
+
 function parseLimit(raw: string | null): number {
   if (!raw) return DEFAULT_POLL_LIMIT;
   const n = Number.parseInt(raw, 10);
@@ -340,27 +568,57 @@ export interface WebChannelStatus {
 }
 
 /**
- * Enumerate every registered channel with what the registry can honestly
- * say. A registration whose factory produced an adapter is configured; the
- * adapter's own isConnected() is the connection truth (web = mounted,
- * socket channels = live connection). A factory that returned null means
- * the channel's credentials/state are absent — configured false, and
- * connected is null because there is nothing to ask.
+ * The channel set a claw supports out of the box — what the dashboard's
+ * Connections panel renders. Channels whose adapters are skill-installed
+ * (not in trunk's registry) still appear here so there is a row to hang a
+ * Connect button on; their detail says how to enable them.
+ */
+const SUPPORTED_CHANNELS: ReadonlyArray<{ type: string; unavailableDetail: string }> = [
+  { type: 'web', unavailableDetail: 'not set up' },
+  { type: 'cli', unavailableDetail: 'not set up' },
+  { type: TELEGRAM_CHANNEL_TYPE, unavailableDetail: 'not set up — pair to enable' },
+  { type: 'whatsapp', unavailableDetail: 'not set up — pair to enable' },
+  { type: 'discord', unavailableDetail: 'not set up — pair to enable' },
+  { type: 'imessage', unavailableDetail: 'requires a Mac — self-host only' },
+];
+
+/**
+ * Enumerate the supported channel set (always all of SUPPORTED_CHANNELS,
+ * even when unconfigured) merged with what the registry can honestly say:
+ *
+ *  - live adapter        → configured true, its own isConnected(), and its
+ *                          statusDetail() (e.g. telegram's @BotUsername)
+ *  - registered, factory null (credentials absent) → configured false,
+ *                          connected null, the channel's enable hint
+ *  - not even registered (skill-installed adapters absent from trunk) →
+ *                          same shape; pairing/skill install flips it live
+ *
+ * Extra registrations beyond the manifest (skill-installed channels) are
+ * appended after, so nothing installed ever disappears from status.
  */
 export function collectChannelStatuses(): WebChannelStatus[] {
   const active = getActiveAdapters();
-  return getRegisteredChannelNames().map((name) => {
+  const registered = new Set(getRegisteredChannelNames());
+  const statusOf = (name: string, unavailableDetail: string): WebChannelStatus => {
     const adapter = active.find((a) => (a.instance ?? a.channelType) === name) ?? active.find((a) => a.name === name);
-    if (!adapter) {
+    if (adapter) {
+      const detail = adapter.statusDetail?.();
       return {
-        type: name,
-        configured: false,
-        connected: null,
-        detail: 'adapter not started (credentials missing or channel disabled)',
+        type: adapter.channelType,
+        configured: true,
+        connected: adapter.isConnected(),
+        ...(detail ? { detail } : {}),
       };
     }
-    return { type: adapter.channelType, configured: true, connected: adapter.isConnected() };
-  });
+    return { type: name, configured: false, connected: null, detail: unavailableDetail };
+  };
+
+  const manifest = SUPPORTED_CHANNELS.map(({ type, unavailableDetail }) => statusOf(type, unavailableDetail));
+  const manifestTypes = new Set(SUPPORTED_CHANNELS.map((c) => c.type));
+  const extras = [...registered]
+    .filter((name) => !manifestTypes.has(name))
+    .map((name) => statusOf(name, 'adapter not started (credentials missing or channel disabled)'));
+  return [...manifest, ...extras];
 }
 
 /** name + description only — /web/status never exposes skill file contents. */
@@ -422,6 +680,83 @@ function createAdapter(): ChannelAdapter | null {
   const authFailures = new SlidingWindowLimiter(authFailuresPerMin, AUTH_WINDOW_MS);
   const messageBudget = new TokenBucketLimiter(messagesPerMin);
 
+  // Push transport: an in-process emitter fires per group slug whenever a
+  // transcript row lands — at web inbound enqueue and at outbound delivery
+  // ack — and every open SSE stream for that slug catches up. No polling
+  // anywhere in the host.
+  const transcriptEvents = new EventEmitter();
+  transcriptEvents.setMaxListeners(0);
+  const streamClients = new Map<string, Set<http.ServerResponse>>();
+
+  // Transcript cursor registry: rows are DISCOVERED in the deterministic
+  // merge order (buildWebTranscript) but each id keeps the index it was
+  // first seen at — the spec's "derive seq from insertion order". Late
+  // arrivals whose timestamps land mid-history therefore get the NEXT
+  // index, cursors stay strictly monotonic, and a live stream can never
+  // skip or re-deliver a row. The cursor's timestamp half is clamped to be
+  // non-decreasing so the string itself is monotonic too. In-memory: a
+  // restart rebuilds the same baseline deterministically from the files.
+  interface TranscriptCursorEntry {
+    index: number;
+    cursorTs: string;
+  }
+  interface TranscriptRegistry {
+    byId: Map<string, TranscriptCursorEntry>;
+    nextIndex: number;
+    lastCursorTs: string;
+  }
+  const transcriptRegistries = new Map<string, TranscriptRegistry>();
+
+  function transcriptRows(messagingGroupId: string, slug: string): WebTranscriptItem[] {
+    let registry = transcriptRegistries.get(slug);
+    if (!registry) {
+      registry = { byId: new Map(), nextIndex: 0, lastCursorTs: '' };
+      transcriptRegistries.set(slug, registry);
+    }
+    const merged = buildWebTranscript(messagingGroupId, slug);
+    for (const row of merged) {
+      if (registry.byId.has(row.id)) continue;
+      const cursorTs = row.timestamp > registry.lastCursorTs ? row.timestamp : registry.lastCursorTs;
+      registry.byId.set(row.id, { index: registry.nextIndex++, cursorTs });
+      registry.lastCursorTs = cursorTs;
+    }
+    const items = merged.map((row): WebTranscriptItem => {
+      const entry = registry!.byId.get(row.id)!;
+      return {
+        id: row.id,
+        cursor: `${entry.cursorTs}|${String(entry.index).padStart(9, '0')}`,
+        timestamp: row.timestamp,
+        direction: row.direction,
+        ...(row.userId !== undefined ? { userId: row.userId } : {}),
+        kind: row.kind,
+        text: row.text,
+      };
+    });
+    items.sort((a, b) => registry!.byId.get(a.id)!.index - registry!.byId.get(b.id)!.index);
+    return items;
+  }
+
+  /** Rows strictly after a transcript cursor (null/garbage = from the start). */
+  function transcriptAfter(
+    messagingGroupId: string,
+    slug: string,
+    after: string | null,
+    limit: number,
+  ): WebTranscriptItem[] {
+    const all = transcriptRows(messagingGroupId, slug);
+    const afterIndex = parseTranscriptCursorIndex(after);
+    const from = afterIndex === null ? 0 : afterIndex + 1;
+    return all.slice(from, from + limit);
+  }
+
+  function emitTranscriptEvent(slug: string): void {
+    transcriptEvents.emit('row', slug);
+    // The router's inbound write happens async behind onInbound (the host
+    // fire-and-forgets routeInbound) — re-fire shortly after so a stream
+    // never misses a row that was still being written on the first emit.
+    setTimeout(() => transcriptEvents.emit('row', slug), 300).unref?.();
+  }
+
   function sendRateLimited(res: http.ServerResponse, retryAfterSec: number): void {
     // Deliberately indistinguishable between the two limiters, and silent on
     // how close any presented token was.
@@ -467,6 +802,16 @@ function createAdapter(): ChannelAdapter | null {
 
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parts = url.pathname.split('/').filter((p) => p.length > 0);
+
+    // Channel pairing for the dashboard's Connections panel. Authed (past
+    // the token gate); NEVER message-rate-limited — the message budget
+    // protects agent wakes, and pairing isn't one. 'channels' is a reserved
+    // first segment: it can never be a group slug (provision normalizes
+    // slugs but the router below would 404 an unknown group anyway).
+    if (parts[0] === WEB_ROUTE && parts[1] === 'channels') {
+      await handleChannels(req, res, parts.slice(2));
+      return;
+    }
 
     // Introspection for the dashboard. Authed (we are past the token gate),
     // never message-rate-limited — a read, like the poll endpoint.
@@ -527,6 +872,23 @@ function createAdapter(): ChannelAdapter | null {
       });
       return;
     }
+    if ((req.method === 'GET' || req.method === 'HEAD') && action === 'transcript') {
+      const after = url.searchParams.get('after');
+      const limit = Math.min(
+        Number.parseInt(url.searchParams.get('limit') ?? '', 10) || DEFAULT_TRANSCRIPT_LIMIT,
+        MAX_TRANSCRIPT_LIMIT,
+      );
+      const messages = transcriptAfter(mg.id, slug, after, limit);
+      sendJson(res, 200, {
+        messages,
+        cursor: messages.length > 0 ? messages[messages.length - 1]!.cursor : (after ?? ''),
+      });
+      return;
+    }
+    if (req.method === 'GET' && action === 'stream') {
+      handleStream(req, res, mg.id, slug, url.searchParams.get('after'));
+      return;
+    }
     sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'GET, POST' });
   }
 
@@ -583,6 +945,188 @@ function createAdapter(): ChannelAdapter | null {
     });
 
     sendJson(res, 202, { ok: true, id });
+    emitTranscriptEvent(slug);
+  }
+
+  /**
+   * GET /web/{group}/stream — Server-Sent Events over the same Bearer auth
+   * (the dashboard consumes it with fetch + ReadableStream, so the header
+   * works; tokens never go in the query string). On connect it replays every
+   * transcript row after `after`, then pushes rows as they land. A comment
+   * heartbeat every ~25s keeps proxies from idling the connection out, and
+   * doubles as a catch-up sweep so no row can slip between event edges.
+   */
+  function handleStream(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    messagingGroupId: string,
+    slug: string,
+    after: string | null,
+  ): void {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      // Disable proxy buffering (nginx et al.) — SSE must flush per event.
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(': connected\n\n');
+
+    // Connection cap per group: register first, then evict the oldest past
+    // the cap — a burst of reconnects converges on the newest connections.
+    const clients = streamClients.get(slug) ?? new Set<http.ServerResponse>();
+    streamClients.set(slug, clients);
+    clients.add(res);
+    while (clients.size > MAX_STREAMS_PER_GROUP) {
+      const oldest = clients.values().next().value as http.ServerResponse;
+      clients.delete(oldest);
+      try {
+        oldest.end();
+      } catch {
+        // already gone
+      }
+    }
+
+    let lastCursor = after;
+    let closed = false;
+    const push = (): void => {
+      if (closed) return;
+      try {
+        for (const item of transcriptAfter(messagingGroupId, slug, lastCursor, MAX_TRANSCRIPT_LIMIT)) {
+          res.write(`event: message\ndata: ${JSON.stringify(item)}\n\n`);
+          lastCursor = item.cursor;
+        }
+      } catch (err) {
+        log.warn('SSE push failed', { slug, err });
+      }
+    };
+
+    push(); // replay
+
+    const onRow = (eventSlug: string): void => {
+      if (eventSlug === slug) push();
+    };
+    transcriptEvents.on('row', onRow);
+    const heartbeat = setInterval(() => {
+      if (closed) return;
+      res.write(': hb\n\n');
+      push(); // catch-up sweep — belt for the emitter's braces
+    }, sseHeartbeatMs());
+
+    const cleanup = (): void => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      transcriptEvents.off('row', onRow);
+      clients.delete(res);
+    };
+    res.on('close', cleanup);
+    req.on('close', cleanup);
+  }
+
+  /** Close every open SSE stream (channel teardown). */
+  function closeAllStreams(): void {
+    for (const clients of streamClients.values()) {
+      for (const client of clients) {
+        try {
+          client.end();
+        } catch {
+          // already gone
+        }
+      }
+      clients.clear();
+    }
+    streamClients.clear();
+    transcriptEvents.removeAllListeners();
+  }
+
+  /**
+   * /web/channels/... dispatcher. Contract (mirrored by the dashboard UI):
+   *
+   *   POST   /web/channels/telegram/pair   {"botToken": "..."}
+   *          → 200 {"ok":true,"bot":{"username":"..."}}
+   *          → 400 {"error":"invalid_token"}        bad shape or getMe rejected
+   *          → 502 {"error":"telegram_unreachable"} transport failure to Telegram
+   *   DELETE /web/channels/telegram
+   *          → 200 {"ok":true}                      adapter stopped, credential removed
+   */
+  async function handleChannels(req: http.IncomingMessage, res: http.ServerResponse, rest: string[]): Promise<void> {
+    if (rest[0] !== TELEGRAM_CHANNEL_TYPE) {
+      sendJson(res, 404, { error: 'unknown_channel', hint: '/web/channels/telegram' });
+      return;
+    }
+
+    if (req.method === 'POST' && rest[1] === 'pair' && rest.length === 2) {
+      await pairTelegram(req, res);
+      return;
+    }
+    if (req.method === 'DELETE' && rest.length === 1) {
+      await unpairTelegram(res);
+      return;
+    }
+    sendJson(res, 405, { error: 'method_not_allowed' }, { Allow: 'POST, DELETE' });
+  }
+
+  async function pairTelegram(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    let raw: string;
+    try {
+      raw = await readBody(req);
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJson(res, 413, { error: 'payload_too_large', maxBytes: MAX_BODY_BYTES });
+        return;
+      }
+      throw err;
+    }
+
+    let payload: { botToken?: unknown };
+    try {
+      payload = JSON.parse(raw) as { botToken?: unknown };
+    } catch {
+      sendJson(res, 400, { error: 'invalid_json' });
+      return;
+    }
+    const botToken = typeof payload.botToken === 'string' ? payload.botToken.trim() : '';
+    if (!botToken) {
+      sendJson(res, 400, { error: 'invalid_token' });
+      return;
+    }
+
+    // Shape check + live getMe. Shape failures never reach the network.
+    const verified = await verifyTelegramToken(botToken);
+    if (!verified.ok) {
+      sendJson(res, verified.reason === 'invalid_token' ? 400 : 502, { error: verified.reason });
+      return;
+    }
+
+    // Persist where the CLI path persists (the ONE canonical store), and
+    // export to process.env so the adapter factory sees it immediately.
+    upsertEnvVar(TELEGRAM_TOKEN_ENV_KEY, botToken, webEnvFilePath());
+    process.env[TELEGRAM_TOKEN_ENV_KEY] = botToken;
+
+    try {
+      const adapter = await startChannelAdapter(TELEGRAM_CHANNEL_TYPE);
+      if (!adapter) {
+        // Factory declined despite the credential — should not happen; be loud.
+        sendJson(res, 502, { error: 'telegram_unreachable' });
+        return;
+      }
+    } catch (err) {
+      log.error('Telegram adapter failed to start after pairing', { err });
+      sendJson(res, 502, { error: 'telegram_unreachable' });
+      return;
+    }
+
+    log.info('Telegram paired', { bot: `@${verified.bot.username}` });
+    sendJson(res, 200, { ok: true, bot: { username: verified.bot.username } });
+  }
+
+  async function unpairTelegram(res: http.ServerResponse): Promise<void> {
+    await stopChannelAdapter(TELEGRAM_CHANNEL_TYPE);
+    removeEnvVar(TELEGRAM_TOKEN_ENV_KEY, webEnvFilePath());
+    delete process.env[TELEGRAM_TOKEN_ENV_KEY];
+    log.info('Telegram unpaired — adapter stopped, credential removed');
+    sendJson(res, 200, { ok: true });
   }
 
   function handleStatus(res: http.ServerResponse): void {
@@ -640,6 +1184,7 @@ function createAdapter(): ChannelAdapter | null {
     async teardown(): Promise<void> {
       unregisterHttpRoute(WEB_ROUTE);
       unregisterHttpRoute(HEALTH_ROUTE);
+      closeAllStreams();
       mounted = false;
     },
 
@@ -647,8 +1192,11 @@ function createAdapter(): ChannelAdapter | null {
       return mounted;
     },
 
-    async deliver(): Promise<string | undefined> {
-      // Acknowledge only — see the header note on delivery semantics.
+    async deliver(platformId): Promise<string | undefined> {
+      // Acknowledge only — see the header note on delivery semantics. The
+      // ack IS the outbound push point: the row is durably in outbound.db
+      // (that's what the delivery poll just read), so streams can see it.
+      emitTranscriptEvent(platformId);
       return undefined;
     },
   };

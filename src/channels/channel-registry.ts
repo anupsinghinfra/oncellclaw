@@ -22,6 +22,13 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const registry = new Map<string, ChannelRegistration>();
 const activeAdapters = new Map<string, ChannelAdapter>();
 
+/**
+ * The host's setup factory, captured at initChannelAdapters so channels can
+ * be started AFTER boot — credential pairing over the web channel starts the
+ * newly credentialed adapter without a process restart.
+ */
+let capturedSetupFn: ((adapter: ChannelAdapter) => ChannelSetup) | null = null;
+
 /** Register a channel adapter factory. Called by channel modules on import. */
 export function registerChannelAdapter(name: string, registration: ChannelRegistration): void {
   registry.set(name, registration);
@@ -233,6 +240,7 @@ export function getChannelContainerConfig(name: string): ChannelRegistration['co
  * Skips adapters that return null (missing credentials).
  */
 export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => ChannelSetup): Promise<void> {
+  capturedSetupFn = setupFn;
   for (const [name, registration] of registry) {
     try {
       const adapter = await registration.factory();
@@ -281,6 +289,52 @@ export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => 
       log.error('Failed to start channel adapter', { channel: name, err });
     }
   }
+}
+
+/**
+ * Start (or restart) ONE registered channel at runtime — the pairing path.
+ * Same lifecycle as initChannelAdapters for a single registration: factory
+ * (null = credentials still missing), setup, keyed insert. An adapter
+ * already active under the same key is torn down first, so re-pairing with
+ * a new credential swaps the live connection.
+ *
+ * Returns the live adapter, or null when the factory declined. Throws when
+ * called before initChannelAdapters (no setup factory to build with) or on
+ * setup failure — pairing endpoints surface that as an error response.
+ */
+export async function startChannelAdapter(name: string): Promise<ChannelAdapter | null> {
+  if (!capturedSetupFn) {
+    throw new Error('startChannelAdapter before initChannelAdapters — the host has not booted channels yet');
+  }
+  const registration = registry.get(name);
+  if (!registration) {
+    throw new Error(`Unknown channel registration: ${name}`);
+  }
+  const adapter = await registration.factory();
+  if (!adapter) {
+    log.warn('Channel credentials missing — runtime start skipped', { channel: name });
+    return null;
+  }
+  const key = adapter.instance ?? adapter.channelType;
+  await stopChannelAdapter(key);
+  await adapter.setup(capturedSetupFn(adapter));
+  activeAdapters.set(key, adapter);
+  log.info('Channel adapter started (runtime)', { channel: name, type: adapter.channelType, instance: key });
+  return adapter;
+}
+
+/** Stop ONE active adapter by registry key. Returns whether one was live. */
+export async function stopChannelAdapter(key: string): Promise<boolean> {
+  const active = activeAdapters.get(key);
+  if (!active) return false;
+  try {
+    await active.teardown();
+  } catch (err) {
+    log.error('Failed to stop channel adapter', { channel: key, err });
+  }
+  activeAdapters.delete(key);
+  log.info('Channel adapter stopped (runtime)', { channel: key });
+  return true;
 }
 
 /** Tear down all active adapters. */

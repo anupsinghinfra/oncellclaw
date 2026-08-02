@@ -42,6 +42,7 @@ import { initGroupFilesystem } from './group-init.js';
 import { log } from './log.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { isNoAppRunning, type OnCellClient } from './oncell-client.js';
+import { applyCellGatewayConfig } from './cell-gateway.js';
 import { cellCustomerIdForGroup, getCellClient } from './cell-runtime.js';
 import { syncToCell, type SyncSource } from './cell-sync.js';
 import {
@@ -188,11 +189,16 @@ async function startCellSession(session: Session): Promise<boolean> {
   const handle = createHandle(session, customerId, cell.cell_id);
   await pushSessionInputs(client, handle);
 
+  // OneCLI gateway parity with the docker path: when configured, the vault
+  // env replaces raw credentials and a failure aborts the wake (host-sweep
+  // retries) — never a silent spawn with open credentials.
+  const gatewayEnv = await applyCellGatewayConfig(client, cell.cell_id, workspaceAbs, agentGroup);
+
   await stopStaleService(client, cell.cell_id);
   await client.startService(
     cell.cell_id,
     buildServiceCmd(workspaceAbs),
-    buildServiceEnv(workspaceAbs, containerConfig),
+    buildServiceEnv(workspaceAbs, containerConfig, gatewayEnv),
   );
 
   cellHolders.set(customerId, session.id);
@@ -441,13 +447,25 @@ function buildServiceCmd(workspaceAbs: string): string {
  * Service env: agent credentials + timezone + path overrides. Credentials
  * come from the host .env (readEnvFile keeps them out of process.env) with a
  * process.env fallback, and travel ONLY here — never into workspace files.
+ *
+ * With a OneCLI gateway env (docker-parity vault mode) the RAW credentials
+ * are withheld: the vault injects them at request time, which is the entire
+ * point — an agent that also carried the raw key would make the gateway
+ * decorative. The gateway env merges last so its base-url/proxy settings
+ * win.
  */
-export function buildServiceEnv(workspaceAbs: string, containerConfig: ContainerConfig): Record<string, string> {
-  const fromEnvFile = readEnvFile([...CREDENTIAL_ENV_KEYS]);
+export function buildServiceEnv(
+  workspaceAbs: string,
+  containerConfig: ContainerConfig,
+  gatewayEnv?: Record<string, string> | null,
+): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const key of CREDENTIAL_ENV_KEYS) {
-    const value = process.env[key] || fromEnvFile[key];
-    if (value) env[key] = value;
+  if (!gatewayEnv) {
+    const fromEnvFile = readEnvFile([...CREDENTIAL_ENV_KEYS]);
+    for (const key of CREDENTIAL_ENV_KEYS) {
+      const value = process.env[key] || fromEnvFile[key];
+      if (value) env[key] = value;
+    }
   }
   return {
     ...env,
@@ -455,6 +473,7 @@ export function buildServiceEnv(workspaceAbs: string, containerConfig: Container
     NANOCLAW_WORKSPACE_ROOT: `${workspaceAbs}/claw/session`,
     CLAUDE_CONFIG_DIR: `${workspaceAbs}/claw/claude`,
     NANOCLAW_CELL: '1',
+    ...(gatewayEnv ?? {}),
   };
 }
 

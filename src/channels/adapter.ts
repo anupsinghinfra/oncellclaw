@@ -202,6 +202,13 @@ export interface ChannelAdapter {
   resolveChannelName?(platformId: string): Promise<string | null>;
 
   /**
+   * One-line human identity for status surfaces (`/web/status` detail) —
+   * e.g. Telegram's `@BotUsername`. Optional; absent means no detail row.
+   * Must be cheap and synchronous (called per status request).
+   */
+  statusDetail?(): string | undefined;
+
+  /**
    * Subscribe the bot to a thread so follow-up messages route via the
    * platform's "subscribed message" path (onSubscribedMessage in Chat SDK).
    * Called by the router when a mention-sticky wiring first engages in a

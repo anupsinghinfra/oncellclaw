@@ -316,6 +316,16 @@ describe('service plumbing helpers', () => {
     expect(env.NANOCLAW_CELL).toBe('1');
   });
 
+  it('buildServiceEnv withholds raw credentials in gateway (vault) mode', () => {
+    const config = { timezone: 'UTC' } as unknown as ContainerConfig;
+    const env = buildServiceEnv('/ws', config, { ANTHROPIC_BASE_URL: 'https://gw.onecli.sh/v1' });
+    // The vault injects credentials at request time — the raw key must NOT
+    // ride along, or the gateway is decorative.
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://gw.onecli.sh/v1');
+    expect(env.NANOCLAW_CELL).toBe('1');
+  });
+
   it('buildServiceBootstrapScript pins the claude-code version when known', () => {
     expect(buildServiceBootstrapScript('2.1.197', 'm1', '/ws')).toContain('@anthropic-ai/claude-code@2.1.197');
     expect(buildServiceBootstrapScript('', 'm1', '/ws')).toMatch(/npm install -g .* @anthropic-ai\/claude-code$/m);

@@ -243,6 +243,38 @@ export function getContainerState(outDb: Database.Database): ContainerState | nu
   }
 }
 
+/** One inbound row as the transcript reader consumes it. */
+export interface InboundTranscriptRow {
+  id: string;
+  seq: number | null;
+  kind: string;
+  timestamp: string;
+  platform_id: string | null;
+  channel_type: string | null;
+  content: string;
+}
+
+/**
+ * All inbound (user-direction) rows, in insertion order. messages_in IS the
+ * canonical durable record of what the router accepted — the transcript
+ * endpoint reads it rather than inventing a second store. Same bare-file
+ * guard as getDueOutboundMessages: a session inbound.db without the table
+ * reads as empty, never throws.
+ */
+export function getInboundTranscriptRows(db: Database.Database): InboundTranscriptRow[] {
+  const hasMessagesIn = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_in' LIMIT 1`)
+    .get();
+  if (!hasMessagesIn) return [];
+  return db
+    .prepare(
+      `SELECT id, seq, kind, timestamp, platform_id, channel_type, content
+         FROM messages_in
+     ORDER BY COALESCE(seq, 0) ASC, timestamp ASC`,
+    )
+    .all() as InboundTranscriptRow[];
+}
+
 // ---------------------------------------------------------------------------
 // messages_out (read-only from host)
 // ---------------------------------------------------------------------------
@@ -255,6 +287,9 @@ export interface OutboundMessage {
   thread_id: string | null;
   content: string;
   in_reply_to: string | null;
+  /** Container-side insertion order (SELECT * carries it). Null on old rows. */
+  seq?: number | null;
+  timestamp?: string;
 }
 
 /** Paths already warned about a schema-less outbound.db — warn once, not per poll. */
