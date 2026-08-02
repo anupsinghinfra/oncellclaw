@@ -13,6 +13,11 @@ metadata:
 
 # Morning Briefing — a scheduled-task template
 
+This is the thin **daily-digest preset** of the `inbox-sentinel` skill —
+one run each morning. If the user wants their inbox watched continuously
+(triage, todo list, threshold reminders), set up inbox-sentinel instead;
+the two share the same proxy endpoints and degradation rules.
+
 Two halves, two session kinds:
 
 - **Setup** happens in the chat session where the user asked for it: pick a
