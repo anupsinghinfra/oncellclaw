@@ -66,10 +66,10 @@ curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" -H 'Content-Type: applicat
 # poll for replies (echo `cursor` back as `after` next time)
 curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
      'https://<host>/web/assistant/messages?after='                      # → 200 {"messages":[…],"cursor":"…"}
-curl https://<host>/health                                               # → 200 {"ok":true,"groups":[…]}
+curl https://<host>/web/health                                           # → 200 {"ok":true,"groups":[…]}
 ```
 
-**First boot:** the script binds `$PORT` immediately — before downloading anything — with a tiny placeholder server, because service supervisors (the OnCell cell supervisor included) kill a service that isn't accepting connections within seconds, and a cold install takes minutes. While bootstrap runs, **every** path (including `/health`) answers `503` with `{"ok":false,"phase":"…"}`, where `phase` walks `starting → clone → toolchain → install → build → provision → handoff`. A brief connection-refused gap follows while the placeholder hands the port to the real host, then `/health` returns `200 {"ok":true,…}` — poll it until `ok` is true to know the assistant is live. Warm restarts skip the download and install work and hand off in seconds.
+**First boot:** the script binds `$PORT` immediately — before downloading anything — with a tiny placeholder server, because service supervisors (the OnCell cell supervisor included) kill a service that isn't accepting connections within seconds, and a cold install takes minutes. While bootstrap runs, **every** path (including `/web/health`) answers `503` with `{"ok":false,"phase":"…"}`, where `phase` walks `starting → clone → toolchain → install → build → provision → handoff`. A brief connection-refused gap follows while the placeholder hands the port to the real host, then `/web/health` returns `200 {"ok":true,…}` — poll it until `ok` is true to know the assistant is live. Warm restarts skip the download and install work and hand off in seconds.
 
 Since cells have no curl, the service command that fetches and runs the script is itself node-only:
 
@@ -265,7 +265,7 @@ Key files:
 - `src/oncell-client.ts` — minimal self-contained OnCell API client
 - `src/db/` — central DB (users, roles, agent groups, messaging groups, wiring, migrations)
 - `src/channels/` — channel adapter infra (adapters installed via `/add-<channel>` skills)
-- `src/channels/web.ts` — built-in `web` channel: HTTP chat + `/health` on the one port
+- `src/channels/web.ts` — built-in `web` channel: HTTP chat + health on the one port (`/web/health`, and bare `/health` for self-hosts — hosted preview proxies reserve top-level `/health` for themselves)
 - `src/webhook-server.ts` — that one HTTP port (`WEBHOOK_PORT`, else `PORT`, else 3000)
 - `src/web-provision.ts` / `scripts/provision.ts` — non-interactive setup: one group paired to `web`
 - `scripts/cloud-start.sh` — empty machine → running host; the hosted bootstrap

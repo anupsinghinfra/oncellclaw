@@ -86,9 +86,15 @@ export ONCELLCLAW_RUNTIME PORT
 # install. HUSKY=0 is husky's own documented off-switch.
 export HUSKY=0
 # corepack: never prompt, and keep its cache with the rest of the toolchain
-# so pnpm survives src-<sha> swaps.
+# so pnpm survives src-<sha> swaps. INTEGRITY_KEYS=0 because npm rotated its
+# registry signing keys and the corepack bundled with node ships a stale
+# keyset — verification dies with "Cannot find matching keyid" even for
+# genuine packages (seen live on cells). Downloads still ride registry TLS,
+# and the npm fallback below has no signature check either, so this drops
+# no protection this path ever really had.
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
+export COREPACK_INTEGRITY_KEYS=0
 
 stage_no=0
 stage() {
@@ -433,19 +439,25 @@ info "node $(node --version)"
 
 mkdir -p "$TOOLCHAIN_DIR/bin"
 export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
-if ! have pnpm && have corepack; then
+# A working pnpm is one that can print its version — a corepack shim can
+# exist yet die at runtime (stale bundled keyset, network), so existence is
+# not the test.
+pnpm_works() { pnpm --version >/dev/null 2>&1; }
+if ! pnpm_works && have corepack; then
   # Shims land in the toolchain, not the (possibly read-only) node bin dir.
   # The shim resolves the exact pnpm version from this checkout's
   # packageManager field on first run.
   corepack enable --install-directory "$TOOLCHAIN_DIR/bin" >/dev/null 2>&1 || true
 fi
-if ! have pnpm; then
-  # corepack absent or failed — npm (ships with node) into the same prefix.
+if ! pnpm_works; then
+  # corepack absent or its shim broken — remove any dead shims and install
+  # via npm (ships with node) into the same prefix.
+  rm -f "$TOOLCHAIN_DIR/bin/pnpm" "$TOOLCHAIN_DIR/bin/pnpx"
   pm="$(node -p "(require('./package.json').packageManager||'pnpm@latest')" 2>/dev/null || echo 'pnpm@latest')"
   info "corepack unavailable — installing ${pm} via npm"
   npm install -g --silent --prefix "$TOOLCHAIN_DIR" "$pm" >/dev/null
 fi
-have pnpm || die 'pnpm could not be provisioned via corepack or npm.'
+pnpm_works || die 'pnpm could not be provisioned via corepack or npm.'
 info "pnpm $(pnpm --version)"
 
 # ---------------------------------------------------------------------------

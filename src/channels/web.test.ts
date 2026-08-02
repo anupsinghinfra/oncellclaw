@@ -255,6 +255,12 @@ describe('web channel — auth', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, groups: [{ slug: GROUP, name: 'Assistant', agents: 1 }] });
   });
+
+  it('serves the same health at /web/health without a token (hosted preview proxies reserve top-level /health)', async () => {
+    const res = await req('/web/health');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, groups: [{ slug: GROUP, name: 'Assistant', agents: 1 }] });
+  });
 });
 
 describe('web channel — POST /web/:group/message', () => {

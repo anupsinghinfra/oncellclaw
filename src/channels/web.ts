@@ -353,6 +353,16 @@ function createAdapter(): ChannelAdapter | null {
   }
 
   async function handleWeb(req: http.IncomingMessage, res: http.ServerResponse, config: ChannelSetup): Promise<void> {
+    // /web/health mirrors /health: on hosted cells the preview proxy answers
+    // top-level /health itself (host liveness) and never forwards it, so the
+    // claw's own health must live under the /web/ prefix, which is forwarded.
+    // Same contract: unauthenticated, unlimited, exposes no message content.
+    const requestPath = (req.url ?? '/').split('?')[0];
+    if (requestPath === `/${WEB_ROUTE}/${HEALTH_ROUTE}`) {
+      handleHealth(req, res);
+      return;
+    }
+
     // Brute-force gate BEFORE the token compare: an IP that has burned its
     // failure budget gets a 429 without the token ever being examined.
     const ip = clientIpOf(req);
