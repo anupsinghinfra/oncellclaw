@@ -25,7 +25,8 @@ import {
   type RoutingContext,
 } from './formatter.js';
 import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
-import type { AgentProvider, AgentQuery, ProviderEvent, ProviderExchange } from './providers/types.js';
+import { recordRunCost, type RunCostDelta } from './db/session-cost.js';
+import type { AgentProvider, AgentQuery, ProviderCost, ProviderEvent, ProviderExchange } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
 const ACTIVE_POLL_INTERVAL_MS = 500;
@@ -414,6 +415,48 @@ interface QueryResult {
   continuation?: string;
 }
 
+/** Cumulative snapshot baseline for cost reconciliation (all fields known). */
+export interface CostBaseline {
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+export const ZERO_COST_BASELINE: CostBaseline = {
+  costUsd: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+};
+
+/**
+ * Reconcile a provider's CUMULATIVE cost snapshot into a per-turn delta.
+ *
+ * Claude Code's `total_cost_usd`/`usage` are session totals so far, so the
+ * per-turn increment is `current - previous`. A snapshot BELOW the baseline
+ * means the underlying run restarted (or a provider reports per-turn
+ * values) — then the snapshot itself is the delta, never a negative number.
+ * Fields absent from the snapshot contribute nothing and leave their
+ * baseline untouched.
+ */
+export function reconcileCostSnapshot(
+  baseline: CostBaseline,
+  snapshot: ProviderCost,
+): { delta: RunCostDelta; next: CostBaseline } {
+  const delta: RunCostDelta = {};
+  const next: CostBaseline = { ...baseline };
+  for (const field of Object.keys(ZERO_COST_BASELINE) as Array<keyof CostBaseline>) {
+    const current = snapshot[field];
+    if (typeof current !== 'number' || !Number.isFinite(current)) continue;
+    delta[field] = current >= baseline[field] ? current - baseline[field] : current;
+    next[field] = current;
+  }
+  return { delta, next };
+}
+
 export async function processQuery(
   query: AgentQuery,
   routing: RoutingContext,
@@ -426,6 +469,8 @@ export async function processQuery(
   let queryContinuation: string | undefined;
   let done = false;
   let unwrappedNudged = false;
+  // Cumulative-cost baseline for this query run — see reconcileCostSnapshot.
+  let costBaseline: CostBaseline = { ...ZERO_COST_BASELINE };
   // Once-per-turn guard for the task-run "<message> block was not delivered"
   // nudge — mirrors unwrappedNudged for chat turns.
   let taskBlockNudged = false;
@@ -576,8 +621,25 @@ export async function processQuery(
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
+
+        // Session cost ledger: reconcile the provider's cumulative snapshot
+        // into this turn's delta, persist it, and keep the turn's own cost
+        // for the per-reply annotation on outbound rows. Best-effort — a
+        // ledger write failure must never break delivery.
+        let turnCostUsd: number | undefined;
+        if (event.cost) {
+          const { delta, next } = reconcileCostSnapshot(costBaseline, event.cost);
+          costBaseline = next;
+          try {
+            recordRunCost(delta);
+          } catch (err) {
+            log(`Failed to record run cost: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          if (typeof delta.costUsd === 'number' && delta.costUsd > 0) turnCostUsd = delta.costUsd;
+        }
+
         if (event.text) {
-          const { sent, hasUnwrapped, taskBlocks } = dispatchResultText(event.text, routing);
+          const { sent, hasUnwrapped, taskBlocks } = dispatchResultText(event.text, routing, turnCostUsd);
           const willRetryTaskBlocks = shouldNudgeTaskBlocks(routing.taskRun, taskBlocks, taskBlockNudged);
           // One-door task delivery: the final text becomes the run log entry
           // while explicit append-log calls remain optional additive notes.
@@ -716,6 +778,8 @@ export interface TaskMessageBlock {
 export function dispatchResultText(
   text: string,
   routing: RoutingContext,
+  /** This turn's cost delta (USD) — stamped on delivered rows when known. */
+  turnCostUsd?: number,
 ): { sent: number; hasUnwrapped: boolean; taskBlocks: TaskMessageBlock[] } {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
@@ -753,7 +817,7 @@ export function dispatchResultText(
       scratchpadParts.push(`[dropped: unknown destination "${toName}"] ${body}`);
       continue;
     }
-    sendToDestination(dest, body, routing);
+    sendToDestination(dest, body, routing, turnCostUsd);
     sent++;
   }
   if (lastIndex < text.length) {
@@ -833,7 +897,7 @@ export function autoAppendTaskLog(text: string): void {
   log('Task run log auto-appended from final text');
 }
 
-function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {
+function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext, turnCostUsd?: number): void {
   const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
   const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
   // Resolve thread_id per-destination from the most recent inbound message
@@ -848,7 +912,10 @@ function sendToDestination(dest: DestinationEntry, body: string, routing: Routin
     platform_id: platformId,
     channel_type: channelType,
     thread_id: destRouting?.threadId ?? null,
-    content: JSON.stringify({ text: body }),
+    // costUsd is the whole TURN's delta — a turn that fans out to several
+    // destinations stamps the same figure on each (an annotation for the
+    // reader, not an accounting split).
+    content: JSON.stringify({ text: body, ...(turnCostUsd !== undefined ? { costUsd: turnCostUsd } : {}) }),
   });
 }
 

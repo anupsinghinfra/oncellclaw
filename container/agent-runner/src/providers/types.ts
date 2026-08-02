@@ -120,6 +120,21 @@ export interface AgentQuery {
   abort(): void;
 }
 
+/**
+ * Cost/usage snapshot attached to a result event. Values are CUMULATIVE for
+ * the underlying SDK run (Claude Code's `total_cost_usd` is the session
+ * total so far) — the poll-loop delta-tracks between results, so providers
+ * just report what the SDK said. All fields optional: providers without
+ * usage reporting omit the whole object.
+ */
+export interface ProviderCost {
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}
+
 export type ProviderEvent =
   | { type: 'init'; continuation: string }
   /**
@@ -127,8 +142,9 @@ export type ProviderEvent =
    * turn as an error (e.g. a non-retryable Anthropic 403 billing_error). The
    * poll-loop uses it to surface the result text to the user instead of
    * dropping it as un-wrapped scratchpad, and to skip the re-wrap nudge.
+   * `cost` carries the SDK's cumulative usage snapshot (see ProviderCost).
    */
-  | { type: 'result'; text: string | null; isError?: boolean }
+  | { type: 'result'; text: string | null; isError?: boolean; cost?: ProviderCost }
   | { type: 'error'; message: string; retryable: boolean; classification?: string }
   | { type: 'progress'; message: string }
   /**

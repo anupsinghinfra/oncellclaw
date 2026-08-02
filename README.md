@@ -109,10 +109,12 @@ curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
 curl -N -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
      'https://<host>/web/assistant/stream'                               # replays, then streams live
 curl https://<host>/web/health                                           # → 200 {"ok":true,"groups":[…]}
-# introspection for dashboards (token-authed): version, groups, channels, skills
+# introspection for dashboards (token-authed): version, groups (incl. run cost), channels, skills
 curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
      https://<host>/web/status                                           # → 200 {"version":…,"channels":[…],…}
 ```
+
+**Run cost:** every agent turn's cost and token usage (as Claude Code reports it) is accumulated per session in the session DB. `/web/status` sums the ledger per group — `groups[].cost` is `{ costUsd, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, turns }`, or `null` until a first turn is recorded — and each assistant transcript row carries its own turn's `costUsd`, so a dashboard can render a subtle per-reply annotation.
 
 **First boot:** the script binds `$PORT` immediately — before downloading anything — with a tiny placeholder server, because service supervisors (the OnCell cell supervisor included) kill a service that isn't accepting connections within seconds, and a cold install takes minutes. While bootstrap runs, **every** path (including `/web/health`) answers `503` with `{"ok":false,"phase":"…"}`, where `phase` walks `starting → clone → toolchain → install → build → provision → handoff`. A brief connection-refused gap follows while the placeholder hands the port to the real host, then `/web/health` returns `200 {"ok":true,…}` — poll it until `ok` is true to know the assistant is live. Warm restarts skip the download and install work and hand off in seconds.
 

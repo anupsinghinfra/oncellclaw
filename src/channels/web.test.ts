@@ -620,7 +620,8 @@ describe('web channel — GET /web/status', () => {
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8')) as { version: string };
     expect(body.version).toBe(pkg.version);
 
-    expect(body.groups).toEqual([{ slug: GROUP, name: 'Assistant', agents: 1 }]);
+    // cost is null until a session records a run-cost ledger.
+    expect(body.groups).toEqual([{ slug: GROUP, name: 'Assistant', agents: 1, cost: null }]);
 
     // Channels come from the registry. web is live (configured+connected);
     // the null-factory registration reports configured:false, connected:null.
@@ -652,6 +653,40 @@ describe('web channel — GET /web/status', () => {
     for (let i = 0; i < 5; i++) {
       expect((await req('/web/status', { headers: auth() })).status).toBe(200);
     }
+  });
+
+  it('reports the group run-cost ledger summed from session DBs', async () => {
+    // Write the ledger exactly where the container's poll loop persists it
+    // (outbound.db session_state, key run_cost_totals).
+    const sessionId = resolveSession('ag-web', 'mg-web', null, 'shared').session.id;
+    const db = openOutboundDbRw('ag-web', sessionId);
+    try {
+      db.prepare(`INSERT OR REPLACE INTO session_state (key, value, updated_at) VALUES ('run_cost_totals', ?, ?)`).run(
+        JSON.stringify({
+          costUsd: 0.42,
+          inputTokens: 1000,
+          outputTokens: 200,
+          cacheReadTokens: 5000,
+          cacheCreationTokens: 10,
+          turns: 7,
+        }),
+        now(),
+      );
+    } finally {
+      db.close();
+    }
+
+    const body = (await (await req('/web/status', { headers: auth() })).json()) as {
+      groups: Array<{ slug: string; cost: { costUsd: number; inputTokens: number; turns: number } | null }>;
+    };
+    expect(body.groups[0]!.cost).toEqual({
+      costUsd: 0.42,
+      inputTokens: 1000,
+      outputTokens: 200,
+      cacheReadTokens: 5000,
+      cacheCreationTokens: 10,
+      turns: 7,
+    });
   });
 
   it('405s non-GET methods', async () => {
@@ -915,6 +950,26 @@ describe('web channel — GET /web/:group/transcript', () => {
     ).json()) as { messages: unknown[]; cursor: string };
     expect(drained.messages).toEqual([]);
     expect(drained.cursor).toBe(all.cursor);
+  });
+
+  it('assistant rows surface their turn costUsd; user rows never carry one', async () => {
+    seedInbound(sessionId, 'u1', '2026-01-01T00:00:01.000Z', 'how much?');
+    // What the runner writes when it stamps a turn's cost delta.
+    const db = openOutboundDbRw('ag-web', sessionId);
+    try {
+      db.prepare(
+        `INSERT INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content, in_reply_to)
+         VALUES ('a1', 2, '2026-01-01T00:00:02.000Z', 'chat', ?, 'web', NULL, ?, 'u1')`,
+      ).run(GROUP, JSON.stringify({ text: 'this much', costUsd: 0.031 }));
+    } finally {
+      db.close();
+    }
+
+    const body = (await (await req(`/web/${GROUP}/transcript`, { headers: auth() })).json()) as {
+      messages: Array<{ id: string; costUsd?: number }>;
+    };
+    expect(body.messages.find((m) => m.id === 'a1')!.costUsd).toBe(0.031);
+    expect(body.messages.find((m) => m.id === 'u1')!.costUsd).toBeUndefined();
   });
 
   it('/messages keeps its outbound-only contract (unchanged for existing pollers)', async () => {

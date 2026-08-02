@@ -14,6 +14,7 @@ import type {
   AgentProvider,
   AgentQuery,
   McpServerConfig,
+  ProviderCost,
   ProviderEvent,
   ProviderOptions,
   QueryInput,
@@ -44,6 +45,40 @@ export function claudeExecutablePath(env: NodeJS.ProcessEnv = process.env): stri
     return path.join(env.HOME || '/workspace', '.claw-tools', 'bin', 'claude');
   }
   return '/pnpm/claude';
+}
+
+/**
+ * Cost/usage extraction from the SDK's terminal `result` message.
+ *
+ * `total_cost_usd` and `usage` are CUMULATIVE for the SDK run — the
+ * poll-loop delta-tracks between successive results, so this just reports
+ * the snapshot faithfully. Defensive on every field: an SDK version that
+ * drops or renames a field degrades to omitting it, never to NaN in the
+ * session ledger. Returns undefined when nothing usable is present.
+ */
+export function extractResultCost(message: unknown): ProviderCost | undefined {
+  const m = message as {
+    total_cost_usd?: unknown;
+    usage?: {
+      input_tokens?: unknown;
+      output_tokens?: unknown;
+      cache_read_input_tokens?: unknown;
+      cache_creation_input_tokens?: unknown;
+    };
+  };
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  const cost: ProviderCost = {};
+  const costUsd = num(m.total_cost_usd);
+  const inputTokens = num(m.usage?.input_tokens);
+  const outputTokens = num(m.usage?.output_tokens);
+  const cacheReadTokens = num(m.usage?.cache_read_input_tokens);
+  const cacheCreationTokens = num(m.usage?.cache_creation_input_tokens);
+  if (costUsd !== undefined) cost.costUsd = costUsd;
+  if (inputTokens !== undefined) cost.inputTokens = inputTokens;
+  if (outputTokens !== undefined) cost.outputTokens = outputTokens;
+  if (cacheReadTokens !== undefined) cost.cacheReadTokens = cacheReadTokens;
+  if (cacheCreationTokens !== undefined) cost.cacheCreationTokens = cacheCreationTokens;
+  return Object.keys(cost).length > 0 ? cost : undefined;
 }
 
 export interface SdkRateLimitInfo {
@@ -624,7 +659,8 @@ export class ClaudeProvider implements AgentProvider {
           // billing/quota notice to the user rather than dropping the turn.
           const m = message as { result?: string; is_error?: boolean; errors?: string[] };
           const text = m.result ?? (m.errors && m.errors.length > 0 ? m.errors.join('\n') : null);
-          yield { type: 'result', text, isError: m.is_error === true };
+          const cost = extractResultCost(message);
+          yield { type: 'result', text, isError: m.is_error === true, ...(cost ? { cost } : {}) };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };
         } else if (message.type === 'rate_limit_event') {

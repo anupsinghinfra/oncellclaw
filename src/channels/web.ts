@@ -64,8 +64,11 @@
  *        Introspection for the dashboard's Connections & Integrations
  *        panel: channels from the adapter registry with honestly-knowable
  *        configured/connected state, skills as name+description only (no
- *        file contents). Never message-rate-limited (it is a read, like
- *        the poll endpoint), though auth failures still spend IP budget.
+ *        file contents). Each group carries its run-cost ledger summed
+ *        across sessions ({ costUsd, input/output/cache tokens, turns },
+ *        null when nothing recorded). Never message-rate-limited (it is a
+ *        read, like the poll endpoint), though auth failures still spend
+ *        IP budget.
  *
  * Auth: `Authorization: Bearer $ONCELLCLAW_WEB_TOKEN` on every /web/ route,
  * compared in constant time. When ONCELLCLAW_WEB_TOKEN is unset the channel
@@ -121,7 +124,12 @@ import {
   getMessagingGroupsByChannel,
   setMessagingGroupArchiveEpoch,
 } from '../db/messaging-groups.js';
-import { getDueOutboundMessages, getInboundTranscriptRows } from '../db/session-db.js';
+import {
+  getDueOutboundMessages,
+  getInboundTranscriptRows,
+  readSessionCostTotals,
+  type SessionCostTotals,
+} from '../db/session-db.js';
 import { getSessionsByMessagingGroup } from '../db/sessions.js';
 import { log } from '../log.js';
 import { openInboundDb, openOutboundDb } from '../session-manager.js';
@@ -412,6 +420,9 @@ export interface WebTranscriptItem {
   text: string | null;
   /** Staged outbound attachments (assistant rows that carried files). */
   files?: WebTranscriptFile[];
+  /** This reply's turn cost in USD (assistant rows whose runner stamped it) —
+   *  the dashboard's subtle per-reply annotation. */
+  costUsd?: number;
 }
 
 /** A merged row before cursor assignment (see the transcript registry). */
@@ -423,6 +434,7 @@ export interface WebTranscriptRow {
   kind: string;
   text: string | null;
   files?: WebTranscriptFile[];
+  costUsd?: number;
 }
 
 interface TranscriptSourceRow {
@@ -434,6 +446,7 @@ interface TranscriptSourceRow {
   userId?: string;
   text: string | null;
   files?: WebTranscriptFile[];
+  costUsd?: number;
   /** Assistant rows: the inbound message id this answers (causal anchor). */
   inReplyTo?: string | null;
 }
@@ -584,6 +597,7 @@ export function buildWebTranscript(messagingGroupId: string, platformId: string)
           const fileRefs = Array.isArray((content as { files?: unknown }).files)
             ? webTranscriptFiles(platformId, row.id)
             : [];
+          const costUsd = (content as { costUsd?: unknown }).costUsd;
           outboundRows.push({
             id: row.id,
             seq: row.seq ?? 0,
@@ -592,6 +606,7 @@ export function buildWebTranscript(messagingGroupId: string, platformId: string)
             direction: 'assistant',
             text: typeof content.text === 'string' ? content.text : null,
             ...(fileRefs.length > 0 ? { files: fileRefs } : {}),
+            ...(typeof costUsd === 'number' && Number.isFinite(costUsd) ? { costUsd } : {}),
             inReplyTo: row.in_reply_to,
           });
         }
@@ -652,6 +667,7 @@ export function buildWebTranscript(messagingGroupId: string, platformId: string)
       kind: row.kind,
       text: row.text,
       ...(row.files !== undefined ? { files: row.files } : {}),
+      ...(row.costUsd !== undefined ? { costUsd: row.costUsd } : {}),
     });
   }
   return merged;
@@ -750,6 +766,48 @@ export function collectChannelStatuses(): WebChannelStatus[] {
     .filter((name) => !manifestTypes.has(name))
     .map((name) => statusOf(name, 'adapter not started (credentials missing or channel disabled)'));
   return [...manifest, ...extras];
+}
+
+/**
+ * Sum run-cost ledgers across every session bound to a messaging group —
+ * what /web/status reports per group. The container's poll loop is the
+ * single writer of the ledger (session_state `run_cost_totals`); this is a
+ * read-only fold over it. Returns null when no session has recorded
+ * anything (older sessions, providers without usage reporting) so the
+ * dashboard can distinguish "zero dollars" from "no data".
+ */
+export function collectGroupCost(messagingGroupId: string): SessionCostTotals | null {
+  let found = false;
+  const sum: SessionCostTotals = {
+    costUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    turns: 0,
+  };
+  for (const session of getSessionsByMessagingGroup(messagingGroupId)) {
+    let db;
+    try {
+      db = openOutboundDb(session.agent_group_id, session.id);
+    } catch {
+      continue; // session folder not materialized yet
+    }
+    try {
+      const totals = readSessionCostTotals(db);
+      if (!totals) continue;
+      found = true;
+      sum.costUsd += totals.costUsd;
+      sum.inputTokens += totals.inputTokens;
+      sum.outputTokens += totals.outputTokens;
+      sum.cacheReadTokens += totals.cacheReadTokens;
+      sum.cacheCreationTokens += totals.cacheCreationTokens;
+      sum.turns += totals.turns;
+    } finally {
+      db.close();
+    }
+  }
+  return found ? sum : null;
 }
 
 /** name + description only — /web/status never exposes skill file contents. */
@@ -862,6 +920,7 @@ function createAdapter(): ChannelAdapter | null {
         kind: row.kind,
         text: row.text,
         ...(row.files !== undefined ? { files: row.files } : {}),
+        ...(row.costUsd !== undefined ? { costUsd: row.costUsd } : {}),
       };
     });
     items.sort((a, b) => registry!.byId.get(a.id)!.index - registry!.byId.get(b.id)!.index);
@@ -1392,6 +1451,9 @@ function createAdapter(): ChannelAdapter | null {
         slug: mg.platform_id,
         name: mg.name,
         agents: getMessagingGroupAgents(mg.id).length,
+        // Run-cost ledger summed across the group's sessions; null = no
+        // data recorded yet (distinct from a genuine $0).
+        cost: collectGroupCost(mg.id),
       }));
       sendJson(res, 200, {
         version,

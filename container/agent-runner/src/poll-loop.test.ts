@@ -4,7 +4,15 @@ import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '
 import { getPendingMessages, markCompleted } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
-import { isCorruptionError, processBatchWithRetry, processQuery, runPollLoop } from './poll-loop.js';
+import { getRunCostTotals } from './db/session-cost.js';
+import {
+  isCorruptionError,
+  processBatchWithRetry,
+  processQuery,
+  reconcileCostSnapshot,
+  runPollLoop,
+  ZERO_COST_BASELINE,
+} from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
@@ -452,6 +460,95 @@ describe('isCorruptionError', () => {
     expect(isCorruptionError('database is locked')).toBe(false);
     expect(isCorruptionError('no such table: messages_in')).toBe(false);
     expect(isCorruptionError('')).toBe(false);
+  });
+});
+
+// --- Per-session run cost: reconcile + persist + per-reply annotation (#8) ---
+
+describe('reconcileCostSnapshot', () => {
+  it('cumulative snapshots produce per-turn deltas', () => {
+    const first = reconcileCostSnapshot(ZERO_COST_BASELINE, { costUsd: 0.05, inputTokens: 100, outputTokens: 20 });
+    expect(first.delta).toEqual({ costUsd: 0.05, inputTokens: 100, outputTokens: 20 });
+
+    const second = reconcileCostSnapshot(first.next, { costUsd: 0.08, inputTokens: 160, outputTokens: 50 });
+    expect(second.delta.costUsd).toBeCloseTo(0.03, 10);
+    expect(second.delta.inputTokens).toBe(60);
+    expect(second.delta.outputTokens).toBe(30);
+  });
+
+  it('a snapshot below the baseline is treated as a fresh run, never negative', () => {
+    const { delta, next } = reconcileCostSnapshot(
+      { ...ZERO_COST_BASELINE, costUsd: 0.5, inputTokens: 1000 },
+      { costUsd: 0.02, inputTokens: 40 },
+    );
+    expect(delta).toEqual({ costUsd: 0.02, inputTokens: 40 });
+    expect(next.costUsd).toBe(0.02);
+  });
+
+  it('absent fields contribute nothing and leave their baseline untouched', () => {
+    const { delta, next } = reconcileCostSnapshot({ ...ZERO_COST_BASELINE, inputTokens: 100 }, { costUsd: 0.01 });
+    expect(delta).toEqual({ costUsd: 0.01 });
+    expect(next.inputTokens).toBe(100);
+  });
+});
+
+describe('run-cost ledger through processQuery', () => {
+  function seedDestination(name: string, channelType: string, platformId: string): void {
+    getInboundDb()
+      .prepare(
+        `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+         VALUES (?, ?, 'channel', ?, ?, NULL)`,
+      )
+      .run(name, name, channelType, platformId);
+  }
+
+  it('accumulates cumulative snapshots as deltas and stamps costUsd on delivered rows', async () => {
+    seedDestination('discord-main', 'discord', 'chan-1');
+
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield {
+        type: 'result',
+        text: '<message to="discord-main">first</message>',
+        cost: { costUsd: 0.05, inputTokens: 100, outputTokens: 20 },
+      };
+      yield {
+        type: 'result',
+        text: '<message to="discord-main">second</message>',
+        cost: { costUsd: 0.08, inputTokens: 160, outputTokens: 50 },
+      };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    // Ledger: the two cumulative snapshots sum to the final cumulative value.
+    const totals = getRunCostTotals();
+    expect(totals.costUsd).toBeCloseTo(0.08, 10);
+    expect(totals.inputTokens).toBe(160);
+    expect(totals.outputTokens).toBe(50);
+    expect(totals.turns).toBe(2);
+
+    // Per-reply annotation: each delivered row carries ITS turn's delta.
+    const out = getUndeliveredMessages().map((m) => JSON.parse(m.content) as { text: string; costUsd?: number });
+    expect(out).toHaveLength(2);
+    expect(out[0].costUsd).toBeCloseTo(0.05, 10);
+    expect(out[1].costUsd).toBeCloseTo(0.03, 10);
+  });
+
+  it('results without cost data leave the ledger untouched and rows unannotated', async () => {
+    seedDestination('discord-main', 'discord', 'chan-1');
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield { type: 'result', text: '<message to="discord-main">no usage</message>' };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getRunCostTotals().turns).toBe(0);
+    const out = getUndeliveredMessages().map((m) => JSON.parse(m.content) as { costUsd?: number });
+    expect(out[0].costUsd).toBeUndefined();
   });
 });
 

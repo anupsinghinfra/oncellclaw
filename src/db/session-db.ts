@@ -243,6 +243,44 @@ export function getContainerState(outDb: Database.Database): ContainerState | nu
   }
 }
 
+/** Cumulative run-cost totals as the container's poll loop persists them
+ *  (session_state key `run_cost_totals`, see container/agent-runner
+ *  src/db/session-cost.ts — the container is the single writer). */
+export interface SessionCostTotals {
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  turns: number;
+}
+
+/**
+ * Read a session's run-cost totals from outbound.db (read-only). Returns
+ * null when nothing has been recorded — older sessions, providers without
+ * usage reporting, or a malformed row (defensive: status must never fail
+ * because one ledger row is bad).
+ */
+export function readSessionCostTotals(outDb: Database.Database): SessionCostTotals | null {
+  try {
+    const row = outDb.prepare(`SELECT value FROM session_state WHERE key = 'run_cost_totals'`).get() as
+      { value: string } | undefined;
+    if (!row) return null;
+    const parsed = JSON.parse(row.value) as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    return {
+      costUsd: num(parsed.costUsd),
+      inputTokens: num(parsed.inputTokens),
+      outputTokens: num(parsed.outputTokens),
+      cacheReadTokens: num(parsed.cacheReadTokens),
+      cacheCreationTokens: num(parsed.cacheCreationTokens),
+      turns: num(parsed.turns),
+    };
+  } catch {
+    return null; // table missing (older DB) or malformed JSON
+  }
+}
+
 /** One inbound row as the transcript reader consumes it. */
 export interface InboundTranscriptRow {
   id: string;
