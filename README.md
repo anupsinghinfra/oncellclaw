@@ -23,21 +23,20 @@
 
 ---
 
-## Why I Built NanoClaw
+## Why oncellclaw
 
-[OpenClaw](https://github.com/openclaw/openclaw) is an impressive project, but I wouldn't have been able to sleep if I had given complex software I didn't understand full access to my life. OpenClaw has nearly half a million lines of code, 53 config files, and 70+ dependencies. Its security is at the application level (allowlists, pairing codes) rather than true OS-level isolation. Everything runs in one Node process with shared memory.
+A personal assistant has access to your life, so two things matter more than features: you should be able to *read* the code that runs it, and it should be *isolated* — really isolated, not behind permission checks.
 
-NanoClaw provides that same core functionality, but in a codebase small enough to understand: one process and a handful of files. Agents run in their own Linux containers with filesystem isolation, not merely behind permission checks.
+[NanoClaw](https://github.com/nanocoai/nanoclaw) got both right. Where [OpenClaw](https://github.com/openclaw/openclaw) is nearly half a million lines, 53 config files and 70+ dependencies running in one Node process with shared memory, NanoClaw is one process and a handful of files you can actually audit, with agents in their own Linux containers. oncellclaw keeps that codebase — and its thesis — intact.
 
-### Why OnCell on top
+What it changes is *where the isolation lives*. Containers on your laptop mean your assistant dies with your laptop: close the lid and it stops; reinstall and its memory is gone; travel and it is not with you. So each agent group moves into a gVisor-sandboxed [OnCell](https://oncell.ai) cell — the same OS-level boundary, no longer tied to your machine, and now *durable*:
 
-NanoClaw's security thesis is OS-level isolation. OnCell extends it: each agent group runs in a gVisor-sandboxed cell in the cloud — the same isolation boundary, no longer tied to your machine. On top of that the cell is *durable*:
+- **Its whole world lives in the cell** — `CLAUDE.md`, memory, and working files survive laptop death, reinstalls, and travel.
+- **Idle costs ~$0** — a group that isn't talking pauses to storage; your next message wakes it.
+- **Snapshot or fork it** — the cell's filesystem is snapshot-able and forkable through the OnCell API, so you can checkpoint an assistant or clone its entire state.
+- **Credentials never touch the workspace** — they are passed as service environment only, never written to a file the agent can read.
 
-- **Group memory and files live in the cell** — `CLAUDE.md`, memory, working files survive laptop death, reinstalls, and travel.
-- **Idle groups cost ~$0** — a group that isn't talking pauses; the next message wakes it.
-- **Snapshot / fork a group's whole world** — the cell's filesystem is snapshot-able and forkable via the OnCell API, so you can checkpoint or clone an agent's entire state.
-
-The host process shrinks to a channel router: messages in, messages out. Everything the agent does happens in its cell. No `ONCELL_API_KEY`? Everything still runs fully local on Docker, exactly like upstream NanoClaw.
+The host process shrinks to a channel router: messages in, messages out. Everything the agent actually does happens in its cell. No `ONCELL_API_KEY`? Everything still runs fully local on Docker, exactly like upstream NanoClaw.
 
 ## Two ways to run it
 
