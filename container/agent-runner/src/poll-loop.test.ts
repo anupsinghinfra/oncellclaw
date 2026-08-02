@@ -4,9 +4,9 @@ import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '
 import { getPendingMessages, markCompleted } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
-import { isCorruptionError, processQuery } from './poll-loop.js';
+import { isCorruptionError, processBatchWithRetry, processQuery, runPollLoop } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
-import type { AgentQuery, ProviderEvent } from './providers/types.js';
+import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
 beforeEach(() => {
   initTestSessionDb();
@@ -452,6 +452,145 @@ describe('isCorruptionError', () => {
     expect(isCorruptionError('database is locked')).toBe(false);
     expect(isCorruptionError('no such table: messages_in')).toBe(false);
     expect(isCorruptionError('')).toBe(false);
+  });
+});
+
+// --- Errored-batch retry: one delayed retry before the poison ack (#7) ---
+
+/**
+ * Provider whose first `failures` queries throw mid-stream (after init, like
+ * a real LLM 500 surfacing through the SDK), then succeed. Records each
+ * query's continuation so tests can assert what the retry resumed from.
+ */
+function makeFlakyProvider(opts: {
+  failures: number;
+  sessionInvalid?: boolean;
+  resultText?: string | null;
+}): { provider: AgentProvider; queryCalls: Array<{ continuation?: string }> } {
+  const queryCalls: Array<{ continuation?: string }> = [];
+  const provider: AgentProvider = {
+    supportsNativeSlashCommands: false,
+    registerMemorySessionHook() {},
+    isSessionInvalid: () => opts.sessionInvalid ?? false,
+    query(input) {
+      queryCalls.push({ continuation: input.continuation });
+      const shouldFail = queryCalls.length <= opts.failures;
+      const attempt = queryCalls.length;
+      async function* events(): AsyncGenerator<ProviderEvent> {
+        yield { type: 'init', continuation: `sess-${attempt}` };
+        if (shouldFail) throw new Error('LLM 500');
+        yield { type: 'result', text: opts.resultText ?? null };
+      }
+      return { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+    },
+  };
+  return { provider, queryCalls };
+}
+
+function ackStatus(id: string): string | undefined {
+  const row = getOutboundDb().prepare('SELECT status FROM processing_ack WHERE message_id = ?').get(id) as
+    | { status: string }
+    | undefined;
+  return row?.status;
+}
+
+describe('errored batch: one retry before poison-ack', () => {
+  it('retries once after a transient failure and completes without a poison notice', async () => {
+    insertMessage('m1', 'chat', { sender: 'A', text: 'hello' });
+    const { provider, queryCalls } = makeFlakyProvider({ failures: 1 });
+
+    const result = await processBatchWithRetry({
+      provider,
+      providerName: 'mock',
+      cwd: '/tmp',
+      prompt: 'prompt',
+      continuation: 'prev-sess',
+      routing: ERR_ROUTING,
+      processingIds: ['m1'],
+      retryDelayMs: 5,
+    });
+
+    expect(queryCalls).toHaveLength(2);
+    // Transient failure: the stored continuation is still valid — the retry
+    // resumes from it rather than starting a blank session.
+    expect(queryCalls[1].continuation).toBe('prev-sess');
+    expect(result.continuation).toBe('sess-2');
+    // No error/resend notice — the retry succeeded.
+    expect(getUndeliveredMessages()).toHaveLength(0);
+    expect(ackStatus('m1')).toBe('completed');
+  });
+
+  it('poison-acks after the retry also fails and surfaces a resend notice', async () => {
+    insertMessage('m1', 'chat', { sender: 'A', text: 'hello' });
+    const { provider, queryCalls } = makeFlakyProvider({ failures: 2 });
+
+    await processBatchWithRetry({
+      provider,
+      providerName: 'mock',
+      cwd: '/tmp',
+      prompt: 'prompt',
+      continuation: undefined,
+      routing: ERR_ROUTING,
+      processingIds: ['m1'],
+      retryDelayMs: 5,
+    });
+
+    // Exactly one retry — never a third attempt.
+    expect(queryCalls).toHaveLength(2);
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    const text = (JSON.parse(out[0].content) as { text: string }).text;
+    expect(text).toContain('Error: LLM 500');
+    expect(text).toContain('resend');
+    expect(out[0].platform_id).toBe('chan-1');
+    expect(out[0].in_reply_to).toBe('m1');
+    // Poison ack: completed, no redelivery.
+    expect(ackStatus('m1')).toBe('completed');
+  });
+
+  it('clears a stale continuation so the retry starts fresh', async () => {
+    insertMessage('m1', 'chat', { sender: 'A', text: 'hello' });
+    const { provider, queryCalls } = makeFlakyProvider({ failures: 1, sessionInvalid: true });
+
+    await processBatchWithRetry({
+      provider,
+      providerName: 'mock',
+      cwd: '/tmp',
+      prompt: 'prompt',
+      continuation: 'stale-sess',
+      routing: ERR_ROUTING,
+      processingIds: ['m1'],
+      retryDelayMs: 5,
+    });
+
+    expect(queryCalls[0].continuation).toBe('stale-sess');
+    expect(queryCalls[1].continuation).toBeUndefined();
+  });
+
+  it('runPollLoop wiring: a transient failure still gets the batch processed', async () => {
+    insertMessage('m1', 'chat', { sender: 'A', text: 'hello' });
+    const { provider, queryCalls } = makeFlakyProvider({ failures: 1 });
+
+    const abort = new AbortController();
+    const loop = runPollLoop({
+      provider,
+      providerName: 'mock',
+      cwd: '/tmp',
+      signal: abort.signal,
+      queryRetryDelayMs: 5,
+    });
+
+    const deadline = Date.now() + 5000;
+    while (ackStatus('m1') !== 'completed' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    abort.abort();
+    await loop;
+
+    expect(queryCalls).toHaveLength(2);
+    expect(ackStatus('m1')).toBe('completed');
+    // Retry succeeded → no resend notice reached the channel.
+    expect(getUndeliveredMessages()).toHaveLength(0);
   });
 });
 

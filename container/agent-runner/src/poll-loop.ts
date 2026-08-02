@@ -31,6 +31,14 @@ const POLL_INTERVAL_MS = 1000;
 const ACTIVE_POLL_INTERVAL_MS = 500;
 
 /**
+ * A batch that errors gets exactly one delayed retry before the poison ack.
+ * Two attempts total: enough to survive a transient failure (LLM 500, blip
+ * in the SDK subprocess) without re-hammering a genuinely poisoned batch.
+ */
+const QUERY_MAX_ATTEMPTS = 2;
+const QUERY_RETRY_DELAY_MS = 2_000;
+
+/**
  * Number of consecutive `database disk image is malformed` errors after which
  * the follow-up poll gives up and exits the process. At ACTIVE_POLL_INTERVAL_MS
  * = 500ms this is roughly 5 seconds — long enough to dodge a transient torn
@@ -80,6 +88,11 @@ export interface PollLoopConfig {
    * polling forever and stealing messages from the next test's DB.
    */
   signal?: AbortSignal;
+  /**
+   * Delay before the single errored-batch retry (see processBatchWithRetry).
+   * Production uses the default; tests shrink it.
+   */
+  queryRetryDelayMs?: number;
 }
 
 /**
@@ -236,68 +249,130 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
-    const query = config.provider.query({
-      prompt,
-      continuation,
-      cwd: config.cwd,
-      systemContext: config.systemContext,
-    });
-
     // Process the query while concurrently polling for new messages
     const skippedSet = new Set(skipped.map((s) => s.id));
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
-    // Publish the batch's in_reply_to so MCP tools (send_message, send_file)
-    // can stamp it on outbound rows — needed for a2a return-path routing.
-    setCurrentInReplyTo(routing.inReplyTo);
-    try {
-      const result = await processQuery(
-        query,
-        routing,
-        processingIds,
-        config.providerName,
-        config.provider.onExchangeComplete?.bind(config.provider),
-        prompt,
-        continuation,
-      );
-      if (result.continuation && result.continuation !== continuation) {
-        continuation = result.continuation;
-        setContinuation(config.providerName, continuation);
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log(`Query error: ${errMsg}`);
-
-      // Stale/corrupt continuation recovery: ask the provider whether
-      // this error means the stored continuation is unusable, and clear
-      // it so the next attempt starts fresh.
-      if (continuation && config.provider.isSessionInvalid(err)) {
-        log(`Stale session detected (${continuation}) — clearing for next retry`);
-        continuation = undefined;
-        clearContinuation(config.providerName);
-      }
-
-      // Write error response so the user knows something went wrong
-      writeMessageOut({
-        id: generateId(),
-        kind: 'chat',
-        platform_id: routing.platformId,
-        channel_type: routing.channelType,
-        thread_id: routing.threadId,
-        content: JSON.stringify({ text: `Error: ${errMsg}` }),
-      });
-
-      // The batch is still acked completed below (no redelivery). Without
-      // this line the only log trace of the errored turn is "Query error"
-      // followed by a "Completed" line that reads like success.
-      log(`Errored batch will be acked completed — ${processingIds.length} message(s), no redelivery`);
-    } finally {
-      clearCurrentInReplyTo();
-    }
-
-    // Ensure completed even if processQuery ended without a result event
-    // (e.g. stream closed unexpectedly).
-    markCompleted(processingIds);
+    const batchResult = await processBatchWithRetry({
+      provider: config.provider,
+      providerName: config.providerName,
+      cwd: config.cwd,
+      systemContext: config.systemContext,
+      prompt,
+      continuation,
+      routing,
+      processingIds,
+      retryDelayMs: config.queryRetryDelayMs,
+    });
+    continuation = batchResult.continuation;
     log(`Completed ${ids.length} message(s)`);
+  }
+}
+
+export interface BatchConfig {
+  provider: AgentProvider;
+  providerName: string;
+  cwd: string;
+  systemContext?: { instructions?: string };
+  prompt: string;
+  continuation: string | undefined;
+  routing: RoutingContext;
+  processingIds: string[];
+  /** Delay between the failed attempt and its single retry. Tests shrink it. */
+  retryDelayMs?: number;
+}
+
+/**
+ * Run one message batch through the provider, with a single delayed retry
+ * before the poison ack.
+ *
+ * Attempt 1 failing does NOT consume the user's message: a transient failure
+ * (LLM 500, SDK subprocess blip) gets one fresh query after a short delay.
+ * Only when the retry also fails is the batch acked completed (poison-message
+ * protection — no infinite redelivery) and a "that failed, please resend"
+ * notice written to the triggering channel so the user knows their message
+ * was dropped rather than silently consumed.
+ */
+export async function processBatchWithRetry(cfg: BatchConfig): Promise<{ continuation: string | undefined }> {
+  let continuation = cfg.continuation;
+  // Publish the batch's in_reply_to so MCP tools (send_message, send_file)
+  // can stamp it on outbound rows — needed for a2a return-path routing.
+  setCurrentInReplyTo(cfg.routing.inReplyTo);
+  try {
+    for (let attempt = 1; attempt <= QUERY_MAX_ATTEMPTS; attempt++) {
+      const query = cfg.provider.query({
+        prompt: cfg.prompt,
+        continuation,
+        cwd: cfg.cwd,
+        systemContext: cfg.systemContext,
+      });
+      try {
+        const result = await processQuery(
+          query,
+          cfg.routing,
+          cfg.processingIds,
+          cfg.providerName,
+          cfg.provider.onExchangeComplete?.bind(cfg.provider),
+          cfg.prompt,
+          continuation,
+        );
+        if (result.continuation && result.continuation !== continuation) {
+          continuation = result.continuation;
+          setContinuation(cfg.providerName, continuation);
+        }
+        return { continuation };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`Query error (attempt ${attempt}/${QUERY_MAX_ATTEMPTS}): ${errMsg}`);
+
+        // Stale/corrupt continuation recovery: ask the provider whether
+        // this error means the stored continuation is unusable, and clear
+        // it so the next attempt starts fresh. Cleared even when the local
+        // continuation is already unset — processQuery persists the init
+        // continuation mid-turn, so the DB may hold a doomed session id the
+        // local variable never saw.
+        if (cfg.provider.isSessionInvalid(err)) {
+          log(`Stale session detected${continuation ? ` (${continuation})` : ''} — clearing for next retry`);
+          continuation = undefined;
+          clearContinuation(cfg.providerName);
+        }
+
+        if (attempt < QUERY_MAX_ATTEMPTS) {
+          const delay = cfg.retryDelayMs ?? QUERY_RETRY_DELAY_MS;
+          log(`Retrying batch once in ${delay}ms before poison-ack`);
+          await sleep(delay);
+          continue;
+        }
+
+        // Retry exhausted — surface the failure to the channel so the user
+        // knows their message was consumed without being processed.
+        writeMessageOut({
+          id: generateId(),
+          in_reply_to: cfg.routing.inReplyTo,
+          kind: 'chat',
+          platform_id: cfg.routing.platformId,
+          channel_type: cfg.routing.channelType,
+          thread_id: cfg.routing.threadId,
+          content: JSON.stringify({
+            text: `Error: ${errMsg}\n\nThat failed twice (original + one retry), so your message was not processed. Please resend it if you still need a response.`,
+          }),
+        });
+
+        // The batch is still acked completed below (no redelivery). Without
+        // this line the only log trace of the errored turn is "Query error"
+        // followed by a "Completed" line that reads like success.
+        log(
+          `Errored batch will be acked completed after ${QUERY_MAX_ATTEMPTS} attempts — ` +
+            `${cfg.processingIds.length} message(s), no redelivery`,
+        );
+      }
+    }
+    return { continuation };
+  } finally {
+    clearCurrentInReplyTo();
+    // Ensure completed even if processQuery ended without a result event
+    // (e.g. stream closed unexpectedly) — and the poison ack on the
+    // retry-exhausted path.
+    markCompleted(cfg.processingIds);
   }
 }
 

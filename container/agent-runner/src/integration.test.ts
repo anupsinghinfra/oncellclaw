@@ -306,6 +306,9 @@ async function runPollLoopWithTimeout(provider: MockProvider, signal: AbortSigna
       providerName: 'mock',
       cwd: '/tmp',
       signal,
+      // Keep the errored-batch retry (one delayed retry before poison-ack)
+      // fast so error-path tests finish inside their waitFor windows.
+      queryRetryDelayMs: 25,
     }),
     new Promise<void>((_, reject) => {
       signal.addEventListener('abort', () => reject(new Error('aborted')));
@@ -421,6 +424,9 @@ describe('poll loop — provider error recovery', () => {
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0].content).text).toContain('Error:');
     expect(JSON.parse(out[0].content).text).toContain('API rate limit exceeded');
+    // Persistent failure burned the single retry — the notice asks the user
+    // to resend rather than pretending the message was handled.
+    expect(JSON.parse(out[0].content).text).toContain('resend');
 
     // Input message should be marked completed despite the error
     const pending = getPendingMessages();
