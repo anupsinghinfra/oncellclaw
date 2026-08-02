@@ -18,9 +18,12 @@
  * them (see src/cell-session-io.ts on the host for the pump).
  */
 import { spawn, type ChildProcess } from 'child_process';
+import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+import { shouldPingHostWake, WAKE_PING_MIN_INTERVAL_MS } from './wake-ping.js';
 
 const RESTART_BACKOFF_BASE_MS = 1000;
 const RESTART_BACKOFF_MAX_MS = 30_000;
@@ -88,8 +91,48 @@ function shutdown(signal: NodeJS.Signals): void {
   }
 }
 
+/**
+ * Wake-on-pending-outbound watchdog: when replies sit staged-but-unpulled
+ * (the hosting claw paused, its pump died), ping the claw's UNAUTHENTICATED
+ * /web/health via its preview URL — preview self-heal resumes the hosting
+ * cell + service, the pump restarts, the reply flows. Decision logic in
+ * wake-ping.ts; this side just reads mtimes and fires the throttled fetch.
+ * No web token here by design — group cells never hold it.
+ */
+function startHostWakeWatchdog(): void {
+  const previewUrl = process.env.ONCELLCLAW_HOST_PREVIEW_URL;
+  const sessionRoot = process.env.NANOCLAW_WORKSPACE_ROOT;
+  if (!previewUrl || !sessionRoot) return; // not hosted, or no session layout
+
+  const healthUrl = `${previewUrl.replace(/[/]$/, '')}/web/health`;
+  let lastPingMs = 0;
+  const mtimeOf = (p: string): number => {
+    try {
+      return fs.statSync(p).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+
+  setInterval(() => {
+    const decide = shouldPingHostWake({
+      outboundMtimeMs: mtimeOf(path.join(sessionRoot, 'outbound.db')),
+      lastStagedMtimeMs: mtimeOf(path.join(sessionRoot, '.outbound.last')),
+      nowMs: Date.now(),
+      lastPingMs,
+    });
+    if (!decide) return;
+    lastPingMs = Date.now();
+    log(`outbound unpulled — pinging host preview to wake it (${healthUrl})`);
+    fetch(healthUrl, { signal: AbortSignal.timeout(WAKE_PING_MIN_INTERVAL_MS / 2) }).catch((err) => {
+      log(`host wake ping failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, 15_000).unref?.();
+}
+
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 startLivenessServer();
+startHostWakeWatchdog();
 spawnRunner();
