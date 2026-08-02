@@ -45,7 +45,19 @@ The host process shrinks to a channel router: messages in, messages out. Everyth
 
 ## Hosted (how it works)
 
-There is no separate hosted codebase. A hosted instance is *this* repo running as the service inside your own OnCell cell, started by [`scripts/cloud-start.sh`](scripts/cloud-start.sh) — the same script [oncell.ai/dashboard/claw](https://oncell.ai/claw) runs for you, and the same one you can run yourself on any box that has internet. It goes from an empty machine to a live assistant in one command: ensure git/Node/pnpm, clone (or fast-forward) the checkout, install, build, provision one agent group paired to the built-in [`web` channel](src/channels/web.ts), then `exec` the host so your supervisor owns the process. Every stage is idempotent, so a restart converges instead of duplicating — it fast-forwards rather than re-cloning, and finds the agent group it already made rather than making a second one. With `ONCELLCLAW_RUNTIME=oncell` the host's own agent groups live in sibling cells under the same account, so the host cell stays a thin router. The `web` channel puts the whole conversation on the process's single HTTP port (`$PORT`), which is what the cell's public preview URL maps to:
+There is no separate hosted codebase. A hosted instance is *this* repo running as the service inside your own OnCell cell, started by [`scripts/cloud-start.sh`](scripts/cloud-start.sh) — the same script [oncell.ai/dashboard/claw](https://oncell.ai/claw) runs for you, and the same one you can run yourself on any box that has internet. The bootstrap is **node-only**: cells ship node, npm/corepack and tar but **no git, curl, wget or python3** — so the source arrives as a GitHub tarball fetched by node (`ONCELLCLAW_REF` is resolved to a commit sha via the GitHub API, then the `codeload.github.com/{owner}/{repo}/tar.gz/{sha}` tarball is downloaded and extracted), pnpm comes from corepack shims, and every download in the script goes through `node fetch`. One command takes an empty machine to a live assistant: fetch + extract the source, provision the toolchain, install, build, provision one agent group paired to the built-in [`web` channel](src/channels/web.ts), then `exec` the host so your supervisor owns the process.
+
+The base directory (`ONCELLCLAW_DIR`, default `~/oncellclaw`) separates immutable source from durable state, so an update can never destroy your assistant's memory:
+
+```
+current -> src-<sha>   the running checkout (symlink, flipped atomically)
+src-<sha>/             immutable source tree for one commit
+state/                 data/ groups/ store/ .env — symlinked into every
+                       checkout; survives every update
+toolchain/             corepack shims (+ a private node if the system one is old)
+```
+
+Every stage is idempotent, so a restart converges instead of duplicating: a sha that is already extracted means no download at all (a warm restart pinned to a full sha boots fully offline), a new sha is extracted alongside and `current` is flipped, and old trees are pruned only after the new one has built and provisioned — a failed update never deletes the last known-good checkout. Provisioning finds the agent group it already made rather than making a second one. With `ONCELLCLAW_RUNTIME=oncell` the host's own agent groups live in sibling cells under the same account, so the host cell stays a thin router. The `web` channel puts the whole conversation on the process's single HTTP port (`$PORT`), which is what the cell's public preview URL maps to:
 
 ```bash
 # talk to it
@@ -57,7 +69,13 @@ curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
 curl https://<host>/health                                               # → 200 {"ok":true,"groups":[…]}
 ```
 
-**First boot:** the script binds `$PORT` immediately — before cloning anything — with a tiny placeholder server, because service supervisors (the OnCell cell supervisor included) kill a service that isn't accepting connections within seconds, and a cold install takes minutes. While bootstrap runs, **every** path (including `/health`) answers `503` with `{"ok":false,"phase":"…"}`, where `phase` walks `starting → toolchain → clone → install → build → provision → handoff`. A brief connection-refused gap follows while the placeholder hands the port to the real host, then `/health` returns `200 {"ok":true,…}` — poll it until `ok` is true to know the assistant is live. Warm restarts skip the install work and hand off in seconds.
+**First boot:** the script binds `$PORT` immediately — before downloading anything — with a tiny placeholder server, because service supervisors (the OnCell cell supervisor included) kill a service that isn't accepting connections within seconds, and a cold install takes minutes. While bootstrap runs, **every** path (including `/health`) answers `503` with `{"ok":false,"phase":"…"}`, where `phase` walks `starting → clone → toolchain → install → build → provision → handoff`. A brief connection-refused gap follows while the placeholder hands the port to the real host, then `/health` returns `200 {"ok":true,…}` — poll it until `ok` is true to know the assistant is live. Warm restarts skip the download and install work and hand off in seconds.
+
+Since cells have no curl, the service command that fetches and runs the script is itself node-only:
+
+```sh
+node -e 'const fs=require("fs");const repo=process.env.ONCELLCLAW_REPO||"https://github.com/anupsinghinfra/oncellclaw.git";const ref=process.env.ONCELLCLAW_REF||"main";const m=repo.match(/github\.com[:\/]([^\/]+)\/([^\/]+?)(?:\.git)?$/);if(!m){console.error("cannot parse ONCELLCLAW_REPO: "+repo);process.exit(1)}const url="https://raw.githubusercontent.com/"+m[1]+"/"+m[2]+"/"+ref+"/scripts/cloud-start.sh";fetch(url,{headers:{"User-Agent":"oncellclaw-bootstrap"}}).then(async r=>{if(!r.ok){console.error("HTTP "+r.status+" for "+url);process.exit(1)}const t=await r.text();if(!t.includes("cloud-start.sh")){console.error("unexpected script body from "+url);process.exit(1)}fs.writeFileSync("/tmp/cloud-start.sh",t);console.log("fetched "+url)}).catch(e=>{console.error("fetch failed: "+e);process.exit(1)})' && bash /tmp/cloud-start.sh
+```
 
 That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the internet and your assistant: the channel refuses to start without one unless you explicitly set `ONCELLCLAW_WEB_ALLOW_INSECURE=1` for a trusted local network. Nothing here writes a secret to disk — credentials travel in the process environment only.
 
@@ -68,9 +86,9 @@ That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the inte
 | `PORT` | `3000` | HTTP listen port. Always set by the cell supervisor on hosted runs — the fallback is for bare self-hosting only. `WEBHOOK_PORT` still overrides it. |
 | `ONCELLCLAW_GROUP` | `assistant` | Agent group to provision. Also the URL slug: `/web/<group>/message`. |
 | `ONCELLCLAW_PERSONA` | — | Standing instructions for that group, staged once as its persona. Never overwrites an edited one. |
-| `ONCELLCLAW_REPO` | this repo | Git URL to run. |
-| `ONCELLCLAW_REF` | `main` | Branch, tag, or commit sha. |
-| `ONCELLCLAW_DIR` | `$HOME/oncellclaw` | Persistent checkout. `data/`, `groups/`, `store/` and `.env` live here and survive updates. |
+| `ONCELLCLAW_REPO` | this repo | GitHub repo URL to run (tarball bootstrap — must be `github.com`). |
+| `ONCELLCLAW_REF` | `main` | Branch, tag, or commit sha. A full 40-hex sha skips ref resolution and warm-restarts offline. |
+| `ONCELLCLAW_DIR` | `$HOME/oncellclaw` | Persistent base: `src-<sha>/` checkouts, the `current` symlink, `state/` (`data`, `groups`, `store`, `.env`) and `toolchain/`. State survives every update. |
 | `ONCELLCLAW_RUNTIME` | `oncell` | `oncell` or `docker` (see [Runtimes](#runtimes-oncell-cells-or-local-docker)). |
 | `ONCELL_API_KEY` | — | Required when the runtime is `oncell`. |
 | `ONCELL_API_URL` | — | Optional API endpoint override. |

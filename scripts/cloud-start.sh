@@ -3,34 +3,47 @@
 # cloud-start.sh — empty machine → running oncellclaw host, in one command.
 #
 # This is the whole hosted install. It is what oncell.ai/dashboard/claw runs
-# for you as your cell's service command, and it is a supported way to
-# self-host on any Linux box or container that can reach the internet.
+# as your cell's service command, and it is a supported way to self-host on
+# any box that can reach the internet.
 #
-#   curl -fsSL https://raw.githubusercontent.com/anupsinghinfra/oncellclaw/main/scripts/cloud-start.sh | bash
+# NODE-ONLY BOOTSTRAP: the only tools required are bash, node (>= 18 for
+# global fetch; the app itself needs >= 20), tar, and corepack/npm. Cells
+# ship exactly that rootfs — no git, no curl, no wget, no python3 — so the
+# source arrives as a GitHub tarball fetched by node, not a git clone:
+# ONCELLCLAW_REF is resolved to a commit sha via the GitHub API, then
+# https://codeload.github.com/{owner}/{repo}/tar.gz/{sha} is downloaded and
+# extracted. ONCELLCLAW_REPO/ONCELLCLAW_REF semantics are unchanged.
 #
-# Stages: toolchain → checkout → deps → build → provision → run. Every one
-# of them is idempotent and resumable, because a supervised service is
-# restarted, not installed once: a restart fast-forwards the existing
-# checkout instead of re-cloning, and provisioning converges on the agent
-# group that already exists instead of creating a second one. The process
-# ends with `exec`, so the supervisor owns the host process directly (PID 1
-# semantics, signals, restart-on-exit).
+# Layout under $ONCELLCLAW_DIR (the persistent base, default ~/oncellclaw):
+#
+#   current -> src-<sha>     the running checkout (symlink, flipped atomically)
+#   src-<sha>/               immutable source tree for one commit
+#   state/                   everything that must survive updates:
+#     data/  groups/  store/  .env
+#                            (symlinked into each src-<sha> — the app's
+#                            data/groups/store paths are cwd-relative)
+#   toolchain/               corepack shims + private node if system node
+#                            is too old (fetched by node, never curl)
+#
+# A checkout is a pure function of the sha: same sha already extracted →
+# no download at all (fast warm restart); new sha → extracted alongside,
+# `current` flipped, old trees pruned only after build+provision succeed.
 #
 # The port is claimed IMMEDIATELY: service supervisors (the OnCell cell
 # supervisor included) probe $PORT shortly after start and kill anything
-# that isn't accepting connections — a cold boot spends minutes in clone +
-# install and would never survive that. So right after config validation a
-# tiny placeholder HTTP server binds 0.0.0.0:$PORT and answers every path
-# with 503 {"ok":false,"phase":"<stage>"} until the real host is ready to
-# take over; the dashboard reads `phase` to show honest progress. Just
-# before exec the placeholder is killed and the port verified free — the
-# brief connection-refused gap reads as "still starting" upstream.
+# that isn't accepting connections — a cold boot spends minutes downloading
+# + installing and would never survive that. So right after config
+# validation a tiny placeholder HTTP server binds 0.0.0.0:$PORT and answers
+# every path with 503 {"ok":false,"phase":"<stage>"} until the real host is
+# ready; the dashboard reads `phase` to show honest progress. Just before
+# exec the placeholder is killed and the port verified free — the brief
+# connection-refused gap reads as "still starting" upstream.
 #
 # Environment (see README "Hosted (how it works)" for the full table):
 #
-#   ONCELLCLAW_REPO            git URL to run          (default: this repo)
+#   ONCELLCLAW_REPO            GitHub repo URL         (default: this repo)
 #   ONCELLCLAW_REF             branch, tag or sha      (default: main)
-#   ONCELLCLAW_DIR             persistent checkout     (default: $HOME/oncellclaw)
+#   ONCELLCLAW_DIR             persistent base dir     (default: $HOME/oncellclaw)
 #   ONCELLCLAW_RUNTIME         oncell | docker         (default: oncell)
 #   ONCELL_API_KEY             required when runtime=oncell
 #   ONCELL_API_URL             optional API override
@@ -57,16 +70,30 @@ ONCELLCLAW_GROUP="${ONCELLCLAW_GROUP:-assistant}"
 ONCELLCLAW_RUNTIME="${ONCELLCLAW_RUNTIME:-oncell}"
 PORT="${PORT:-3000}"
 
-TOOLCHAIN_DIR="${ONCELLCLAW_DIR}/.toolchain"
+# Endpoint seams — overridden only by the bootstrap smoke test, which points
+# them at a local stub so no test ever touches live GitHub.
+ONCELLCLAW_GITHUB_API="${ONCELLCLAW_GITHUB_API:-https://api.github.com}"
+ONCELLCLAW_CODELOAD="${ONCELLCLAW_CODELOAD:-https://codeload.github.com}"
+
+BASE="$ONCELLCLAW_DIR"
+STATE_DIR="$BASE/state"
+TOOLCHAIN_DIR="$BASE/toolchain"
 NODE_MAJOR_MIN=20
 NODE_MAJOR_INSTALL=22
 
 export ONCELLCLAW_RUNTIME PORT
+# No .git directory exists here — husky's prepare hook must not fail the
+# install. HUSKY=0 is husky's own documented off-switch.
+export HUSKY=0
+# corepack: never prompt, and keep its cache with the rest of the toolchain
+# so pnpm survives src-<sha> swaps.
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
 
 stage_no=0
 stage() {
   stage_no=$((stage_no + 1))
-  printf '\n==> [%d/8] %s\n' "$stage_no" "$1"
+  printf '\n==> [%d/7] %s\n' "$stage_no" "$1"
 }
 info() { printf '    %s\n' "$1"; }
 die() {
@@ -76,26 +103,67 @@ die() {
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
+# node-based network primitives — the only way this script touches the
+# network. Both fail loudly on HTTP errors.
+# ---------------------------------------------------------------------------
+
+# fetch_text URL → body on stdout.
+fetch_text() {
+  URL="$1" node -e '
+    fetch(process.env.URL, {
+      headers: { "User-Agent": "oncellclaw-bootstrap", Accept: "application/vnd.github+json" },
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          console.error(`HTTP ${r.status} for ${process.env.URL}`);
+          process.exit(1);
+        }
+        process.stdout.write(await r.text());
+      })
+      .catch((err) => {
+        console.error(`fetch failed for ${process.env.URL}: ${err}`);
+        process.exit(1);
+      });
+  '
+}
+
+# fetch_file URL DEST — streamed to disk, not buffered.
+fetch_file() {
+  URL="$1" DEST="$2" node -e '
+    const { createWriteStream } = require("fs");
+    const { Readable } = require("stream");
+    const { pipeline } = require("stream/promises");
+    fetch(process.env.URL, { headers: { "User-Agent": "oncellclaw-bootstrap" } })
+      .then(async (r) => {
+        if (!r.ok || !r.body) {
+          console.error(`HTTP ${r.status} for ${process.env.URL}`);
+          process.exit(1);
+        }
+        await pipeline(Readable.fromWeb(r.body), createWriteStream(process.env.DEST));
+      })
+      .catch((err) => {
+        console.error(`fetch failed for ${process.env.URL}: ${err}`);
+        process.exit(1);
+      });
+  '
+}
+
+# ---------------------------------------------------------------------------
 # Boot placeholder — binds $PORT within the supervisor's readiness window.
 #
 # Answers EVERY path with 503 {"ok":false,"phase":"<current>"}, re-reading
 # the phase file per request so the dashboard stepper tracks progress. Uses
-# the system node (present in the cell rootfs) — this runs long before the
-# private toolchain exists.
+# the system node (present in the cell rootfs) — this runs long before
+# anything is downloaded.
 # ---------------------------------------------------------------------------
 PHASE_FILE="$(mktemp)"
 placeholder_pid=''
 persona_file=''
+extract_tmp=''
 
 set_phase() { printf '%s' "$1" >"$PHASE_FILE"; }
 
 start_placeholder() {
-  if ! have node; then
-    # No system node: nothing can bind the port this early. Proceed — a warm
-    # restart with the toolchain already present reaches exec fast anyway.
-    info "WARNING: no system node — cannot bind :${PORT} during bootstrap; a slow cold boot may be killed by the supervisor"
-    return 0
-  fi
   PHASE_FILE="$PHASE_FILE" PORT="$PORT" node -e '
     const http = require("http");
     const fs = require("fs");
@@ -153,6 +221,7 @@ cleanup() {
   stop_placeholder
   rm -f "$PHASE_FILE"
   [ -n "$persona_file" ] && rm -f "$persona_file"
+  [ -n "$extract_tmp" ] && rm -rf "$extract_tmp"
   return 0
 }
 trap cleanup EXIT
@@ -162,6 +231,9 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 stage 'Checking configuration'
 
+have node || die 'node is required (it is present in every cell rootfs). Install Node >= 20 and re-run.'
+have tar || die 'tar is required and was not found.'
+
 if [ "$ONCELLCLAW_RUNTIME" = 'oncell' ] && [ -z "${ONCELL_API_KEY:-}" ]; then
   die "ONCELLCLAW_RUNTIME=oncell but ONCELL_API_KEY is not set. Get a key at https://oncell.ai, or set ONCELLCLAW_RUNTIME=docker to run agents in local Docker."
 fi
@@ -169,11 +241,29 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; the
   die 'No agent credential: set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.'
 fi
 if [ -z "${ONCELLCLAW_WEB_TOKEN:-}" ] && [ "${ONCELLCLAW_WEB_ALLOW_INSECURE:-}" != '1' ]; then
-  die "ONCELLCLAW_WEB_TOKEN is not set. The web channel is this instance's front door and its URL is public — set a long random token (e.g. \`openssl rand -hex 32\`), or set ONCELLCLAW_WEB_ALLOW_INSECURE=1 for a trusted local network."
+  die "ONCELLCLAW_WEB_TOKEN is not set. The web channel is this instance's front door and its URL is public — set a long random token (e.g. 64 hex chars), or set ONCELLCLAW_WEB_ALLOW_INSECURE=1 for a trusted local network."
+fi
+if [ -e "$BASE/.git" ]; then
+  die "$BASE is a git checkout. This script owns its base directory (src-<sha>/ + state/ layout) — point ONCELLCLAW_DIR somewhere else, e.g. \$HOME/oncellclaw-hosted."
 fi
 
-info "repo:    ${ONCELLCLAW_REPO} @ ${ONCELLCLAW_REF}"
-info "dir:     ${ONCELLCLAW_DIR}"
+# Derive owner/repo from the GitHub URL — the tarball endpoints need them.
+case "$ONCELLCLAW_REPO" in
+  *github.com*) ;;
+  *) die "ONCELLCLAW_REPO must be a github.com URL for the tarball bootstrap (got: ${ONCELLCLAW_REPO}). Non-GitHub hosting needs a git-capable environment." ;;
+esac
+gh_path="${ONCELLCLAW_REPO#*github.com}"
+gh_path="${gh_path#?}" # strip the ':' or '/' after the host
+gh_path="${gh_path%.git}"
+gh_path="${gh_path%/}"
+gh_owner="${gh_path%%/*}"
+gh_repo="${gh_path#*/}"
+if [ -z "$gh_owner" ] || [ -z "$gh_repo" ] || [ "$gh_owner" = "$gh_repo" ] || printf '%s' "$gh_repo" | grep -q '/'; then
+  die "could not parse owner/repo from ONCELLCLAW_REPO: ${ONCELLCLAW_REPO}"
+fi
+
+info "repo:    github.com/${gh_owner}/${gh_repo} @ ${ONCELLCLAW_REF}"
+info "base:    ${BASE}"
 info "runtime: ${ONCELLCLAW_RUNTIME}"
 info "group:   ${ONCELLCLAW_GROUP}"
 info "port:    ${PORT}"
@@ -185,70 +275,116 @@ set_phase 'starting'
 start_placeholder
 
 # ---------------------------------------------------------------------------
-# 2. git — needed before anything else can be fetched.
+# 2. Source — resolve the ref to a sha, fetch the tarball, extract, flip.
 # ---------------------------------------------------------------------------
-stage 'Ensuring git'
-set_phase 'toolchain'
-
-install_git() {
-  local sudo_cmd=''
-  if [ "$(id -u)" -ne 0 ] && have sudo; then sudo_cmd='sudo'; fi
-  if have apt-get; then
-    $sudo_cmd apt-get update -qq && $sudo_cmd apt-get install -y -qq git
-  elif have apk; then
-    $sudo_cmd apk add --no-cache git
-  elif have dnf; then
-    $sudo_cmd dnf install -y -q git
-  elif have yum; then
-    $sudo_cmd yum install -y -q git
-  else
-    return 1
-  fi
-}
-
-if have git; then
-  info "git $(git --version | awk '{print $3}')"
-else
-  info 'git not found — installing'
-  install_git >/dev/null 2>&1 || die 'git is required and could not be installed automatically. Install git and re-run.'
-  info "git $(git --version | awk '{print $3}')"
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Checkout — clone once, fast-forward forever after.
-# ---------------------------------------------------------------------------
-stage 'Syncing checkout'
+stage 'Fetching source'
 set_phase 'clone'
 
-if [ -d "${ONCELLCLAW_DIR}/.git" ]; then
-  info 'existing checkout — fetching'
-  git -C "$ONCELLCLAW_DIR" remote set-url origin "$ONCELLCLAW_REPO"
-  git -C "$ONCELLCLAW_DIR" fetch --quiet --prune --tags origin
+mkdir -p "$BASE" "$STATE_DIR/data" "$STATE_DIR/groups" "$STATE_DIR/store"
+rm -rf "$BASE"/.extract-* 2>/dev/null || true
+
+# Replace the mutable state dirs inside a checkout with symlinks into
+# $STATE_DIR. The app's data/groups/store paths are cwd-relative and not
+# env-configurable (src/config.ts), so the links ARE the knob. `rm -rf` on
+# an existing symlink removes only the link; on a fresh extraction it
+# removes whatever placeholder content the tarball carried.
+wire_state() {
+  local src_dir="$1" name
+  for name in data groups store; do
+    rm -rf "${src_dir:?}/${name}"
+    ln -s "$STATE_DIR/$name" "$src_dir/$name"
+  done
+  # .env too: tarballs never contain one (gitignored), but a self-hoster may
+  # drop one into state/. A dangling link is fine — readEnvFile treats
+  # ENOENT as "no .env".
+  rm -f "$src_dir/.env"
+  ln -s "$STATE_DIR/.env" "$src_dir/.env"
+}
+
+# Resolve ONCELLCLAW_REF → full commit sha. A 40-hex ref IS the sha (no
+# network needed — a pinned warm restart boots offline). Anything else asks
+# the GitHub API; if that fails but a previous checkout exists, reuse it
+# rather than dying — an upstream blip must not take the assistant down.
+sha=''
+if printf '%s' "$ONCELLCLAW_REF" | grep -qE '^[0-9a-f]{40}$'; then
+  sha="$ONCELLCLAW_REF"
+  info 'ref is a full sha — no resolution needed'
 else
-  info 'no checkout — cloning'
-  mkdir -p "$(dirname "$ONCELLCLAW_DIR")"
-  git clone --quiet "$ONCELLCLAW_REPO" "$ONCELLCLAW_DIR"
+  if sha="$(
+    GH_URL="${ONCELLCLAW_GITHUB_API}/repos/${gh_owner}/${gh_repo}/commits/${ONCELLCLAW_REF}" node -e '
+      fetch(process.env.GH_URL, {
+        headers: { "User-Agent": "oncellclaw-bootstrap", Accept: "application/vnd.github+json" },
+      })
+        .then(async (r) => {
+          if (!r.ok) {
+            console.error(`HTTP ${r.status} for ${process.env.GH_URL}`);
+            process.exit(1);
+          }
+          const j = await r.json();
+          if (!/^[0-9a-f]{40}$/.test(j.sha || "")) {
+            console.error(`no commit sha in API response for ${process.env.GH_URL}`);
+            process.exit(1);
+          }
+          console.log(j.sha);
+        })
+        .catch((err) => {
+          console.error(`fetch failed for ${process.env.GH_URL}: ${err}`);
+          process.exit(1);
+        });
+    '
+  )"; then
+    info "resolved ${ONCELLCLAW_REF} -> ${sha}"
+  elif [ -L "$BASE/current" ] && [ -d "$BASE/current" ]; then
+    info "WARNING: could not resolve '${ONCELLCLAW_REF}' — reusing the existing checkout"
+    sha=''
+  else
+    die "could not resolve ref '${ONCELLCLAW_REF}' and no previous checkout exists (see the error above)"
+  fi
 fi
 
-# Branch first, then tag/sha. Detached HEAD keeps the checkout a pure
-# function of ONCELLCLAW_REF, so there is no local branch to diverge.
-target="$(git -C "$ONCELLCLAW_DIR" rev-parse --verify -q "origin/${ONCELLCLAW_REF}^{commit}" 2>/dev/null || true)"
-if [ -z "$target" ]; then
-  target="$(git -C "$ONCELLCLAW_DIR" rev-parse --verify -q "${ONCELLCLAW_REF}^{commit}" 2>/dev/null || true)"
+if [ -n "$sha" ]; then
+  SRC="$BASE/src-${sha}"
+  if [ -d "$SRC" ]; then
+    info "src-${sha} already extracted — skipping download"
+  else
+    tarball="$(mktemp)"
+    info "downloading tarball for ${sha}"
+    fetch_file "${ONCELLCLAW_CODELOAD}/${gh_owner}/${gh_repo}/tar.gz/${sha}" "$tarball"
+    extract_tmp="$BASE/.extract-$$"
+    mkdir -p "$extract_tmp"
+    # codeload tarballs wrap everything in a "{repo}-{sha}/" top directory.
+    tar -xzf "$tarball" -C "$extract_tmp" --strip-components=1
+    rm -f "$tarball"
+    [ -f "$extract_tmp/package.json" ] || die 'extracted tarball has no package.json — wrong repo or corrupt download'
+    wire_state "$extract_tmp"
+    # Atomic publish: a crash before this mv leaves only a .extract-* temp
+    # dir (cleaned next run); a concurrent extraction losing the race is
+    # discarded in favor of the one that won.
+    if ! mv "$extract_tmp" "$SRC" 2>/dev/null; then
+      [ -d "$SRC" ] || die "failed to move extracted source into place: ${SRC}"
+      rm -rf "$extract_tmp"
+    fi
+    extract_tmp=''
+    info "extracted src-${sha}"
+  fi
+  wire_state "$SRC" # idempotent re-link — heals a partially wired tree
+  ln -sfn "$SRC" "$BASE/current"
 fi
-[ -n "$target" ] || die "ref not found in ${ONCELLCLAW_REPO}: ${ONCELLCLAW_REF}"
 
-# reset --hard only touches TRACKED files. data/, groups/, store/ and .env
-# are gitignored, so instance state survives every update.
-git -C "$ONCELLCLAW_DIR" checkout --quiet --detach "$target"
-git -C "$ONCELLCLAW_DIR" reset --hard --quiet "$target"
-info "at $(git -C "$ONCELLCLAW_DIR" rev-parse --short HEAD) (${ONCELLCLAW_REF})"
+cd "$BASE/current"
+info "current -> $(basename "$(pwd -P)")"
 
-cd "$ONCELLCLAW_DIR"
+# Test seam: the bootstrap smoke test stops here — source acquisition is the
+# only stage with new network mechanics, and everything after needs a real
+# toolchain + registry access.
+if [ "${ONCELLCLAW_BOOTSTRAP_ONLY:-}" = 'source' ]; then
+  info 'ONCELLCLAW_BOOTSTRAP_ONLY=source — stopping before toolchain'
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
-# 4. Node + pnpm. Installed under the checkout when the host has neither, so
-#    this never needs root and never fights a system package manager.
+# 3. Toolchain — system node if new enough, else a private one fetched by
+#    node; pnpm via corepack shims (no global installs).
 # ---------------------------------------------------------------------------
 stage 'Ensuring Node and pnpm'
 set_phase 'toolchain'
@@ -256,8 +392,7 @@ set_phase 'toolchain'
 node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0; }
 
 install_node() {
-  local major os arch name url
-  have curl || die "no Node >= ${NODE_MAJOR_MIN} and no curl to fetch one. Install Node and re-run."
+  local major os arch name url node_tar
   major="$(cat .nvmrc 2>/dev/null || echo "$NODE_MAJOR_INSTALL")"
   case "$(uname -s)" in
     Linux) os='linux' ;;
@@ -272,44 +407,49 @@ install_node() {
 
   # Resolve the current patch release of that major from the dist checksums —
   # no pinned full version to go stale. .tar.gz (not .tar.xz) so a minimal
-  # busybox tar can unpack it.
-  name="$(curl -fsSL "https://nodejs.org/dist/latest-v${major}.x/SHASUMS256.txt" |
+  # busybox tar can unpack it. Downloaded by node fetch — never curl.
+  name="$(fetch_text "https://nodejs.org/dist/latest-v${major}.x/SHASUMS256.txt" |
     awk -v pat="-${os}-${arch}\\.tar\\.gz$" '$2 ~ pat { print $2; exit }')"
   [ -n "$name" ] || die "could not resolve a Node v${major} build for ${os}-${arch}"
   url="https://nodejs.org/dist/latest-v${major}.x/${name}"
 
   info "downloading ${name}"
   mkdir -p "$TOOLCHAIN_DIR/node"
-  curl -fsSL "$url" | tar -xz -C "$TOOLCHAIN_DIR/node" --strip-components=1
+  node_tar="$(mktemp)"
+  fetch_file "$url" "$node_tar"
+  tar -xzf "$node_tar" -C "$TOOLCHAIN_DIR/node" --strip-components=1
+  rm -f "$node_tar"
 }
 
 if [ -x "${TOOLCHAIN_DIR}/node/bin/node" ]; then
   export PATH="${TOOLCHAIN_DIR}/node/bin:$PATH"
 fi
-if ! have node || [ "$(node_major)" -lt "$NODE_MAJOR_MIN" ]; then
-  info "no usable Node (need >= ${NODE_MAJOR_MIN}) — installing a private one"
+if [ "$(node_major)" -lt "$NODE_MAJOR_MIN" ]; then
+  info "system node too old (need >= ${NODE_MAJOR_MIN}) — installing a private one"
   install_node
   export PATH="${TOOLCHAIN_DIR}/node/bin:$PATH"
 fi
 info "node $(node --version)"
 
+mkdir -p "$TOOLCHAIN_DIR/bin"
 export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
-if ! have pnpm; then
-  info 'pnpm not found — installing'
-  if have corepack; then
-    corepack enable >/dev/null 2>&1 || true
-    corepack prepare --activate >/dev/null 2>&1 || true
-  fi
-  if ! have pnpm; then
-    pm="$(node -p "(require('./package.json').packageManager||'pnpm@latest')" 2>/dev/null || echo 'pnpm@latest')"
-    npm install -g --silent --prefix "$TOOLCHAIN_DIR" "$pm" >/dev/null
-  fi
+if ! have pnpm && have corepack; then
+  # Shims land in the toolchain, not the (possibly read-only) node bin dir.
+  # The shim resolves the exact pnpm version from this checkout's
+  # packageManager field on first run.
+  corepack enable --install-directory "$TOOLCHAIN_DIR/bin" >/dev/null 2>&1 || true
 fi
-have pnpm || die 'pnpm is required and could not be installed automatically.'
+if ! have pnpm; then
+  # corepack absent or failed — npm (ships with node) into the same prefix.
+  pm="$(node -p "(require('./package.json').packageManager||'pnpm@latest')" 2>/dev/null || echo 'pnpm@latest')"
+  info "corepack unavailable — installing ${pm} via npm"
+  npm install -g --silent --prefix "$TOOLCHAIN_DIR" "$pm" >/dev/null
+fi
+have pnpm || die 'pnpm could not be provisioned via corepack or npm.'
 info "pnpm $(pnpm --version)"
 
 # ---------------------------------------------------------------------------
-# 5+6. Dependencies + build.
+# 4+5. Dependencies + build.
 # ---------------------------------------------------------------------------
 stage 'Installing dependencies'
 set_phase 'install'
@@ -326,7 +466,7 @@ pnpm exec tsx scripts/upgrade-state.ts set '' cloud-start >/dev/null
 info "built $(node -p "require('./package.json').version")"
 
 # ---------------------------------------------------------------------------
-# 7. DB init, migrations, and first-run provisioning. Converges — a restart
+# 6. DB init, migrations, and first-run provisioning. Converges — a restart
 #    re-runs this and creates nothing.
 # ---------------------------------------------------------------------------
 stage 'Provisioning'
@@ -343,13 +483,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Hand off: placeholder down, port verified free, exec the host so the
-#    supervisor owns the real process. The moment between kill and the
-#    host's bind reads as connection-refused upstream — treated as "still
-#    starting", unlike a 30s never-bound timeout.
+# 7. Hand off: prune superseded checkouts, placeholder down, port verified
+#    free, exec the host so the supervisor owns the real process. The moment
+#    between kill and the host's bind reads as connection-refused upstream —
+#    treated as "still starting", unlike a 30s never-bound timeout.
 # ---------------------------------------------------------------------------
 stage 'Starting host'
 set_phase 'handoff'
+
+# Old source trees are only removed HERE — after the new tree has built and
+# provisioned successfully — so a failed update never deletes the last
+# known-good checkout.
+current_real="$(pwd -P)"
+for d in "$BASE"/src-*; do
+  [ -d "$d" ] || continue
+  [ "$d" = "$current_real" ] || rm -rf "$d"
+done
+
 # Mirrors normalizeName() — the group slug is what appears in the URL.
 group_slug="$(printf '%s' "$ONCELLCLAW_GROUP" | tr '[:upper:]' '[:lower:]' |
   sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-\{1,\}//' -e 's/-\{1,\}$//')"
