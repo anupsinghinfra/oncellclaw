@@ -43,6 +43,41 @@ The host process shrinks to a channel router: messages in, messages out. Everyth
 - **Hosted — [oncell.ai/claw](https://oncell.ai/claw)**: sign in, pair a channel, message your assistant. No install; your agents live in OnCell cells from the first message. *(Rolling out.)*
 - **Self-hosted** — clone this repo and run the setup below. Your machine is the channel router; agents run on OnCell (or fully local on Docker, exactly like upstream NanoClaw).
 
+## What it can do
+
+Every bullet here is shipping code — follow the links and read it. Agent-side capabilities live in [`container/skills/`](container/skills/) and [`container/agent-runner/src/mcp-tools/`](container/agent-runner/src/mcp-tools/); install-time capabilities are the [`.claude/skills/`](.claude/skills/) slash commands.
+
+**Talk to it anywhere**
+
+- **Web chat, built in** — `POST` a message, poll the full two-way transcript, or hold open a Server-Sent-Events stream; bearer-token auth and rate limiting included. A browser or a dashboard is a complete client. ([`src/channels/web.ts`](src/channels/web.ts))
+- **Telegram in one paste** — create a bot with @BotFather, `POST /web/channels/telegram/pair`, done. Long-polling, so it works behind NAT and on hosted cells with no webhook. ([`src/channels/telegram.ts`](src/channels/telegram.ts))
+- **A dozen more channels as skills** — WhatsApp, Discord, Slack, iMessage, Teams, Matrix, Google Chat, Webex, Signal, WeChat, Linear, GitHub, email via Resend: `/add-<channel>` copies exactly the adapter you asked for into your fork. ([`.claude/skills/`](.claude/skills/))
+- **One assistant or many** — wire each channel to its own agent for privacy, share one agent across channels for unified memory, or fold channels into a single conversation. Per-channel choice via `/manage-channels`. ([docs/isolation-model.md](docs/isolation-model.md))
+
+**What your assistant does**
+
+- **Browses the web** — research, form-filling, screenshots, data extraction, testing web apps through a real browser. ([`container/skills/agent-browser`](container/skills/agent-browser/SKILL.md))
+- **Schedules its own work** — one-shot and cron-recurring tasks, each in an isolated session with a run log; optional [script gates](docs/scheduled-tasks.md) check for new work cheaply so the agent only wakes when there is some. ([`src/modules/scheduling/`](src/modules/scheduling/))
+- **Spins up teammates** — `create_agent` births a new long-lived agent with its own workspace, wired bidirectionally: delegate to it, get messages back. Agent-to-agent messaging works between any wired pair. ([`mcp-tools/agents.ts`](container/agent-runner/src/mcp-tools/agents.ts), [`src/modules/agent-to-agent/`](src/modules/agent-to-agent/))
+- **Asks before acting** — privileged actions (installing packages, adding MCP servers, creating agents) go through approval cards to an admin; the guard sits in the delivery path, not in the agent's good intentions. ([`src/modules/approvals/`](src/modules/approvals/), [`src/delivery-guard.ts`](src/delivery-guard.ts))
+- **Asks you things properly** — blocking multiple-choice questions and rich cards on channels that support them. ([`mcp-tools/interactive.ts`](container/agent-runner/src/mcp-tools/interactive.ts))
+- **Sends real artifacts** — files, charts, PDFs into chat; edits its own sent messages; reacts to yours. ([`mcp-tools/core.ts`](container/agent-runner/src/mcp-tools/core.ts))
+- **Extends itself** — installs apt/npm packages, adds MCP servers, edits its own instructions and code (approval-gated), with a builder-agent pattern for bigger changes. ([`container/skills/self-customize`](container/skills/self-customize/SKILL.md), [`mcp-tools/self-mod.ts`](container/agent-runner/src/mcp-tools/self-mod.ts))
+- **Builds web software like it means it** — a frontend-engineering discipline skill enforces build-test-verify in a real browser before "done", pairing with a deploy skill like `/add-vercel`. ([`container/skills/frontend-engineer`](container/skills/frontend-engineer/SKILL.md))
+- **Remembers** — per-agent `CLAUDE.md` standing instructions plus a structured, budgeted memory index that survives every restart, composed fresh into each session. ([`src/claude-md-compose.ts`](src/claude-md-compose.ts), [`container/agent-runner/src/memory/`](container/agent-runner/src/memory/))
+- **Administers its own install** — the in-container `ncl` CLI queries and (permission-gated) modifies channels, wirings, tasks, and sessions. ([`src/cli/`](src/cli/))
+
+**Under the hood**
+
+- **Survives your laptop** — on the OnCell runtime each agent's whole world (memory, files, `CLAUDE.md`) lives in a durable gVisor cell: laptop dies, assistant doesn't. Idle cells pause to storage at ~$0; your next message wakes them. ([`src/cell-runner.ts`](src/cell-runner.ts))
+- **Snapshot and fork** — a cell's filesystem can be checkpointed or cloned through the OnCell API: back up an assistant, or fork its entire state.
+- **Fully local option** — no `ONCELL_API_KEY`, and everything runs in local Docker containers exactly like upstream NanoClaw. ([`src/container-runner.ts`](src/container-runner.ts))
+- **Credential vault** — with a [OneCLI gateway](https://github.com/onecli/onecli), agents never hold raw API keys: credentials are injected at request time with per-agent policies, and docker installs can hard-lock all egress through it. ([`src/egress-lockdown.ts`](src/egress-lockdown.ts), [`src/cell-gateway.ts`](src/cell-gateway.ts))
+- **Sandboxed by construction** — every agent runs in its own container or cell and sees only the mounts you allowlist. ([`src/modules/mount-security/`](src/modules/mount-security/))
+- **Users, roles, unknown senders** — owner/admin/member roles per user; a stranger messaging your bot triggers an approval card, not a conversation. ([`src/modules/permissions/`](src/modules/permissions/))
+- **Agent templates** — stamp a ready-to-run agent (instructions + tools + skills, no secrets) with `ncl groups create --template <ref>`. ([docs/templates.md](docs/templates.md))
+- **Model choice per agent** — Claude Code natively; `/add-codex`, `/add-opencode` (OpenRouter, Google, DeepSeek…), `/add-ollama-provider` for local open-weight models. ([`.claude/skills/`](.claude/skills/))
+
 ## Hosted (how it works)
 
 There is no separate hosted codebase. A hosted instance is *this* repo running as the service inside your own OnCell cell, started by [`scripts/cloud-start.sh`](scripts/cloud-start.sh) — the same script [oncell.ai/dashboard/claw](https://oncell.ai/claw) runs for you, and the same one you can run yourself on any box that has internet. The bootstrap is **node-only**: cells ship node, npm/corepack and tar but **no git, curl, wget or python3** — so the source arrives as a GitHub tarball fetched by node (`ONCELLCLAW_REF` is resolved to a commit sha via the GitHub API, then the `codeload.github.com/{owner}/{repo}/tar.gz/{sha}` tarball is downloaded and extracted), pnpm comes from corepack shims, and every download in the script goes through `node fetch`. One command takes an empty machine to a live assistant: fetch + extract the source, provision the toolchain, install, build, provision one agent group paired to the built-in [`web` channel](src/channels/web.ts), then `exec` the host so your supervisor owns the process.
@@ -177,17 +212,6 @@ See [docs/v1-to-v2-changes.md](docs/v1-to-v2-changes.md) for what's different an
 **Skills over features.** Trunk ships the registry and infrastructure, not specific channel adapters or alternative agent providers. Channels (Discord, Slack, Telegram, WhatsApp, …) live on a long-lived `channels` branch; alternative providers (OpenCode, Ollama) live on `providers`. You run `/add-telegram`, `/add-opencode`, etc. and the skill copies exactly the module(s) you need into your fork. No feature you didn't ask for.
 
 **Best harness, best model.** NanoClaw natively uses Claude Code via Anthropic's official Claude Agent SDK, so you get the latest Claude models and Claude Code's full toolset, including the ability to modify and expand your own NanoClaw fork. Other providers are drop-in options: `/add-codex` for OpenAI's Codex (ChatGPT subscription or API key), `/add-opencode` for OpenRouter, Google, DeepSeek and more via OpenCode, and `/add-ollama-provider` for local open-weight models. Provider is configurable per agent group.
-
-## What It Supports
-
-- **Multi-channel messaging** — WhatsApp, Telegram, Discord, Slack, Microsoft Teams, iMessage, Matrix, Google Chat, Webex, Linear, GitHub, WeChat, and email via Resend. Installed on demand with `/add-<channel>` skills. Run one or many at the same time.
-- **Flexible isolation** — connect each channel to its own agent for full privacy, share one agent across many channels for unified memory with separate conversations, or fold multiple channels into a single shared session so one conversation spans many surfaces. Pick per channel via `/manage-channels`. See [docs/isolation-model.md](docs/isolation-model.md).
-- **Per-agent workspace** — each agent group has its own `CLAUDE.md`, its own memory, its own container, and only the mounts you allow. Nothing crosses the boundary unless you wire it to.
-- **Scheduled tasks**: recurring jobs executed by the agent, with optional [script gates](docs/scheduled-tasks.md) that avoid waking it when there is no work
-- **Web access** — search and fetch content from the web
-- **Container isolation** — agents are sandboxed in Docker containers (macOS/Linux/WSL2)
-- **Credential security** — agents never hold raw API keys. Outbound requests route through [OneCLI's Agent Vault](https://github.com/onecli/onecli), which injects credentials at request time and enforces per-agent policies and rate limits.
-- **Agent templates**: stamp a ready-to-run agent (instructions + MCP tools + skills, no secrets) from a reusable bundle via `ncl groups create --template <ref>`. Templates load from the local `templates/` folder; populate it by hand or by copying from the [public library](https://github.com/nanocoai/nanoclaw-templates). See [docs/templates.md](docs/templates.md).
 
 ## Accounts and what leaves your machine
 
