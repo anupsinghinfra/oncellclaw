@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://oncellclaw.com">oncellclaw.com</a>&nbsp; • &nbsp;
-  <a href="https://claw.oncell.ai">hosted&nbsp;(claw.oncell.ai)</a>&nbsp; • &nbsp;
+  <a href="https://oncell.ai/claw">hosted&nbsp;(oncell.ai/claw)</a>&nbsp; • &nbsp;
   <a href="https://oncell.ai/docs">OnCell&nbsp;docs</a>&nbsp; • &nbsp;
   <a href="https://discord.gg/ZmzTebH9xv"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
   <a href="README_zh.md">中文</a>&nbsp; • &nbsp;
@@ -41,7 +41,7 @@ The host process shrinks to a channel router: messages in, messages out. Everyth
 
 ## Two ways to run it
 
-- **Hosted — [claw.oncell.ai](https://claw.oncell.ai)**: sign in, pair a channel, message your assistant. No install; your agents live in OnCell cells from the first message. *(Rolling out.)*
+- **Hosted — [oncell.ai/claw](https://oncell.ai/claw)**: sign in, pair a channel, message your assistant. No install; your agents live in OnCell cells from the first message. *(Rolling out.)*
 - **Self-hosted** — clone this repo and run the setup below. Your machine is the channel router; agents run on OnCell (or fully local on Docker, exactly like upstream NanoClaw).
 
 ## Quick Start (self-hosted)
