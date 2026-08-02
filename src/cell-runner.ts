@@ -66,8 +66,9 @@ import type { AgentGroup, Session } from './types.js';
 const PUMP_INTERVAL_MS = 1500;
 const SERVICE_CHECK_EVERY_TICKS = 4;
 const MAX_CONSECUTIVE_PUMP_FAILURES = 10;
-const BOOTSTRAP_KV_KEY = 'claw:bootstrap:v1';
 const BOOTSTRAP_TIMEOUT_MS = 600_000;
+/** Cell path of the generated service bootstrap script (see buildServiceBootstrapScript). */
+export const BOOTSTRAP_SCRIPT_CELL_PATH = 'claw/service-start.sh';
 
 /** Env keys forwarded from host .env/process.env into the cell service env. */
 const CREDENTIAL_ENV_KEYS = [
@@ -176,7 +177,7 @@ async function startCellSession(session: Session): Promise<boolean> {
   const workspaceAbs = await resolveCellWorkspaceRoot(client, cell.cell_id);
 
   await syncToCell(client, cell.cell_id, buildSyncSources(agentGroup, containerConfig));
-  await ensureCellBootstrap(client, cell.cell_id);
+  await stageCellBootstrap(client, cell.cell_id, workspaceAbs);
   await prepareCellSession(client, cell.cell_id, workspaceAbs, containerConfig);
   await client.writeFile(cell.cell_id, 'claw/claude/settings.json', buildCellClaudeSettings(workspaceAbs));
 
@@ -269,22 +270,32 @@ async function resolveCellWorkspaceRoot(client: OnCellClient, cellId: string): P
 }
 
 /**
- * One-time (per lockfile hash) in-cell bootstrap: install bun, the runner's
- * deps, and the pinned claude-code CLI. Mirrors container/Dockerfile's
- * runtime installs; the KV marker stores the bun.lock hash so a lockfile
- * bump re-runs `bun install`.
+ * Stage the service bootstrap script into the cell (host-side writeFile —
+ * no cell network needed). The installs it performs run INSIDE the service,
+ * which is the ONLY network-capable context in a cell: exec sandboxes run
+ * with --network=none, so the old exec-driven bootstrap (curl bun, npm
+ * install) could never succeed on a bare cell — curl doesn't exist and npm
+ * black-holes. Idempotency lives in the script itself (marker file), so a
+ * warm wake goes straight to the runner.
  */
-async function ensureCellBootstrap(client: OnCellClient, cellId: string): Promise<void> {
+async function stageCellBootstrap(client: OnCellClient, cellId: string, workspaceAbs: string): Promise<void> {
+  log.info('Staging cell service bootstrap', { cellId, marker: bootstrapMarker() });
+  await client.writeFile(
+    cellId,
+    BOOTSTRAP_SCRIPT_CELL_PATH,
+    buildServiceBootstrapScript(readClaudeCodeVersion(), bootstrapMarker(), workspaceAbs),
+  );
+}
+
+/**
+ * Bootstrap identity: runner lockfile + pinned claude-code version. A bump
+ * of either re-runs the installs on the next wake; anything else hits the
+ * marker fast-path.
+ */
+export function bootstrapMarker(): string {
   const lockPath = path.join(process.cwd(), 'container', 'agent-runner', 'bun.lock');
   const lockStat = fs.statSync(lockPath, { throwIfNoEntry: false });
-  const marker = `v1:${lockStat ? `${lockStat.size}:${lockStat.mtimeMs}` : 'nolock'}`;
-  const existing = (await client.kvGet(cellId, BOOTSTRAP_KV_KEY)).value;
-  if (existing === marker) return;
-
-  log.info('Bootstrapping cell runtime', { cellId });
-  await client.writeFile(cellId, 'claw/bootstrap.sh', buildBootstrapScript(readClaudeCodeVersion()));
-  await client.exec(cellId, { cmd: 'sh claw/bootstrap.sh', timeoutMs: BOOTSTRAP_TIMEOUT_MS, expectSuccess: true });
-  await client.kvSet(cellId, BOOTSTRAP_KV_KEY, marker);
+  return `v2:${lockStat ? `${lockStat.size}:${lockStat.mtimeMs}` : 'nolock'}:claude=${readClaudeCodeVersion() || 'latest'}`;
 }
 
 /** Pinned claude-code version from container/cli-tools.json ('' = latest). */
@@ -298,16 +309,75 @@ function readClaudeCodeVersion(): string {
   }
 }
 
-export function buildBootstrapScript(claudeCodeVersion: string): string {
+/**
+ * The cell service's entry script: self-contained, node-only bootstrap that
+ * then execs the bun runner. Design constraints, learned the hard way in
+ * production:
+ *
+ *  - NETWORK: only the service has it. All installs happen here, never in
+ *    a host-driven exec. Bun itself comes from npm (`npm i -g bun` ships
+ *    platform binaries as optional deps) because there is no curl for
+ *    bun.sh's installer.
+ *  - READINESS: the supervisor kills a service that isn't accepting
+ *    connections on $PORT within ~30s, and a cold install takes minutes —
+ *    so a node placeholder binds $PORT first (503 {"ok":false,"phase":
+ *    "bootstrap"}) and is killed just before the runner takes over. Same
+ *    pattern as scripts/cloud-start.sh on the hosting side.
+ *  - OBSERVABILITY: every phase echoes to stdout, which lands in the
+ *    cell's /service/logs — the only debugging lifeline in production.
+ *  - IDEMPOTENCY: the marker file short-circuits to `exec bun` on warm
+ *    wakes; installs land under the workspace ($HOME/.claw-tools, bun's
+ *    node_modules), which is durable across service restarts and
+ *    pause/resume.
+ */
+export function buildServiceBootstrapScript(claudeCodeVersion: string, marker: string, workspaceAbs: string): string {
   const claudePkg = claudeCodeVersion ? `@anthropic-ai/claude-code@${claudeCodeVersion}` : '@anthropic-ai/claude-code';
+  const npmFlags = '--no-fund --no-audit --loglevel=error';
   return [
     '#!/bin/sh',
-    '# oncellclaw cell bootstrap — idempotent; mirrors container/Dockerfile runtime deps.',
+    '# oncellclaw agent-cell service bootstrap — generated by src/cell-runner.ts.',
+    '# Runs as THE cell service; see buildServiceBootstrapScript for the design.',
     'set -e',
-    'command -v bun >/dev/null 2>&1 || curl -fsSL https://bun.sh/install | bash',
-    'export PATH="$HOME/.bun/bin:$PATH"',
-    'cd claw/runner && bun install && cd ../..',
-    `command -v claude >/dev/null 2>&1 || npm install -g ${claudePkg}`,
+    `cd '${workspaceAbs}'`,
+    'TOOLS="$HOME/.claw-tools"',
+    'export PATH="$TOOLS/bin:$PATH"',
+    `MARKER='${marker}'`,
+    'echo "[claw-boot] wake ($(date -u +%Y-%m-%dT%H:%M:%SZ)) marker=$MARKER"',
+    '',
+    'if [ "$(cat claw/.bootstrap-marker 2>/dev/null)" = "$MARKER" ] \\',
+    '  && command -v bun >/dev/null 2>&1 \\',
+    '  && command -v claude >/dev/null 2>&1 \\',
+    '  && [ -d claw/runner/node_modules ]; then',
+    '  echo "[claw-boot] bootstrap current — starting runner"',
+    'else',
+    '  echo "[claw-boot] bootstrap needed (cold cell, or lockfile/CLI version changed)"',
+    '  # Hold $PORT while installing — the supervisor kills a service that',
+    '  # is not accepting connections within its readiness window.',
+    '  node -e \'require("http").createServer((q,s)=>{s.writeHead(503,{"content-type":"application/json"});s.end("{\\"ok\\":false,\\"phase\\":\\"bootstrap\\"}")}).listen(Number(process.env.PORT||8080),"0.0.0.0")\' &',
+    '  placeholder_pid=$!',
+    '  echo "[claw-boot] placeholder holding :${PORT:-8080} (pid $placeholder_pid)"',
+    '',
+    '  echo "[claw-boot] [1/3] installing bun (npm)"',
+    `  command -v bun >/dev/null 2>&1 || npm install -g --prefix "$TOOLS" ${npmFlags} bun`,
+    '  echo "[claw-boot] [2/3] installing runner dependencies (bun install)"',
+    '  (cd claw/runner && bun install)',
+    '  echo "[claw-boot] [3/3] installing claude-code CLI (npm)"',
+    `  command -v claude >/dev/null 2>&1 || npm install -g --prefix "$TOOLS" ${npmFlags} ${claudePkg}`,
+    '  printf \'%s\' "$MARKER" > claw/.bootstrap-marker',
+    '  echo "[claw-boot] bootstrap complete"',
+    '',
+    '  kill "$placeholder_pid" 2>/dev/null || true',
+    '  wait "$placeholder_pid" 2>/dev/null || true',
+    '  # Give the kernel a beat to release the listener before bun rebinds.',
+    '  i=0',
+    '  while [ "$i" -lt 5 ]; do',
+    '    node -e \'const s=require("net").createServer();s.once("error",()=>process.exit(1));s.listen(Number(process.env.PORT||8080),"0.0.0.0",()=>s.close(()=>process.exit(0)))\' 2>/dev/null && break',
+    '    i=$((i+1)); sleep 1',
+    '  done',
+    'fi',
+    '',
+    'echo "[claw-boot] exec cell-service (bun $(bun --version 2>/dev/null || echo missing))"',
+    `exec bun '${workspaceAbs}/claw/runner/src/cell-service.ts'`,
     '',
   ].join('\n');
 }
@@ -361,7 +431,10 @@ export function buildCellClaudeSettings(workspaceAbs: string): string {
 }
 
 function buildServiceCmd(workspaceAbs: string): string {
-  return `sh -c 'export PATH="$HOME/.bun/bin:$PATH"; exec bun ${workspaceAbs}/claw/runner/src/cell-service.ts'`;
+  // The staged bootstrap script installs whatever is missing (with its own
+  // network — the service context is the only one that has any) and execs
+  // the bun runner. See buildServiceBootstrapScript.
+  return `sh '${workspaceAbs}/${BOOTSTRAP_SCRIPT_CELL_PATH}'`;
 }
 
 /**

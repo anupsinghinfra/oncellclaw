@@ -19,8 +19,9 @@ vi.mock('./config.js', async () => {
 });
 
 import {
-  buildBootstrapScript,
+  BOOTSTRAP_SCRIPT_CELL_PATH,
   buildCellClaudeSettings,
+  buildServiceBootstrapScript,
   buildServiceEnv,
   buildSyncSources,
   getActiveCellSessionCount,
@@ -174,7 +175,16 @@ describe('wakeCellSession', () => {
     expect(fake.createCellCalls[0]).toMatch(/^clawg-[a-z0-9-]+-main-chat$/);
     expect(fake.createCellCalls[0]!.startsWith('claw-')).toBe(false);
     expect(fake.serviceStarts.length).toBe(1);
-    expect(fake.serviceStarts[0].cmd).toContain('cell-service.ts');
+    // The service cmd runs the STAGED bootstrap script (which installs what
+    // is missing using the service's network, then execs the bun runner) —
+    // never a bare runner invocation that assumes bun exists.
+    expect(fake.serviceStarts[0].cmd).toBe(`sh '/ws/${BOOTSTRAP_SCRIPT_CELL_PATH}'`);
+    const staged = fake.writes.find((w) => w.path === BOOTSTRAP_SCRIPT_CELL_PATH);
+    expect(staged).toBeDefined();
+    expect(staged!.content).toContain('exec bun');
+    expect(staged!.content).toContain('cell-service.ts');
+    // Bootstrap must NOT happen over exec — exec sandboxes have no network.
+    expect(fake.execCmds.every((cmd) => !cmd.includes('npm install') && !cmd.includes('curl'))).toBe(true);
     expect(isCellSessionRunning(session.id)).toBe(true);
     expect(getActiveCellSessionCount()).toBe(1);
     // inbound.db was pushed to the cell before the service started
@@ -306,9 +316,24 @@ describe('service plumbing helpers', () => {
     expect(env.NANOCLAW_CELL).toBe('1');
   });
 
-  it('buildBootstrapScript pins the claude-code version when known', () => {
-    expect(buildBootstrapScript('2.1.197')).toContain('@anthropic-ai/claude-code@2.1.197');
-    expect(buildBootstrapScript('')).toContain('npm install -g @anthropic-ai/claude-code');
+  it('buildServiceBootstrapScript pins the claude-code version when known', () => {
+    expect(buildServiceBootstrapScript('2.1.197', 'm1', '/ws')).toContain('@anthropic-ai/claude-code@2.1.197');
+    expect(buildServiceBootstrapScript('', 'm1', '/ws')).toMatch(/npm install -g .* @anthropic-ai\/claude-code$/m);
+  });
+
+  it('buildServiceBootstrapScript is node-only, port-holding, marker-gated and self-executing', () => {
+    const script = buildServiceBootstrapScript('2.1.197', 'v2:123:claude=2.1.197', '/ws');
+    // Node-only: bun arrives via npm — there is no curl in a cell.
+    expect(script).not.toContain('curl');
+    expect(script).toContain('npm install -g --prefix "$TOOLS" --no-fund --no-audit --loglevel=error bun');
+    // Readiness: a placeholder binds $PORT before the slow installs.
+    expect(script).toContain('"phase\\":\\"bootstrap\\"');
+    expect(script).toContain('placeholder_pid=$!');
+    // Idempotency: marker file short-circuits warm wakes.
+    expect(script).toContain("MARKER='v2:123:claude=2.1.197'");
+    expect(script).toContain('claw/.bootstrap-marker');
+    // Hand-off: the runner replaces the shell.
+    expect(script).toContain("exec bun '/ws/claw/runner/src/cell-service.ts'");
   });
 
   it('buildCellClaudeSettings points the PreCompact hook at the synced runner', () => {
