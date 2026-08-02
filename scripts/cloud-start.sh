@@ -439,25 +439,24 @@ info "node $(node --version)"
 
 mkdir -p "$TOOLCHAIN_DIR/bin"
 export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
-# A working pnpm is one that can print its version — a corepack shim can
-# exist yet die at runtime (stale bundled keyset, network), so existence is
-# not the test.
+# pnpm via plain npm, never corepack. Corepack verifies registry signing
+# keys against a keyset bundled into node, npm rotated those keys, and the
+# bundled corepack ignores COREPACK_INTEGRITY_KEYS=0 on its latest-version
+# path — so every corepack route dies with "Cannot find matching keyid"
+# (seen live on cells, three ways). npm does shasum integrity instead and
+# has no such keyset. Version pinned from this checkout's packageManager.
+# A usable pnpm is one that RUNS — a shim can exist yet die at runtime, so
+# existence is never the test.
 pnpm_works() { pnpm --version >/dev/null 2>&1; }
-if ! pnpm_works && have corepack; then
-  # Shims land in the toolchain, not the (possibly read-only) node bin dir.
-  # The shim resolves the exact pnpm version from this checkout's
-  # packageManager field on first run.
-  corepack enable --install-directory "$TOOLCHAIN_DIR/bin" >/dev/null 2>&1 || true
-fi
+pm="$(node -p "(require('./package.json').packageManager||'pnpm@latest')" 2>/dev/null || echo 'pnpm@latest')"
 if ! pnpm_works; then
-  # corepack absent or its shim broken — remove any dead shims and install
-  # via npm (ships with node) into the same prefix.
+  # Remove dead corepack shims from any earlier bootstrap attempt.
   rm -f "$TOOLCHAIN_DIR/bin/pnpm" "$TOOLCHAIN_DIR/bin/pnpx"
-  pm="$(node -p "(require('./package.json').packageManager||'pnpm@latest')" 2>/dev/null || echo 'pnpm@latest')"
-  info "corepack unavailable — installing ${pm} via npm"
-  npm install -g --silent --prefix "$TOOLCHAIN_DIR" "$pm" >/dev/null
+  info "installing ${pm} via npm"
+  npm install -g --silent --prefix "$TOOLCHAIN_DIR" "$pm" >/dev/null 2>&1 \
+    || npm install -g --prefix "$TOOLCHAIN_DIR" "$pm"
 fi
-pnpm_works || die 'pnpm could not be provisioned via corepack or npm.'
+pnpm_works || die 'pnpm could not be provisioned via npm.'
 info "pnpm $(pnpm --version)"
 
 # ---------------------------------------------------------------------------
