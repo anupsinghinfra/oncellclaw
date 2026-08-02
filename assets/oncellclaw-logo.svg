@@ -1,0 +1,11 @@
+<svg width="440" height="96" viewBox="0 0 440 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- OnCell mark: rounded cell + nucleus -->
+  <rect x="18" y="18" width="60" height="60" rx="15" stroke="#10b981" stroke-width="4" fill="none"/>
+  <circle cx="48" cy="48" r="9" fill="#10b981"/>
+  <!-- claw accent: three tick marks reaching from the cell -->
+  <path d="M84 34 L94 30" stroke="#10b981" stroke-width="4" stroke-linecap="round"/>
+  <path d="M86 48 L97 48" stroke="#10b981" stroke-width="4" stroke-linecap="round"/>
+  <path d="M84 62 L94 66" stroke="#10b981" stroke-width="4" stroke-linecap="round"/>
+  <!-- wordmark -->
+  <text x="112" y="60" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="34" font-weight="600" fill="#e8e4de">oncell<tspan fill="#10b981">claw</tspan></text>
+</svg>

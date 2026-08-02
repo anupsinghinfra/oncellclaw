@@ -188,7 +188,11 @@ async function startCellSession(session: Session): Promise<boolean> {
   await pushSessionInputs(client, handle);
 
   await stopStaleService(client, cell.cell_id);
-  await client.startService(cell.cell_id, buildServiceCmd(workspaceAbs), buildServiceEnv(workspaceAbs, containerConfig));
+  await client.startService(
+    cell.cell_id,
+    buildServiceCmd(workspaceAbs),
+    buildServiceEnv(workspaceAbs, containerConfig),
+  );
 
   cellHolders.set(customerId, session.id);
   activeCellSessions.set(session.id, handle);
@@ -345,9 +349,7 @@ export function buildCellClaudeSettings(workspaceAbs: string): string {
         hooks: {
           PreCompact: [
             {
-              hooks: [
-                { type: 'command', command: `bun ${workspaceAbs}/claw/runner/src/compact-instructions.ts` },
-              ],
+              hooks: [{ type: 'command', command: `bun ${workspaceAbs}/claw/runner/src/compact-instructions.ts` }],
             },
           ],
         },
@@ -461,7 +463,12 @@ async function pumpTickBody(client: OnCellClient, handle: CellSessionHandle): Pr
   const status = await fetchSessionStatus(client, handle.cellId, cellSessionRoot());
   if (!status.missing) {
     if (status.outboundStaged) {
-      await pullOutboundDb(client, handle.cellId, cellSessionRoot(), outboundDbPath(handle.agentGroupId, handle.sessionId));
+      await pullOutboundDb(
+        client,
+        handle.cellId,
+        cellSessionRoot(),
+        outboundDbPath(handle.agentGroupId, handle.sessionId),
+      );
     }
     applyHeartbeat(heartbeatPath(handle.agentGroupId, handle.sessionId), status.heartbeatEpochSec);
     await syncOutbox(client, handle, status.outboxFiles);
@@ -590,10 +597,6 @@ export function _resetCellRunnerForTesting(): void {
 }
 
 /** Test seam: register a fake handle (returned so tests can drive the pump). */
-export function _createHandleForTesting(
-  session: Session,
-  customerId: string,
-  cellId: string,
-): CellSessionHandle {
+export function _createHandleForTesting(session: Session, customerId: string, cellId: string): CellSessionHandle {
   return createHandle(session, customerId, cellId);
 }

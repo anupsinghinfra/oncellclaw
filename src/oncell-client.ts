@@ -59,14 +59,7 @@ export interface KvGetResult {
 
 /** Methods accepted by POST /api/v1/cells/{id}/request. */
 export type CellRequestMethod =
-  | 'write_file'
-  | 'read_file'
-  | 'list_files'
-  | 'db_get'
-  | 'db_set'
-  | 'journal'
-  | 'logs'
-  | 'metrics';
+  'write_file' | 'read_file' | 'list_files' | 'db_get' | 'db_set' | 'journal' | 'logs' | 'metrics';
 
 export interface ExecInput {
   readonly cmd: string;
@@ -174,7 +167,11 @@ export function createOnCellClient(options: OnCellClientOptions): OnCellClient {
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'network request failed';
-      throw new OnCellApiError({ status: 0, code: 'NETWORK_ERROR', message: `${spec.method} ${spec.path}: ${message}` });
+      throw new OnCellApiError({
+        status: 0,
+        code: 'NETWORK_ERROR',
+        message: `${spec.method} ${spec.path}: ${message}`,
+      });
     }
   }
 
@@ -247,7 +244,8 @@ export function createOnCellClient(options: OnCellClientOptions): OnCellClient {
         body: { cmd, ...(env !== undefined ? { env } : {}) },
         idempotent: false,
       }),
-    getService: (cellId) => send<ServiceRecord>({ method: 'GET', path: cellPath(cellId, '/service'), idempotent: false }),
+    getService: (cellId) =>
+      send<ServiceRecord>({ method: 'GET', path: cellPath(cellId, '/service'), idempotent: false }),
     stopService: async (cellId) => {
       await send<unknown>({ method: 'DELETE', path: cellPath(cellId, '/service'), idempotent: false });
     },

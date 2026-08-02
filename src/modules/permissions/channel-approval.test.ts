@@ -630,8 +630,7 @@ describe('unknown-channel registration flow', () => {
     });
 
     const created = getDb().prepare("SELECT id FROM agent_groups WHERE name = 'Newbie'").get() as
-      | { id: string }
-      | undefined;
+      { id: string } | undefined;
     expect(created).toBeDefined();
     const mgaCount = (
       getDb()

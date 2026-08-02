@@ -87,7 +87,7 @@ function fakeOnCell(): FakeOnCell {
       if (input.cmd.includes('HB $(stat')) return Promise.resolve(okExec({ stdout: 'HB 0\nSTAGED 0\n' }));
       return Promise.resolve(okExec());
     },
-    request: <T = unknown,>() => Promise.resolve({} as T),
+    request: <T = unknown>() => Promise.resolve({} as T),
     writeFile: (_cell: string, p: string, content: string) => {
       fake.writes.push({ path: p, content });
       return Promise.resolve({});
@@ -276,7 +276,16 @@ describe('pump IPC round-trip', () => {
     // heartbeat mtime mirrored for host-sweep liveness
     expect(Math.floor(fs.statSync(heartbeatPath(GROUP_ID, session.id)).mtimeMs / 1000)).toBe(hbEpoch);
     // outbox attachment pulled into the local session dir
-    const localAttachment = path.join(TEST_ROOT, 'data', 'v2-sessions', GROUP_ID, session.id, 'outbox', 'msg-9', 'pic.png');
+    const localAttachment = path.join(
+      TEST_ROOT,
+      'data',
+      'v2-sessions',
+      GROUP_ID,
+      session.id,
+      'outbox',
+      'msg-9',
+      'pic.png',
+    );
     expect(fs.readFileSync(localAttachment).equals(attachment)).toBe(true);
     // inbound.db was pushed cell-ward during the same tick
     expect(fake.writes.some((w) => w.path === 'claw/session/inbound.db.__push')).toBe(true);

@@ -1,9 +1,27 @@
-# NanoClaw Security Model
+# oncellclaw Security Model
 
-> The canonical, continuously-verified version of this model lives at
-> [docs.nanoclaw.dev/concepts/security](https://docs.nanoclaw.dev/concepts/security).
-> This in-repo copy can drift; if the two disagree, verify against
-> `src/container-runner.ts` (`buildMounts`).
+> Inherited from upstream [NanoClaw](https://github.com/nanocoai/nanoclaw)'s
+> security model; if this document and the code disagree, verify against
+> `src/container-runner.ts` (`buildMounts`) for the Docker runtime and
+> `src/cell-runtime.ts` / `src/cell-sync.ts` for the OnCell runtime.
+
+## The OnCell runtime layer
+
+When `ONCELLCLAW_RUNTIME=oncell` (the default with an `ONCELL_API_KEY`),
+agents run in gVisor-sandboxed OnCell cells instead of local Docker
+containers. The isolation boundary moves to the cloud but the model is the
+same or stricter:
+
+- **Filesystem isolation**: an agent sees only its own cell's workspace —
+  there are no host mounts at all; files reach the cell through an explicit,
+  content-hashed sync (`src/cell-sync.ts`) that hard-excludes `.env*`.
+- **Credentials never land on disk**: Anthropic credentials are passed only
+  as service environment at start (`src/cell-runner.ts`) and are tested to
+  never appear in any file write or exec payload.
+- **Tenant isolation**: cells are isolated per OnCell account and per cell;
+  cross-cell access is structurally impossible through the API.
+- **`additionalMounts` is unsupported** on the OnCell runtime (warned and
+  ignored) — there is no host filesystem to mount.
 
 ## Trust Model
 
@@ -108,16 +126,16 @@ This prevents cross-group information disclosure.
 
 ### 4. Credential Isolation (OneCLI Agent Vault)
 
-Real API credentials **never enter containers**. NanoClaw uses [OneCLI's Agent Vault](https://github.com/onecli/onecli) to proxy outbound requests and inject credentials at the gateway level.
+Real API credentials **never enter containers**. oncellclaw uses [OneCLI's Agent Vault](https://github.com/onecli/onecli) to proxy outbound requests and inject credentials at the gateway level.
 
 **How it works:**
 1. Credentials are registered once with `onecli secrets create`, stored and managed by OneCLI
-2. When NanoClaw spawns a container, it calls `applyContainerConfig()` to route outbound HTTPS through the OneCLI gateway
+2. When oncellclaw spawns a container, it calls `applyContainerConfig()` to route outbound HTTPS through the OneCLI gateway
 3. The gateway matches requests by host and path, injects the real credential, and forwards
 4. Agents cannot discover real credentials — not in environment, stdin, files, or `/proc`
 
 **Per-agent policies:**
-Each NanoClaw group gets its own OneCLI agent identity. This allows different credential policies per group (e.g. your sales agent vs. support agent). OneCLI supports rate limits, and time-bound access and approval flows are on the roadmap.
+Each oncellclaw group gets its own OneCLI agent identity. This allows different credential policies per group (e.g. your sales agent vs. support agent). OneCLI supports rate limits, and time-bound access and approval flows are on the roadmap.
 
 **Never on the container filesystem:**
 - The project root and `.env` — never mounted; the container only receives the paths in the mount table above.
@@ -220,7 +238,7 @@ OOM-killed at the limit.
 
 ## Supply Chain Security (pnpm)
 
-NanoClaw uses pnpm with two supply chain defenses configured in `pnpm-workspace.yaml`:
+oncellclaw uses pnpm with two supply chain defenses configured in `pnpm-workspace.yaml`:
 
 ### Minimum Release Age
 

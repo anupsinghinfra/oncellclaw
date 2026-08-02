@@ -441,8 +441,7 @@ export type DeliveryActionHandler = (
 ) => Promise<void>;
 
 type DeliveryEntry =
-  | { guard: Unguarded; handler: DeliveryActionHandler }
-  | { guard: DeliveryGuardSpec; handler: GuardedDeliveryHandler };
+  { guard: Unguarded; handler: DeliveryActionHandler } | { guard: DeliveryGuardSpec; handler: GuardedDeliveryHandler };
 
 const deliveryActions = new Map<string, DeliveryEntry>();
 

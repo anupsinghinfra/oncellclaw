@@ -296,8 +296,7 @@ function genericUpdate(def: ResourceDef) {
 
     if (def.preUpdate) {
       const current = getDb().prepare(`SELECT ${cols} FROM ${def.table} WHERE ${def.idColumn} = ?`).get(id) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       if (!current) throw new Error(`${def.name} not found: ${id}`);
       def.preUpdate(updates, current);
     }
