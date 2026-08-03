@@ -187,7 +187,10 @@ child.stdout.on('data', (chunk: Buffer) => {
   process.stdout.write(text);
   stdoutBuf += text;
 
-  const blockRe = /=== NANOCLAW SETUP: (\w+) ===\n([\s\S]*?)\n=== END ===/g;
+  // `\S+`, not `\w+`: setup/index.ts names its step-level failure block
+  // `stepName.toUpperCase()` — `WHATSAPP-AUTH`, which a hyphen-less `\w`
+  // never matches, silently dropping the only block carrying the reason.
+  const blockRe = /=== NANOCLAW SETUP: (\S+) ===\n([\s\S]*?)\n=== END ===/g;
   let m: RegExpExecArray | null;
   let lastEnd = 0;
   while ((m = blockRe.exec(stdoutBuf)) !== null) {
@@ -203,7 +206,10 @@ child.stdout.on('data', (chunk: Buffer) => {
   if (lastEnd > 0) stdoutBuf = stdoutBuf.slice(lastEnd);
 });
 
-function handleBlock(name: string, fields: Record<string, string>): void {
+function handleBlock(rawName: string, fields: Record<string, string>): void {
+  // `WHATSAPP-AUTH` (setup/index.ts's catch-all) and `WHATSAPP_AUTH` (the
+  // step's own terminal block) are the same block — normalise the separator.
+  const name = rawName.replace(/-/g, '_');
   if (name === 'WHATSAPP_AUTH_QR' && fields.QR) {
     state.qr = fields.QR;
     state.status = 'ready';

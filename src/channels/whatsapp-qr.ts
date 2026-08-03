@@ -25,6 +25,17 @@
  *    package; without it the raw QR payload is still served and the
  *    dashboard can render it client-side.
  *
+ * A hosted claw is exactly the checkout where that boundary bites. cloud-start
+ * extracts a pristine trunk tarball per sha and runs `pnpm install
+ * --frozen-lockfile`, so `setup/whatsapp-auth.ts`'s static imports (`pino`,
+ * `@whiskeysockets/baileys`) resolve to nothing and the child dies with
+ * ERR_MODULE_NOT_FOUND before Baileys ever runs. `missingPairingDeps()` probes
+ * for that BEFORE spawning, so the dashboard gets "run the channel install"
+ * instead of an ESM-loader stack trace. See the two reporting bugs that hid
+ * this for a release: the status-block name pattern (`\S+`, not `\w+` — the
+ * step-level failure block is `WHATSAPP-AUTH`, with a hyphen) and the stderr
+ * tail (rolling + summarized, not "last chunk, last 500 bytes").
+ *
  * Test seams (no live WhatsApp / Baileys in the suite):
  *   ONCELLCLAW_WA_AUTH_CMD          overrides the spawned command
  *   ONCELLCLAW_WA_AUTH_DIR          overrides the creds directory probe
@@ -51,19 +62,97 @@ export interface WhatsappQrState {
   version: number;
 }
 
-/** Same command the add-whatsapp browser helper spawns — one canonical
- *  pairing path however the QR is displayed. */
-const DEFAULT_AUTH_CMD = 'pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr';
+/**
+ * Same command the add-whatsapp browser helper spawns (and the same one
+ * add-whatsapp/SKILL.md documents) — one canonical pairing path however the
+ * QR is displayed. Exported so a test can pin the argv shape the cell
+ * posture uses against those two canonical copies.
+ */
+export const DEFAULT_AUTH_CMD = 'pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr';
 const DEFAULT_SESSION_TIMEOUT_MS = 5 * 60_000;
 /** After a failure, hold off re-spawning so a polling dashboard can show
  *  the error instead of hot-looping a broken pairing step. */
 const DEFAULT_RETRY_HOLDOFF_MS = 10_000;
 
-/** Status-block framing shared with setup/status.ts emitStatus(). */
-const STATUS_BLOCK_RE = /=== NANOCLAW SETUP: (\w+) ===\n([\s\S]*?)\n=== END ===/g;
+/**
+ * Status-block framing shared with setup/status.ts emitStatus(). `\S+`, not
+ * `\w+`: `setup/index.ts` names its step-level failure block after
+ * `stepName.toUpperCase()`, so a whatsapp-auth crash arrives as
+ * `WHATSAPP-AUTH` — a hyphen `\w` never matches. Same pattern as
+ * setup/lib/runner.ts's StatusStream.
+ */
+const STATUS_BLOCK_RE = /=== NANOCLAW SETUP: (\S+) ===\n([\s\S]*?)\n=== END ===/g;
+
+/** Keep enough stderr to find the first real error line, not just a stack tail. */
+const STDERR_TAIL_LIMIT = 4000;
+/** Cap what reaches the dashboard's single-line error field. */
+const ERROR_SUMMARY_LIMIT = 300;
+
+/**
+ * Packages `setup/whatsapp-auth.ts` statically imports that trunk does NOT
+ * ship — the add-whatsapp channel install owns them. Probed by path rather
+ * than `require.resolve` so the check stays a pure disk read: it must not
+ * evaluate a package, and it must not mis-report an ESM-only package as
+ * absent because the `require` condition failed to resolve.
+ */
+const STEP_SKILL_DEPS = ['pino', '@whiskeysockets/baileys'] as const;
 
 function authCmd(): string {
   return process.env.ONCELLCLAW_WA_AUTH_CMD || DEFAULT_AUTH_CMD;
+}
+
+/** True when the relay is about to run the canonical step (not a test seam
+ *  or operator override) — the only case whose dependencies we can know. */
+function usingCanonicalStep(): boolean {
+  return !process.env.ONCELLCLAW_WA_AUTH_CMD;
+}
+
+/** Is `dep` installed anywhere the spawned step could resolve it from? */
+function isPackageInstalled(dep: string, from: string): boolean {
+  let dir = path.resolve(from);
+  for (;;) {
+    if (fs.existsSync(path.join(dir, 'node_modules', dep, 'package.json'))) return true;
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/**
+ * Which of the pairing step's skill-installed dependencies are missing from
+ * this checkout. Non-empty means spawning the step can only produce an
+ * ERR_MODULE_NOT_FOUND, so the relay reports that up front instead.
+ */
+export function missingPairingDeps(): string[] {
+  const root = process.cwd();
+  try {
+    return STEP_SKILL_DEPS.filter((dep) => !isPackageInstalled(dep, root));
+  } catch (err) {
+    // An unreadable node_modules is not proof of absence — let the spawn
+    // speak instead of blocking pairing on a probe failure.
+    log.warn('WhatsApp pairing dependency probe failed — spawning anyway', { err });
+    return [];
+  }
+}
+
+/**
+ * Reduce a child's stderr to the one line worth showing. Prefers the first
+ * `SomeError: message` line (an ERR_MODULE_NOT_FOUND's own line, not the
+ * loader frames below it), else the last non-empty line.
+ */
+export function summarizeStderr(tail: string): string {
+  // eslint-disable-next-line no-control-regex
+  const plain = tail.replace(/\x1b\[[0-9;]*m/g, '');
+  const errLine = /\b([A-Za-z]*Error(?: \[[^\]]+\])?: [^\n]+)/.exec(plain);
+  const line = (
+    errLine?.[1] ??
+    plain
+      .split('\n')
+      .filter((l) => l.trim())
+      .at(-1) ??
+    ''
+  ).trim();
+  return line.length > ERROR_SUMMARY_LIMIT ? `${line.slice(0, ERROR_SUMMARY_LIMIT)}…` : line;
 }
 
 function authDir(): string {
@@ -131,6 +220,16 @@ export function ensureWhatsappPairing(): WhatsappQrState {
   if (isWhatsappPaired()) {
     return { status: 'already_paired', qr: null, pngBase64: null, version: 0 };
   }
+  const missing = usingCanonicalStep() ? missingPairingDeps() : [];
+  if (missing.length > 0) {
+    session = deadSession(
+      `WhatsApp pairing is not installed on this claw — ${missing.join(', ')} ` +
+        `${missing.length > 1 ? 'are' : 'is'} absent from this checkout. The Baileys pairing step ships with ` +
+        `the add-whatsapp channel install, not with trunk, and a hosted checkout is a pristine trunk tarball. ` +
+        `Run the add-whatsapp install (or point ONCELLCLAW_WA_AUTH_CMD at your own pairing command) first.`,
+    );
+    return session.state;
+  }
   session = startSession();
   return session.state;
 }
@@ -153,8 +252,8 @@ export function stopWhatsappPairing(): void {
   }
 }
 
-function startSession(): Session {
-  const fresh: Session = {
+function blankSession(): Session {
+  return {
     state: { status: 'starting', qr: null, pngBase64: null, version: 0 },
     child: null,
     buffer: '',
@@ -163,6 +262,27 @@ function startSession(): Session {
     done: false,
     endedAt: 0,
   };
+}
+
+/**
+ * An already-terminal failed session — nothing was spawned. It still goes
+ * through the normal holdoff/retry path, so a dashboard that keeps polling
+ * shows the error, and a claw that later gains the missing pieces starts
+ * pairing for real on the next request after the holdoff.
+ */
+function deadSession(error: string): Session {
+  const dead = blankSession();
+  dead.done = true;
+  dead.endedAt = Date.now();
+  dead.state.status = 'failed';
+  dead.state.error = error;
+  log.warn('WhatsApp QR pairing unavailable', { error });
+  bump(dead.state);
+  return dead;
+}
+
+function startSession(): Session {
+  const fresh = blankSession();
 
   const cmd = authCmd();
   log.info('WhatsApp QR pairing session starting', { cmd });
@@ -170,12 +290,7 @@ function startSession(): Session {
   try {
     child = spawn(cmd, { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
-    fresh.done = true;
-    fresh.endedAt = Date.now();
-    fresh.state.status = 'failed';
-    fresh.state.error = `could not start the pairing step: ${err instanceof Error ? err.message : String(err)}`;
-    bump(fresh.state);
-    return fresh;
+    return deadSession(`could not start the pairing step: ${err instanceof Error ? err.message : String(err)}`);
   }
   fresh.child = child;
 
@@ -204,16 +319,19 @@ function startSession(): Session {
     if (lastEnd > 0) fresh.buffer = fresh.buffer.slice(lastEnd);
   });
   child.stderr?.on('data', (chunk: Buffer) => {
-    // Keep the last chunk — when the step dies (e.g. Baileys not installed
-    // on this checkout) this is the only useful diagnosis.
-    fresh.stderrTail = chunk.toString().slice(-500);
+    // A ROLLING bounded tail, not the last chunk: a dying step writes its
+    // error line and its stack in one or many chunks, and keeping only the
+    // last 500 bytes of the last chunk throws away the error and keeps the
+    // loader frames — which is exactly how a missing `pino` once reached the
+    // dashboard as a truncated "…esolveTsPaths (…/tsx/dist/register…)".
+    fresh.stderrTail = (fresh.stderrTail + chunk.toString()).slice(-STDERR_TAIL_LIMIT);
   });
   child.on('error', (err) => {
     finish(fresh, 'failed', `pairing step failed to spawn: ${err.message}`);
   });
   child.on('exit', (code) => {
     if (fresh.done) return;
-    const detail = fresh.stderrTail.trim();
+    const detail = summarizeStderr(fresh.stderrTail);
     finish(fresh, 'failed', `pairing step exited (code=${code ?? 'null'})${detail ? ` — ${detail}` : ''}`);
   });
 
@@ -229,8 +347,12 @@ function parseBlockFields(body: string): Record<string, string> {
   return fields;
 }
 
-function handleBlock(target: Session, name: string, fields: Record<string, string>): void {
+function handleBlock(target: Session, rawName: string, fields: Record<string, string>): void {
   if (target.done) return;
+  // The step emits `WHATSAPP_AUTH*`; setup/index.ts's own catch-all names its
+  // failure block `stepName.toUpperCase()` — `WHATSAPP-AUTH`. Same block,
+  // different separator, so normalise rather than match two spellings.
+  const name = rawName.replace(/-/g, '_');
   if (name === 'WHATSAPP_AUTH_QR' && fields.QR) {
     target.state.status = 'qr_ready';
     target.state.qr = fields.QR;
