@@ -467,4 +467,9 @@ function extractText(message: OutboundMessage): string | null {
   return null;
 }
 
-registerChannelAdapter(DISCORD_CHANNEL_TYPE, { factory: createAdapter, defaults: DISCORD_DEFAULTS });
+registerChannelAdapter(DISCORD_CHANNEL_TYPE, {
+  factory: createAdapter,
+  defaults: DISCORD_DEFAULTS,
+  // Same shape as Telegram: one `.env` token, no on-disk session.
+  durability: { credentialKeys: [DISCORD_TOKEN_ENV_KEY] },
+});

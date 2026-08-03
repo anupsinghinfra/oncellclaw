@@ -1,10 +1,10 @@
 /**
  * Step: whatsapp-auth — standalone WhatsApp (Baileys) authentication.
  *
- * Forked from the channels-branch version so setup:auto's driver can render
- * the terminal UX itself (inside clack) instead of the step dumping a raw QR
- * to stdout. The browser method has been dropped — one less moving part and
- * it kept biting headless/SSH users.
+ * The ONE pairing path, whatever renders the QR: the terminal flow, the
+ * add-whatsapp browser helper, and the hosted QR relay
+ * (src/channels/whatsapp-qr.ts) all spawn this exact step and parse the
+ * blocks below.
  *
  * Methods:
  *   --method qr (default)          Emit each rotating QR as a status block
@@ -23,66 +23,88 @@
  * so `spawnStep` recognises them and sets `ok` correctly; WhatsApp-specific
  * UI text (e.g. "WhatsApp linked") lives in the driver's block handler.
  *
- * On success, credentials land in store/auth/ and the process exits 0.
+ * Where the session lands: src/channels/whatsapp-session.ts decides, and the
+ * trunk adapter and the QR relay read the same resolver. It is `store/auth`,
+ * which cloud-start.sh symlinks into `$BASE/state/` — so a scan survives
+ * every later update, restart and pause. Getting this path from one place is
+ * the point: three processes write and read it, and a disagreement silently
+ * loses a pairing.
+ *
+ * Baileys and pino are trunk OPTIONAL dependencies and are imported LAZILY,
+ * inside run(). A static import made a pruned-optional install die with a raw
+ * ERR_MODULE_NOT_FOUND inside the tsx ESM loader before any of this file ran —
+ * no status block, no diagnosis. Now the absence is reported as a normal
+ * `WHATSAPP_AUTH { STATUS: failed }` block that says which package to install.
  */
 import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
-// Named import (not default) — pino's d.ts under NodeNext resolves the
-// default export to `typeof pino` (namespace), which isn't callable. The
-// named `pino` export resolves to the callable function.
-import { pino } from 'pino';
 
 import {
-  makeWASocket,
-  Browsers,
-  DisconnectReason,
-  fetchLatestWaWebVersion,
-  makeCacheableSignalKeyStore,
-  useMultiFileAuthState,
-} from '@whiskeysockets/baileys';
+  WHATSAPP_OPTIONAL_DEPS,
+  isWhatsappPaired,
+  phoneFromJid,
+  whatsappAuthDir,
+  whatsappPairingCodeFile,
+} from '../src/channels/whatsapp-session.js';
 import { emitStatus } from './status.js';
 
-const AUTH_DIR = path.join(process.cwd(), 'store', 'auth');
-const PAIRING_CODE_FILE = path.join(process.cwd(), 'store', 'pairing-code.txt');
-const baileysLogger = pino({ level: 'silent' });
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-// Baileys v6 bug: getPlatformId sends charCode (49) instead of enum value (1).
-// Fixed in Baileys 7.x but not backported. Without this patch pairing codes
-// fail with "couldn't link device" because WhatsApp receives an invalid
-// platform id. createRequire because proto is not a named ESM export.
-const _require = createRequire(import.meta.url);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { proto } = _require('@whiskeysockets/baileys') as { proto: any };
-try {
-  const _generics = _require(
-    '@whiskeysockets/baileys/lib/Utils/generics',
-  ) as Record<string, unknown>;
-  _generics.getPlatformId = (browser: string): string => {
-    const platformType =
-      proto.DeviceProps.PlatformType[
-        browser.toUpperCase() as keyof typeof proto.DeviceProps.PlatformType
-      ];
-    return platformType ? platformType.toString() : '1';
-  };
-} catch {
-  // If CJS require fails, QR auth still works; only pairing code may be affected.
+const AUTH_DIR = whatsappAuthDir();
+const PAIRING_CODE_FILE = whatsappPairingCodeFile();
+
+/**
+ * Load Baileys + pino now rather than at module scope, so a missing optional
+ * dependency becomes a status block instead of a loader stack trace. Also
+ * applies the v6 getPlatformId patch, which needs the module in hand.
+ */
+async function loadBaileys(): Promise<{ baileys: any; logger: any }> {
+  let baileys: any;
+  let pinoModule: any;
+  try {
+    baileys = await import('@whiskeysockets/baileys');
+    pinoModule = await import('pino');
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `WhatsApp pairing needs the optional trunk dependencies ${WHATSAPP_OPTIONAL_DEPS.join(', ')}, and this ` +
+        `checkout does not have them. Re-run \`pnpm install\` without --no-optional. (${reason})`,
+    );
+  }
+
+  // Baileys v6 bug: getPlatformId sends charCode (49) instead of enum value
+  // (1). Fixed in Baileys 7.x but not backported. Without this patch pairing
+  // codes fail with "couldn't link device" because WhatsApp receives an
+  // invalid platform id. createRequire because proto is not a named ESM
+  // export.
+  try {
+    const _require = createRequire(import.meta.url);
+    const { proto } = _require('@whiskeysockets/baileys') as { proto: any };
+    const _generics = _require('@whiskeysockets/baileys/lib/Utils/generics') as Record<string, unknown>;
+    _generics.getPlatformId = (browser: string): string => {
+      const platformType =
+        proto.DeviceProps.PlatformType[browser.toUpperCase() as keyof typeof proto.DeviceProps.PlatformType];
+      return platformType ? platformType.toString() : '1';
+    };
+  } catch {
+    // If CJS require fails, QR auth still works; only pairing code may be affected.
+  }
+
+  // Named export (not default) — pino's d.ts under NodeNext resolves the
+  // default export to `typeof pino` (a namespace), which isn't callable.
+  const pino = pinoModule.pino ?? pinoModule.default;
+  return { baileys, logger: pino({ level: 'silent' }) };
 }
 
 type AuthMethod = 'qr' | 'pairing-code';
-
-/** Extract the bare phone digits from a WhatsApp JID like `14155551234:12@s.whatsapp.net`. */
-function phoneFromId(id?: string | null): string {
-  if (!id) return '';
-  return id.split(':')[0].split('@')[0];
-}
 
 /** Read the linked number from saved credentials (the skipped / already-authed path). */
 function readAuthedPhoneFromFile(): string {
   try {
     const raw = fs.readFileSync(path.join(AUTH_DIR, 'creds.json'), 'utf-8');
     const creds = JSON.parse(raw) as { me?: { id?: string } };
-    return phoneFromId(creds.me?.id);
+    return phoneFromJid(creds.me?.id);
   } catch {
     return '';
   }
@@ -157,7 +179,7 @@ function parseArgs(args: string[]): { method: AuthMethod; phone?: string } {
 export async function run(args: string[]): Promise<void> {
   const { method, phone } = parseArgs(args);
 
-  if (fs.existsSync(path.join(AUTH_DIR, 'creds.json'))) {
+  if (isWhatsappPaired()) {
     emitStatus('WHATSAPP_AUTH', {
       STATUS: 'skipped',
       REASON: 'already-authenticated',
@@ -166,6 +188,28 @@ export async function run(args: string[]): Promise<void> {
     });
     return;
   }
+
+  // Before anything else: a pruned-optional install reports WHY in a block
+  // the caller already parses, instead of dying in the module loader.
+  let baileys: any;
+  let baileysLogger: any;
+  try {
+    ({ baileys, logger: baileysLogger } = await loadBaileys());
+  } catch (err) {
+    emitStatus('WHATSAPP_AUTH', {
+      STATUS: 'failed',
+      ERROR: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  }
+  const {
+    makeWASocket,
+    Browsers,
+    DisconnectReason,
+    fetchLatestWaWebVersion,
+    makeCacheableSignalKeyStore,
+    useMultiFileAuthState,
+  } = baileys;
 
   fs.mkdirSync(AUTH_DIR, { recursive: true });
 
@@ -251,7 +295,7 @@ export async function run(args: string[]): Promise<void> {
         }
 
         if (connection === 'open') {
-          succeed(phoneFromId(sock.user?.id ?? state.creds.me?.id));
+          succeed(phoneFromJid(sock.user?.id ?? state.creds.me?.id));
           sock.end(undefined);
         }
 

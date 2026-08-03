@@ -3,14 +3,18 @@
  *
  * The live bug these pin down: on a hosted claw the relay spawned
  * `pnpm exec tsx setup/index.ts --step whatsapp-auth -- --method qr`, that
- * step statically imports `pino` and `@whiskeysockets/baileys` (the
- * add-whatsapp channel install's dependencies, never trunk's), and a hosted
- * checkout is a pristine trunk tarball — so the child died with
- * ERR_MODULE_NOT_FOUND inside the ESM loader before Baileys ever ran. Two
- * reporting bugs then hid the cause: the relay's status-block name pattern
- * could not match the hyphenated `WHATSAPP-AUTH` failure block that carried
- * the reason, and its stderr "tail" kept the last 500 bytes of the last chunk
- * — the loader frames — instead of the error line above them.
+ * step imports `pino` and `@whiskeysockets/baileys`, and neither was in the
+ * pristine trunk tarball a hosted checkout is built from — so the child died
+ * with ERR_MODULE_NOT_FOUND inside the ESM loader before Baileys ever ran.
+ * Two reporting bugs then hid the cause: the relay's status-block name
+ * pattern could not match the hyphenated `WHATSAPP-AUTH` failure block that
+ * carried the reason, and its stderr "tail" kept the last 500 bytes of the
+ * last chunk — the loader frames — instead of the error line above them.
+ *
+ * Both packages are trunk OPTIONAL dependencies now, so the ordinary hosted
+ * install has them and the preflight below is the pruned-optional guard
+ * rather than a "you never ran the channel install" guard. It still has to
+ * refuse to spawn a child that can only fail.
  *
  * Everything here is offline: no Baileys, no WhatsApp, no real pairing step.
  */
@@ -94,17 +98,17 @@ describe('whatsapp-qr — the command the cell posture spawns', () => {
   });
 });
 
-describe('whatsapp-qr — skill-installed dependency preflight', () => {
+describe('whatsapp-qr — optional dependency preflight', () => {
   /**
-   * `setup/whatsapp-auth.ts` imports these at module scope. Missing either
-   * one means the spawn can only produce ERR_MODULE_NOT_FOUND.
+   * The pairing step imports both. Missing either one means the spawn can
+   * only produce ERR_MODULE_NOT_FOUND.
    */
   it('reports every pairing dependency absent from the checkout', () => {
     vi.spyOn(process, 'cwd').mockReturnValue(tmp);
     expect(missingPairingDeps()).toEqual(['pino', '@whiskeysockets/baileys']);
   });
 
-  it('reports nothing missing once the channel install has run', () => {
+  it('reports nothing missing on a normal install', () => {
     installFake(tmp, 'pino');
     installFake(tmp, '@whiskeysockets/baileys');
     vi.spyOn(process, 'cwd').mockReturnValue(tmp);
@@ -141,7 +145,10 @@ describe('whatsapp-qr — skill-installed dependency preflight', () => {
     expect(state.qr).toBeNull();
     expect(state.error).toContain('pino');
     expect(state.error).toContain('@whiskeysockets/baileys');
-    expect(state.error).toContain('add-whatsapp');
+    // Says what to actually do, and does NOT send the operator off to a
+    // channel install that no longer exists — WhatsApp is trunk now.
+    expect(state.error).toContain('pnpm install');
+    expect(state.error).not.toContain('add-whatsapp');
     // Never the raw loader noise the live claw showed.
     expect(state.error).not.toContain('tsx');
   });

@@ -53,7 +53,9 @@ Every bullet here is shipping code — follow the links and read it. Agent-side 
 
 - **Web chat, built in** — `POST` a message, poll the full two-way transcript, or hold open a Server-Sent-Events stream; bearer-token auth and rate limiting included. A browser or a dashboard is a complete client. ([`src/channels/web.ts`](src/channels/web.ts))
 - **Telegram in one paste** — create a bot with @BotFather, `POST /web/channels/telegram/pair`, done. Long-polling, so it works behind NAT and on hosted cells with no webhook. ([`src/channels/telegram.ts`](src/channels/telegram.ts))
-- **A dozen more channels as skills** — WhatsApp, Discord, Slack, iMessage, Teams, Matrix, Google Chat, Webex, Signal, WeChat, Linear, GitHub, email via Resend: `/add-<channel>` copies exactly the adapter you asked for into your fork. ([`.claude/skills/`](.claude/skills/))
+- **WhatsApp by scanning a QR** — no API key and no code to install: the Baileys linked-device adapter ships in trunk, the scan writes a session into durable state, and the channel comes up on the scan itself. Knows the difference between a dedicated number and your personal one. ([`src/channels/whatsapp.ts`](src/channels/whatsapp.ts))
+- **Discord over an outbound websocket** — paste a bot token at `POST /web/channels/discord/pair`; no public URL, so a hosted cell and a laptop behave identically. ([`src/channels/discord.ts`](src/channels/discord.ts))
+- **A dozen more channels as skills** — Slack, iMessage, Teams, Matrix, Google Chat, Webex, Signal, WeChat, Linear, GitHub, email via Resend: `/add-<channel>` copies exactly the adapter you asked for into your fork. Those are self-host-only; the five channels above are the ones a hosted claw can keep. ([`.claude/skills/`](.claude/skills/))
 - **One assistant or many** — wire each channel to its own agent for privacy, share one agent across channels for unified memory, or fold channels into a single conversation. Per-channel choice via `/manage-channels`. ([docs/isolation-model.md](docs/isolation-model.md))
 
 **What your assistant does**
@@ -138,7 +140,7 @@ That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the inte
 | `ONCELLCLAW_PERSONA` | — | Standing instructions for that group, staged once as its persona. Never overwrites an edited one. |
 | `ONCELLCLAW_REPO` | this repo | GitHub repo URL to run (tarball bootstrap — must be `github.com`). |
 | `ONCELLCLAW_REF` | `main` | Branch, tag, or commit sha. A full 40-hex sha skips ref resolution and warm-restarts offline. |
-| `ONCELLCLAW_DIR` | `$HOME/oncellclaw` | Persistent base: `src-<sha>/` checkouts, the `current` symlink, `state/` (`data`, `groups`, `store`, `.env`) and `toolchain/`. State survives every update. |
+| `ONCELLCLAW_DIR` | `$HOME/oncellclaw` | Persistent base: `src-<sha>/` checkouts, the `current` symlink, `state/` (`data`, `groups`, `store`, `.env`) and `toolchain/`. That `state/` list is exhaustive — see [What survives an update](#what-survives-an-update). |
 | `ONCELLCLAW_RUNTIME` | `oncell` | `oncell` or `docker` (see [Runtimes](#runtimes-oncell-cells-or-local-docker)). |
 | `ONCELLCLAW_CELL_NAMESPACE` | install slug | Isolates this instance's agent-group cells (`clawg-{namespace}-{group}`) from other claws in the same OnCell account. Kebab-case, ≤24 chars. Hosted: the dashboard sets a unique value per instance; self-host: the default (sha1 of the checkout path) is fine. |
 | `ONCELL_API_KEY` | — | Required when the runtime is `oncell`. |
@@ -146,6 +148,85 @@ That URL is public, so `ONCELLCLAW_WEB_TOKEN` is the only thing between the inte
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Agent credential. Exactly one is required. |
 
 The `web` channel is not hosted-only — it ships in main like `cli` does, so a self-hoster can point a browser, a script, or their own frontend at a local oncellclaw with the same three endpoints. See [config-examples/hosted.env.example](config-examples/hosted.env.example).
+
+### What survives an update
+
+Every deploy is a **fresh checkout**: the script resolves `ONCELLCLAW_REF` to a
+commit sha, extracts that tarball into `src-<sha>/`, flips `current`, and
+deletes the old tree. Nothing you or an agent wrote into the checkout comes
+with it — not an installed npm package, not an edited source file, not a
+session blob dropped beside the code.
+
+What does come with it is exactly this, and only this:
+
+| Path | Holds |
+|---|---|
+| `state/.env` | every credential — channel tokens, settings. One canonical writer, so the CLI and the `/web/channels/…/pair` endpoints land in the same file |
+| `state/data/` | the databases, and delivered web attachments |
+| `state/groups/` | agent group folders, personas, memory |
+| `state/store/` | session state that isn't a scalar — WhatsApp's linked-device directory lives at `store/auth` |
+
+`wire_state()` in [`scripts/cloud-start.sh`](scripts/cloud-start.sh) symlinks
+those four into every new checkout. That is the whole mechanism.
+
+**So a channel has to be configuration, not installation.** Its adapter ships
+in trunk and its SDK is in the root `package.json`, so `pnpm install
+--frozen-lockfile` reproduces both on every sha; its credential goes to
+`.env`; its session state goes under `store/`. `web`, `cli`, `telegram`,
+`discord` and `whatsapp` all work this way — pair one once and it keeps
+working across every later deploy, restart and pause.
+
+This is a rule, not five special cases:
+[`src/durable-state.ts`](src/durable-state.ts) states it, every channel
+registration declares what it persists, and
+[`src/channels/channel-durability.test.ts`](src/channels/channel-durability.test.ts)
+fails the build if a declaration names a path `wire_state()` does not keep —
+or if that shell function drifts from the constants. A channel added tomorrow
+is covered the day it lands.
+
+**Channels this cannot cover** are the ones still installed by a skill that
+writes code into the checkout (Slack, Signal, Matrix, Teams, Webex, Google
+Chat, DeltaChat, Linear, WhatsApp Cloud). On a hosted claw their credential
+would survive in `state/.env` while their adapter did not — a channel that
+answered yesterday and silently doesn't today. cloud-start refuses to let that
+be silent: it names them at boot and tells you they are self-host-only. It
+warns rather than dying, because a stale key is no reason to take a working
+assistant off the air.
+
+### Connect WhatsApp
+
+WhatsApp has no token to paste — the credential is a **linked device**, so
+pairing is a QR scan. The Baileys adapter ships in trunk (Baileys itself is an
+*optional* dependency, lazily imported, so only a claw that actually uses
+WhatsApp pays for it), and the QR relay drives the same
+`setup/index.ts --step whatsapp-auth` step the terminal flow uses:
+
+```bash
+# JSON snapshot: starting → qr_ready → paired | already_paired | failed
+curl -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/channels/whatsapp/qr'
+# → 200 {"status":"qr_ready","qr":"2@…","pngBase64":"iVBOR…","version":3}
+# or push instead of polling — one `event: qr` frame per rotation
+curl -N -H "Authorization: Bearer $ONCELLCLAW_WEB_TOKEN" \
+     'https://<host>/web/channels/whatsapp/qr?stream=1'
+```
+
+On your phone: **WhatsApp → Settings → Linked Devices → Link a Device**, then
+scan. The session lands in `store/auth` (durable), and the adapter starts on
+the scan itself — no restart, same as the Telegram and Discord pair endpoints.
+
+One setting decides how the channel behaves, and the safe reading of an absent
+value is *shared*:
+
+| `.env` | Meaning |
+|---|---|
+| `ASSISTANT_HAS_OWN_NUMBER=true` | The line is the bot's. Everything sent to it is for the bot: platform mentions, approval cards for unknown senders, no name prefix on replies. |
+| unset / anything else | The line is **yours**. Only your self-chat is the agent's; no mention signal is ever emitted, so a stranger's DM can never auto-create a chat or raise a card; group wirings engage on the agent's name; replies are prefixed with it. |
+
+⚠️ Linking your **personal** number carries a real risk of WhatsApp
+suspending or banning that account. Use a dedicated number (spare SIM, eSIM,
+old phone) if you can. `/add-whatsapp` walks this gate properly, and also
+collects `ASSISTANT_NAME`.
 
 ### Connect Telegram
 
@@ -323,8 +404,10 @@ Key files:
 - `src/cell-sync.ts` / `src/cell-session-io.ts` — incremental cell sync + door-based session IPC
 - `src/oncell-client.ts` — minimal self-contained OnCell API client
 - `src/db/` — central DB (users, roles, agent groups, messaging groups, wiring, migrations)
-- `src/channels/` — channel adapter infra (adapters installed via `/add-<channel>` skills)
+- `src/channels/` — channel adapter infra; trunk ships `cli`, `web`, `telegram`, `discord`, `whatsapp` (further adapters install via `/add-<channel>` skills, self-host only)
+- `src/durable-state.ts` — what survives a hosted update, and the channel convention that follows from it
 - `src/channels/web.ts` — built-in `web` channel: HTTP chat + health on the one port (`/web/health`, and bare `/health` for self-hosts — hosted preview proxies reserve top-level `/health` for themselves)
+- `src/channels/whatsapp.ts` — trunk Baileys adapter (optional dependency, lazily imported); `whatsapp-session.ts` owns the durable session path, `whatsapp-qr.ts` is the dashboard pairing relay
 - `src/webhook-server.ts` — that one HTTP port (`WEBHOOK_PORT`, else `PORT`, else 3000)
 - `src/web-provision.ts` / `scripts/provision.ts` — non-interactive setup: one group paired to `web`
 - `scripts/cloud-start.sh` — empty machine → running host; the hosted bootstrap

@@ -2,43 +2,40 @@
  * WhatsApp QR pairing relay — hosted claws pair by scanning the Baileys QR
  * in the dashboard instead of a terminal.
  *
- * Self-host already pairs via the add-whatsapp skill: the trunk-maintained
+ * One canonical pairing path however the QR is displayed: the trunk-maintained
  * setup step (`setup/whatsapp-auth.ts`) runs Baileys and emits each rotating
  * QR as a structured status block on stdout (`WHATSAPP_AUTH_QR { QR }`,
  * terminal `WHATSAPP_AUTH { STATUS }` — see that file's header). This module
- * reuses that step as THE pairing source: it spawns the same command the
- * `.claude/skills/add-whatsapp` browser helper spawns, parses the same
- * blocks, and holds the current QR for `GET /web/channels/whatsapp/qr`
- * (src/channels/web.ts) to serve — JSON snapshot or SSE stream — until the
- * phone scans it.
+ * spawns the same command the `.claude/skills/add-whatsapp` browser helper
+ * spawns, parses the same blocks, and holds the current QR for
+ * `GET /web/channels/whatsapp/qr` (src/channels/web.ts) to serve — JSON
+ * snapshot or SSE stream — until the phone scans it.
  *
- * Session persistence: on success Baileys writes `store/auth/` (the setup
- * step owns that write). On a hosted cell `store/` lives under the durable
- * `state/` directory that cloud-start symlinks into every checkout, so the
- * linked session survives updates and restarts — nothing extra to do here.
+ * What a successful scan produces: a linked-device session under `store/auth`
+ * (src/channels/whatsapp-session.ts owns that path). `store/` is symlinked
+ * into `$BASE/state/` by cloud-start.sh, so the session survives updates,
+ * restarts and pauses. On the terminal block this relay then calls
+ * `startChannelAdapter('whatsapp')`, so the trunk adapter goes live on the
+ * scan itself — no restart, exactly like the telegram/discord pair endpoints.
  *
- * Trunk boundaries, stated plainly:
- *  - Baileys and `qrcode` are add-whatsapp-installed dependencies, not
- *    trunk's. When they are absent the spawned step fails and this relay
- *    reports `failed` with the child's error — it never fakes a QR.
- *  - The PNG rendering (`pngBase64`) needs the skill-installed `qrcode`
- *    package; without it the raw QR payload is still served and the
- *    dashboard can render it client-side.
+ * Dependencies: WhatsApp needs Baileys, which is a trunk OPTIONAL dependency
+ * (package.json `optionalDependencies`) — 46 MB that only a paired WhatsApp
+ * claw should pay for. Optional means it CAN be absent (an install that ran
+ * with optional deps pruned), and the pairing step imports it, so
+ * `missingPairingDeps()` probes the checkout BEFORE spawning: absent deps
+ * become an actionable message instead of an ESM-loader stack trace from a
+ * doomed child. Two reporting bugs once hid exactly that failure for a
+ * release — the status-block name pattern (`\S+`, not `\w+`: the step-level
+ * failure block is `WHATSAPP-AUTH`, with a hyphen) and the stderr tail
+ * (rolling + summarized, not "last chunk, last 500 bytes").
  *
- * A hosted claw is exactly the checkout where that boundary bites. cloud-start
- * extracts a pristine trunk tarball per sha and runs `pnpm install
- * --frozen-lockfile`, so `setup/whatsapp-auth.ts`'s static imports (`pino`,
- * `@whiskeysockets/baileys`) resolve to nothing and the child dies with
- * ERR_MODULE_NOT_FOUND before Baileys ever runs. `missingPairingDeps()` probes
- * for that BEFORE spawning, so the dashboard gets "run the channel install"
- * instead of an ESM-loader stack trace. See the two reporting bugs that hid
- * this for a release: the status-block name pattern (`\S+`, not `\w+` — the
- * step-level failure block is `WHATSAPP-AUTH`, with a hyphen) and the stderr
- * tail (rolling + summarized, not "last chunk, last 500 bytes").
+ * The PNG rendering (`pngBase64`) uses the optional `qrcode` package; without
+ * it the raw QR payload is still served and the dashboard renders it
+ * client-side.
  *
  * Test seams (no live WhatsApp / Baileys in the suite):
  *   ONCELLCLAW_WA_AUTH_CMD          overrides the spawned command
- *   ONCELLCLAW_WA_AUTH_DIR          overrides the creds directory probe
+ *   ONCELLCLAW_WA_AUTH_DIR          overrides the session directory
  *   ONCELLCLAW_WA_QR_TIMEOUT_MS     session timeout (default 5 min)
  *   ONCELLCLAW_WA_QR_RETRY_HOLDOFF_MS  failure holdoff before a re-spawn
  */
@@ -48,6 +45,8 @@ import fs from 'fs';
 import path from 'path';
 
 import { log } from '../log.js';
+import { startChannelAdapter } from './channel-registry.js';
+import { WHATSAPP_OPTIONAL_DEPS, isWhatsappPaired } from './whatsapp-session.js';
 
 export type WhatsappQrStatus = 'starting' | 'qr_ready' | 'paired' | 'already_paired' | 'failed';
 
@@ -88,15 +87,6 @@ const STDERR_TAIL_LIMIT = 4000;
 /** Cap what reaches the dashboard's single-line error field. */
 const ERROR_SUMMARY_LIMIT = 300;
 
-/**
- * Packages `setup/whatsapp-auth.ts` statically imports that trunk does NOT
- * ship — the add-whatsapp channel install owns them. Probed by path rather
- * than `require.resolve` so the check stays a pure disk read: it must not
- * evaluate a package, and it must not mis-report an ESM-only package as
- * absent because the `require` condition failed to resolve.
- */
-const STEP_SKILL_DEPS = ['pino', '@whiskeysockets/baileys'] as const;
-
 function authCmd(): string {
   return process.env.ONCELLCLAW_WA_AUTH_CMD || DEFAULT_AUTH_CMD;
 }
@@ -119,14 +109,18 @@ function isPackageInstalled(dep: string, from: string): boolean {
 }
 
 /**
- * Which of the pairing step's skill-installed dependencies are missing from
- * this checkout. Non-empty means spawning the step can only produce an
+ * Which of WhatsApp's optional trunk dependencies are missing from this
+ * checkout. Non-empty means spawning the pairing step can only produce an
  * ERR_MODULE_NOT_FOUND, so the relay reports that up front instead.
+ *
+ * Probed by path rather than `require.resolve` so the check stays a pure disk
+ * read: it must not evaluate a package, and it must not mis-report an
+ * ESM-only package as absent because the `require` condition failed.
  */
 export function missingPairingDeps(): string[] {
   const root = process.cwd();
   try {
-    return STEP_SKILL_DEPS.filter((dep) => !isPackageInstalled(dep, root));
+    return WHATSAPP_OPTIONAL_DEPS.filter((dep) => !isPackageInstalled(dep, root));
   } catch (err) {
     // An unreadable node_modules is not proof of absence — let the spawn
     // speak instead of blocking pairing on a probe failure.
@@ -155,22 +149,9 @@ export function summarizeStderr(tail: string): string {
   return line.length > ERROR_SUMMARY_LIMIT ? `${line.slice(0, ERROR_SUMMARY_LIMIT)}…` : line;
 }
 
-function authDir(): string {
-  return process.env.ONCELLCLAW_WA_AUTH_DIR || path.join(process.cwd(), 'store', 'auth');
-}
-
 function envMs(key: string, fallback: number): number {
   const raw = Number.parseInt(process.env[key] ?? '', 10);
   return Number.isInteger(raw) && raw >= 0 ? raw : fallback;
-}
-
-/** Linked-device credentials on disk = this install is already paired. */
-export function isWhatsappPaired(): boolean {
-  try {
-    return fs.existsSync(path.join(authDir(), 'creds.json'));
-  } catch {
-    return false;
-  }
 }
 
 interface Session {
@@ -223,10 +204,11 @@ export function ensureWhatsappPairing(): WhatsappQrState {
   const missing = usingCanonicalStep() ? missingPairingDeps() : [];
   if (missing.length > 0) {
     session = deadSession(
-      `WhatsApp pairing is not installed on this claw — ${missing.join(', ')} ` +
-        `${missing.length > 1 ? 'are' : 'is'} absent from this checkout. The Baileys pairing step ships with ` +
-        `the add-whatsapp channel install, not with trunk, and a hosted checkout is a pristine trunk tarball. ` +
-        `Run the add-whatsapp install (or point ONCELLCLAW_WA_AUTH_CMD at your own pairing command) first.`,
+      `WhatsApp pairing cannot run on this claw — ${missing.join(', ')} ` +
+        `${missing.length > 1 ? 'are' : 'is'} absent from this checkout. WhatsApp ships in trunk, but Baileys ` +
+        `is an optional dependency (package.json optionalDependencies) and this install does not have it. ` +
+        `Re-run \`pnpm install\` without --no-optional, then request the QR again ` +
+        `(or point ONCELLCLAW_WA_AUTH_CMD at your own pairing command).`,
     );
     return session.state;
   }
@@ -387,12 +369,34 @@ function finish(target: Session, status: 'paired' | 'already_paired' | 'failed',
   if (status === 'failed') log.warn('WhatsApp QR pairing failed', { error });
   else log.info('WhatsApp QR pairing finished', { status });
   bump(target.state);
+  if (status === 'paired') void activatePairedChannel();
 }
 
 /**
- * Render the raw QR as a base64 PNG via the skill-installed `qrcode`
- * package. Best-effort: on installs where add-whatsapp hasn't run (no
- * `qrcode`), pngBase64 stays null and the raw payload still serves.
+ * Bring the trunk WhatsApp adapter up on the scan that just succeeded.
+ *
+ * Without this, a scan writes credentials the running process never looks at
+ * again and the channel stays dark until the next restart — the dashboard
+ * would report a successful pairing against a dead channel. This is the same
+ * gesture the telegram/discord pair endpoints make after storing a token.
+ *
+ * Best-effort by design: the credentials are already on disk and durable, so
+ * the worst case of a failure here is "live at next boot", never a lost pair.
+ */
+async function activatePairedChannel(): Promise<void> {
+  try {
+    const adapter = await startChannelAdapter('whatsapp');
+    if (adapter) log.info('WhatsApp channel started after pairing');
+    else log.warn('WhatsApp paired but the adapter declined to start — no session found on disk');
+  } catch (err) {
+    log.error('WhatsApp paired but the adapter failed to start — it will come up on the next restart', { err });
+  }
+}
+
+/**
+ * Render the raw QR as a base64 PNG via the optional `qrcode` package.
+ * Best-effort: where optional deps were pruned, pngBase64 stays null and the
+ * raw payload still serves — the dashboard can render it client-side.
  */
 async function renderPng(target: Session, qr: string): Promise<void> {
   try {
@@ -405,6 +409,6 @@ async function renderPng(target: Session, qr: string): Promise<void> {
     target.state.pngBase64 = buffer.toString('base64');
     bump(target.state);
   } catch {
-    log.info('qrcode package not installed — serving the raw QR payload only');
+    log.info('qrcode not installed (optional dependency) — serving the raw QR payload only');
   }
 }

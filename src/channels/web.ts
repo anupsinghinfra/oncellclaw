@@ -1694,4 +1694,12 @@ function createAdapter(): ChannelAdapter | null {
   return adapter;
 }
 
-registerChannelAdapter(WEB_CHANNEL_TYPE, { factory: createAdapter, defaults: WEB_DEFAULTS });
+registerChannelAdapter(WEB_CHANNEL_TYPE, {
+  factory: createAdapter,
+  defaults: WEB_DEFAULTS,
+  // The bearer token arrives in the process environment (cloud-start passes
+  // it through; nothing here writes a secret to disk), and delivered
+  // attachments stage under data/web-files — durable, so a transcript's
+  // downloads survive an update. See src/durable-state.ts.
+  durability: { credentialKeys: [], statePaths: ['data/web-files'] },
+});

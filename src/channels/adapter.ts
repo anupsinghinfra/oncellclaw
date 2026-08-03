@@ -256,9 +256,44 @@ export interface ChannelAdapter {
 /** Factory function that creates a channel adapter (returns null if credentials missing). */
 export type ChannelAdapterFactory = () => ChannelAdapter | Promise<ChannelAdapter> | null;
 
+/**
+ * What a channel persists, and where — the update-safety declaration.
+ *
+ * A hosted claw re-extracts a pristine trunk tarball on every deploy and
+ * keeps only the paths cloud-start.sh symlinks into `$BASE/state/` (see
+ * src/durable-state.ts). A channel that stores anything anywhere else pairs
+ * once and goes dark on the next update, silently.
+ *
+ * Declaring it makes that checkable rather than hopeful:
+ * src/channels/channel-durability.test.ts walks the live registry and fails
+ * if a trunk channel omits this or names a path outside the wired set.
+ */
+export interface ChannelDurability {
+  /**
+   * `.env` keys holding this channel's credentials, written through
+   * `upsertEnvVar` (src/env.ts) — the one canonical writer, so the CLI and
+   * the web pairing endpoints land in the same durable file. Empty for
+   * channels with no credential of their own (`cli`).
+   */
+  credentialKeys: string[];
+  /**
+   * Checkout-relative paths for session state that is not an `.env` scalar
+   * — e.g. WhatsApp's Baileys multi-file auth directory. Each must resolve
+   * inside a durable path. Omit when the channel keeps nothing on disk.
+   */
+  statePaths?: string[];
+}
+
 /** Registration entry for a channel adapter. */
 export interface ChannelRegistration {
   factory: ChannelAdapterFactory;
+  /**
+   * Update-safety declaration — see ChannelDurability. Required of every
+   * channel registered from the trunk barrel (`src/channels/index.ts`);
+   * optional here only so skill-installed adapter copies from before the
+   * convention still register.
+   */
+  durability?: ChannelDurability;
   /**
    * Same declaration as ChannelAdapter.defaults, resolvable WITHOUT
    * instantiating the adapter — offline creation paths (setup/register.ts,

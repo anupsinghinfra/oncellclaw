@@ -25,6 +25,29 @@
 #   toolchain/               corepack shims + private node if system node
 #                            is too old (fetched by node, never curl)
 #
+# THE DURABILITY CONTRACT. That state/ list is not a convenience — it is the
+# complete set of things that outlive a deploy, and `wire_state()` below is
+# the only mechanism. Everything else in a checkout is disposable: an npm
+# package installed into a running cell, an edited src/channels/index.ts, a
+# session blob written next to the code. All of it is deleted the next time
+# this script runs with a new sha.
+#
+# Channels therefore have to be CONFIGURATION, not INSTALLATION:
+#   - the adapter ships in trunk (src/channels/<name>.ts) and its SDK, if it
+#     needs one, is in the root package.json, so `pnpm install
+#     --frozen-lockfile` reproduces it on every sha;
+#   - credentials go to .env — durable, and one canonical writer for the CLI
+#     and the web pairing endpoints alike;
+#   - session state (WhatsApp's linked-device directory, say) goes under
+#     store/ — durable.
+# src/durable-state.ts states this in code, each channel registration
+# declares what it persists, and src/channels/channel-durability.test.ts
+# fails the build if a declaration or the wire_state() list below drifts.
+#
+# A channel that still needs a skill to install code into the checkout is
+# self-host-only. `warn_orphaned_channels` (stage 6) says so at boot rather
+# than letting it half-work.
+#
 # A checkout is a pure function of the sha: same sha already extracted →
 # no download at all (fast warm restart); new sha → extracted alongside,
 # `current` flipped, old trees pruned only after build+provision succeed.
@@ -323,6 +346,61 @@ wire_state() {
   ln -s "$STATE_DIR/.env" "$src_dir/.env"
 }
 
+# Channels whose adapter is NOT in trunk. Their credential lives in the
+# durable state/.env, but the code that reads it was installed into a
+# checkout this update just replaced — so the credential outlives the
+# channel. Entries are `ENV_KEY:module`, checked against the trunk barrel so
+# a channel that later graduates into trunk stops being reported without
+# anyone remembering to edit this list.
+ORPHANABLE_CHANNELS='SLACK_BOT_TOKEN:slack
+SIGNAL_ACCOUNT:signal
+MATRIX_ACCESS_TOKEN:matrix
+TEAMS_APP_ID:teams
+WEBEX_BOT_TOKEN:webex
+GCHAT_CREDENTIALS:gchat
+DC_EMAIL:deltachat
+LINEAR_API_KEY:linear
+WHATSAPP_ACCESS_TOKEN:whatsapp-cloud'
+
+# Report credentials left behind by a channel this checkout cannot serve.
+#
+# Deliberately a WARNING, never a die: the credential is stale state, not a
+# broken config, and refusing to boot would take a working assistant off the
+# air over a channel it was never going to run. The failure this replaces is
+# the silent one — a claw that answered on Slack yesterday and today just
+# doesn't, with nothing in the log to say why.
+warn_orphaned_channels() {
+  env_file="$STATE_DIR/.env"
+  orphaned=''
+  if [ ! -f "$env_file" ]; then
+    return 0
+  fi
+  # Unquoted on purpose: default IFS splits the newline-separated list.
+  for entry in $ORPHANABLE_CHANNELS; do
+    key="${entry%%:*}"
+    channel="${entry#*:}"
+    if ! grep -qE "^${key}=." "$env_file"; then
+      continue
+    fi
+    if grep -q "import './${channel}.js';" src/channels/index.ts 2>/dev/null; then
+      continue # graduated into trunk — it is a supported hosted channel now
+    fi
+    orphaned="${orphaned}${channel} "
+  done
+  if [ -z "$orphaned" ]; then
+    return 0
+  fi
+  printf '\n'
+  printf '    !!  UNSUPPORTED CHANNEL CREDENTIALS IN state/.env: %s\n' "$orphaned"
+  printf '    !!  These channels are installed by a skill that writes code INTO the\n'
+  printf '    !!  checkout, and this script replaced the checkout. Their credentials\n'
+  printf '    !!  survived; their adapters did not, so they will not receive or send\n'
+  printf '    !!  anything on this instance. Hosted supports the channels trunk ships\n'
+  printf '    !!  (web, cli, telegram, discord, whatsapp) — see the README hosted\n'
+  printf '    !!  section. Self-host if you need the ones above, or remove the keys.\n'
+  printf '\n'
+}
+
 # Resolve ONCELLCLAW_REF → full commit sha. A 40-hex ref IS the sha (no
 # network needed — a pinned warm restart boots offline). Anything else asks
 # the GitHub API; if that fails but a previous checkout exists, reuse it
@@ -498,6 +576,10 @@ info "built $(node -p "require('./package.json').version")"
 # ---------------------------------------------------------------------------
 stage 'Provisioning'
 set_phase 'provision'
+
+# Credentials for channels this checkout has no adapter for — see the
+# durability contract in the header.
+warn_orphaned_channels
 
 if [ -n "${ONCELLCLAW_PERSONA:-}" ]; then
   persona_file="$(mktemp)" # cleaned by the EXIT trap

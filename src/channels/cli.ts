@@ -293,4 +293,10 @@ function extractText(message: OutboundMessage): string | null {
   return null;
 }
 
-registerChannelAdapter('cli', { factory: createAdapter, defaults: CLI_DEFAULTS });
+registerChannelAdapter('cli', {
+  factory: createAdapter,
+  defaults: CLI_DEFAULTS,
+  // No credential and no persisted state — the socket is recreated on every
+  // boot, and it lives outside the checkout entirely.
+  durability: { credentialKeys: [] },
+});

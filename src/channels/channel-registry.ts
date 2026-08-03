@@ -231,6 +231,16 @@ export function getRegisteredChannelNames(): string[] {
   return [...registry.keys()];
 }
 
+/**
+ * A channel's declared update-safety contract (see ChannelDurability), or
+ * undefined for an adapter registered without one. Read by
+ * channel-durability.test.ts, which fails the build when a trunk channel
+ * omits it or names a path cloud-start.sh does not preserve.
+ */
+export function getChannelDurability(name: string): ChannelRegistration['durability'] {
+  return registry.get(name)?.durability;
+}
+
 /** Get container config for a channel (used by container-runner for additional mounts/env). */
 export function getChannelContainerConfig(name: string): ChannelRegistration['containerConfig'] {
   return registry.get(name)?.containerConfig;

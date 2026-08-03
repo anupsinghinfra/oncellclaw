@@ -5,9 +5,18 @@ description: Add WhatsApp channel via native Baileys adapter. Direct connection 
 
 # Add WhatsApp Channel
 
-Adds WhatsApp support via the native Baileys adapter — a direct WhatsApp Web
-connection, no Chat SDK bridge. NanoClaw doesn't ship channels in trunk — this
-skill copies the WhatsApp adapter in from the `channels` branch.
+Configures WhatsApp via the native Baileys adapter — a direct WhatsApp Web
+connection, no Chat SDK bridge.
+
+**The adapter ships in trunk** (`src/channels/whatsapp.ts`), like telegram and
+discord, and Baileys is a trunk optional dependency. Nothing is copied in and
+nothing is installed into your checkout, so this skill only ever CONFIGURES:
+it walks the number-safety gate, links the device, and writes the two `.env`
+settings the adapter reads. That is also what makes WhatsApp work on a hosted
+claw — cloud-start re-extracts a pristine trunk tarball on every update, so a
+channel whose code had to be installed into the checkout would go dark on the
+next deploy, while a linked-device session under `store/auth` (durable state)
+and `.env` settings (durable) survive. See `src/durable-state.ts`.
 
 The mechanical steps under **Apply** carry `nc:` directive fences: an agent
 reads the prose and applies them, and a parser can apply them deterministically
@@ -69,72 +78,47 @@ echo dedicated
 
 ## Apply
 
-### 1. Copy the adapter and its registration test
+Nothing here installs code. The adapter (`src/channels/whatsapp.ts`), its
+`whatsapp-auth` setup step, the `whatsapp-formatting` container skill, and the
+Baileys/qrcode/pino packages are all trunk — there is no copy step, no barrel
+edit, and no `pnpm add` into your checkout. What follows verifies that trunk
+is intact and then links your device.
 
-Fetch the `channels` branch and copy the WhatsApp adapter, its registration
-test, and the `whatsapp-formatting` container skill (overwrite — the branch is
-canonical). The `whatsapp-auth` setup step is maintained in trunk, so it is not
-copied here:
+### 1. Build and validate
 
-```nc:copy from-branch:channels
-src/channels/whatsapp.ts
-src/channels/whatsapp-registration.test.ts
-container/skills/whatsapp-formatting/SKILL.md
-container/skills/whatsapp-formatting/instructions.md
-```
-
-The `whatsapp-formatting` container skill is part of the channel payload: its
-`instructions.md` becomes the `skill-whatsapp-formatting.md` fragment in every
-group's composed CLAUDE.md (see `src/claude-md-compose.ts`), teaching agents
-WhatsApp's formatting syntax. Trunk does not ship it — without this copy step
-agents format WhatsApp messages with generic markdown that renders literally.
-
-### 2. Register the adapter
-
-Append the self-registration import to the channel barrel (skipped if the line
-is already present). This one line is the skill's only reach-in into core:
-
-```nc:append to:src/channels/index.ts
-import './whatsapp.js';
-```
-
-### 3. Install the adapter packages
-
-Pinned to exact versions — the supply-chain policy rejects ranges and `latest`.
-Baileys is the WhatsApp Web client; `qrcode` renders the device-link QR in the
-terminal; `pino` is Baileys' logger:
-
-```nc:dep
-@whiskeysockets/baileys@7.0.0-rc.9
-qrcode@1.5.4
-@types/qrcode@1.5.6
-pino@9.6.0
-```
-
-### 4. Build and validate
-
-Build first: it typechecks the adapter against core and proves the dependencies
-are installed. Then run the one integration test.
+Build proves the trunk adapter typechecks and that Baileys actually resolved
+(it is an *optional* dependency — an install run with `--no-optional` has the
+adapter but not the client). Then run the adapter's own suite, which drives
+the whole lifecycle against a stubbed socket:
 
 ```nc:run effect:build
 pnpm run build
 ```
 ```nc:run effect:test
-pnpm exec vitest run src/channels/whatsapp-registration.test.ts
+pnpm exec vitest run src/channels/whatsapp.test.ts src/channels/channel-durability.test.ts
 ```
 
-`whatsapp-registration.test.ts` imports the real channel barrel and asserts the
-registry contains `whatsapp`. It goes red if the `import './whatsapp.js';` line
-is deleted or drifts, if the barrel fails to evaluate, or if
-`@whiskeysockets/baileys` isn't installed (the import throws) — so it also covers
-the dependency from step 3. End-to-end delivery against a real WhatsApp number is
-verified manually once the service runs.
+`whatsapp.test.ts` covers the factory gating, the shared/dedicated split,
+inbound routing and delivery; `channel-durability.test.ts` asserts the session
+path is one cloud-start preserves. End-to-end delivery against a real WhatsApp
+number is verified manually once the service runs.
+
+If the build fails on a missing `@whiskeysockets/baileys`, re-run
+`pnpm install` without `--no-optional` — that is the only install step this
+channel has.
 
 ## Authenticate
 
 WhatsApp uses linked-device authentication — no API key, just a one-time pairing
-from your phone. The adapter is installed and registered, but its factory returns
-`null` (and the channel stays dark) until `store/auth/creds.json` exists.
+from your phone. The adapter is already registered, but its factory returns
+`null` (and the channel stays dark) until `store/auth/creds.json` exists. That
+directory is the credential, and it lives under `store/` — a path cloud-start
+symlinks into durable state — so one scan survives every later update, restart
+and pause.
+
+On a hosted claw you never run the commands below: open the dashboard and use
+`GET /web/channels/whatsapp/qr`, which drives this same step and starts the
+adapter the moment you scan.
 
 The number safety check above is still required even when credentials already
 exist. If `store/auth/creds.json` exists, skip ahead to "Dedicated vs personal
@@ -514,11 +498,21 @@ systemctl --user start $(systemd_unit)
 Two instances connected with the same credentials. Ensure only one NanoClaw
 process is running.
 
-### Trunk updated but shared-number behavior unchanged (stale adapter copy)
+### Shared-number behavior looks wrong
 
-The shared-number behavior (no stranger approval cards, name-pattern group defaults) lives in the **adapter copy** at `src/channels/whatsapp.ts`, installed from the `channels` branch — not in trunk. If you updated trunk via `/update-nanoclaw` but skipped the skill-update step, the old adapter copy neither reads `ASSISTANT_HAS_OWN_NUMBER` itself nor declares channel defaults, so trunk falls back to the legacy behavior: approval cards still fire on a personal number, and new wirings get the channel-blind defaults. Symptoms of the skew:
+The shared/dedicated switch is `ASSISTANT_HAS_OWN_NUMBER` in `.env`, read by
+the trunk adapter at startup, and it is computed once per adapter start — so a
+change needs a restart (`bash setup/lib/restart.sh`) to take effect.
 
-- `.env` says `ASSISTANT_HAS_OWN_NUMBER=false` (or unset) but strangers' DMs still raise approval cards
-- `ncl wirings create` on a WhatsApp group defaults to `mention` instead of a name pattern
+Symptoms of a stale or missing value:
 
-Fix: re-run `/add-whatsapp` (or `/update-skills`) to pull the current adapter from the `channels` branch, then restart the service. The reverse skew (new adapter, old trunk) can't happen — the adapter's `defaults` field is optional and old trunk ignores it.
+- `.env` says `ASSISTANT_HAS_OWN_NUMBER=false` (or the key is absent) but
+  strangers' DMs still raise approval cards → the running adapter started
+  before the value landed. Restart.
+- `ncl wirings create` on a WhatsApp group defaults to `mention` instead of a
+  name pattern → same cause.
+
+Historical note: this behavior used to live in a skill-installed adapter copy
+from a `channels` branch, so a trunk update without a skill update left the two
+out of sync. The adapter is trunk now and that skew cannot happen — there is
+one copy.

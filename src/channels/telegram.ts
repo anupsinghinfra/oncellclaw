@@ -281,4 +281,12 @@ function extractText(message: OutboundMessage): string | null {
   return null;
 }
 
-registerChannelAdapter(TELEGRAM_CHANNEL_TYPE, { factory: createAdapter, defaults: TELEGRAM_DEFAULTS });
+registerChannelAdapter(TELEGRAM_CHANNEL_TYPE, {
+  factory: createAdapter,
+  defaults: TELEGRAM_DEFAULTS,
+  // The bot token IS the whole credential, and the pairing endpoint writes
+  // it through upsertEnvVar into `.env` — a durable file. Nothing else of
+  // this channel's touches disk, so a token pasted once outlives every
+  // update. See src/durable-state.ts.
+  durability: { credentialKeys: [TELEGRAM_TOKEN_ENV_KEY] },
+});
